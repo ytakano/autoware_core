@@ -96,11 +96,6 @@ bool TimeDelayKalmanFilter::updateWithDelay(
   Eigen::MatrixXd C_ex = Eigen::MatrixXd::Zero(dim_y, dim_x_ex_);
   C_ex.block(0, dim_x_ * delay_step, dim_y, dim_x_) = C;
 
-  /* update */
-  if (!update(y, C_ex, R)) {
-    return false;
-  }
-
-  return true;
+  return update(y, C_ex, R);
 }
 }  // namespace autoware::kalman_filter
