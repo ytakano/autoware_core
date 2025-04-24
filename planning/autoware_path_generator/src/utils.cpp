@@ -183,11 +183,11 @@ std::optional<lanelet::ConstLanelet> get_next_lanelet_within_route(
   return *next_lanelet_itr;
 }
 
-std::vector<std::pair<lanelet::ConstPoints3d, std::pair<double, double>>> get_waypoint_groups(
+std::vector<WaypointGroup> get_waypoint_groups(
   const lanelet::LaneletSequence & lanelet_sequence, const lanelet::LaneletMap & lanelet_map,
   const double group_separation_threshold, const double interval_margin_ratio)
 {
-  std::vector<std::pair<lanelet::ConstPoints3d, std::pair<double, double>>> waypoint_groups{};
+  std::vector<WaypointGroup> waypoint_groups{};
 
   const auto get_interval_bound =
     [&](const lanelet::ConstPoint3d & point, const double lateral_distance_factor) {
@@ -206,16 +206,16 @@ std::vector<std::pair<lanelet::ConstPoints3d, std::pair<double, double>>> get_wa
 
     if (
       waypoint_groups.empty() ||
-      lanelet::geometry::distance2d(waypoint_groups.back().first.back(), waypoints.front()) >
+      lanelet::geometry::distance2d(waypoint_groups.back().waypoints.back(), waypoints.front()) >
         group_separation_threshold) {
-      waypoint_groups.emplace_back().second.first =
+      waypoint_groups.emplace_back().interval.start =
         get_interval_bound(waypoints.front(), -interval_margin_ratio);
     }
-    waypoint_groups.back().second.second =
+    waypoint_groups.back().interval.end =
       get_interval_bound(waypoints.back(), interval_margin_ratio);
 
-    waypoint_groups.back().first.insert(
-      waypoint_groups.back().first.end(), waypoints.begin(), waypoints.end());
+    waypoint_groups.back().waypoints.insert(
+      waypoint_groups.back().waypoints.end(), waypoints.begin(), waypoints.end());
   }
 
   return waypoint_groups;
@@ -386,22 +386,37 @@ std::optional<double> get_first_self_intersection_arc_length(
     return std::nullopt;
   }
 
-  const auto tree = lanelet::geometry::internal::makeIndexedSegmenTree(line_string);
-  std::optional<lanelet::geometry::internal::SelfIntersectionLong> first_self_intersection_long =
-    std::nullopt;
+  std::optional<size_t> first_self_intersection_index = std::nullopt;
+  std::optional<double> intersection_arc_length_on_latter_segment = std::nullopt;
   double s = 0.;
 
-  for (size_t i = 1; i < line_string.size(); ++i) {
-    if (first_self_intersection_long && i == first_self_intersection_long->idx + 1) {
-      return s + first_self_intersection_long->s;
+  for (size_t i = 0; i < line_string.size() - 1; ++i) {
+    if (
+      first_self_intersection_index && i == first_self_intersection_index &&
+      intersection_arc_length_on_latter_segment) {
+      return s + *intersection_arc_length_on_latter_segment;
     }
-    s += lanelet::geometry::distance2d(line_string.at(i - 1), line_string.at(i));
-    const auto self_intersections = lanelet::geometry::internal::getSelfIntersectionsAt(
-      tree, 0, lanelet::BasicSegment2d{line_string.at(i - 1), line_string.at(i)});
-    if (self_intersections.empty()) {
-      continue;
+
+    const auto current_segment = lanelet::BasicSegment2d{line_string.at(i), line_string.at(i + 1)};
+    s += lanelet::geometry::length(current_segment);
+
+    lanelet::BasicPoints2d self_intersections{};
+    for (size_t j = i + 1; j < line_string.size() - 1; ++j) {
+      const auto segment = lanelet::BasicSegment2d{line_string.at(j), line_string.at(j + 1)};
+      if (
+        segment.first == current_segment.second || segment.second == current_segment.first ||
+        segment.first == current_segment.first) {
+        continue;
+      }
+      boost::geometry::intersection(current_segment, segment, self_intersections);
+      if (self_intersections.empty()) {
+        continue;
+      }
+      first_self_intersection_index = j;
+      intersection_arc_length_on_latter_segment =
+        (self_intersections.front() - segment.first).norm();
+      break;
     }
-    first_self_intersection_long = self_intersections.front().lastSegment;
   }
 
   return std::nullopt;
