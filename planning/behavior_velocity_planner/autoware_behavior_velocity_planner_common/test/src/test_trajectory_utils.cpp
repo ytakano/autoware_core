@@ -16,6 +16,7 @@
 #include "autoware/velocity_smoother/smoother/jerk_filtered_smoother.hpp"
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <autoware_utils/system/time_keeper.hpp>
 #include <rclcpp/node.hpp>
 
 #include <geometry_msgs/msg/accel_stamped.hpp>
