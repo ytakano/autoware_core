@@ -201,57 +201,26 @@ geometry_msgs::msg::Pose refine_goal(
   const geometry_msgs::msg::Pose & goal, const lanelet::ConstLanelet & goal_lanelet);
 
 /**
- * @brief Prepare the point before the goal point.
- * @param goal Goal pose.
- * @param lanes Lanelets.
- * @return Pre-goal point.
- */
-PathPointWithLaneId prepare_pre_goal(
-  const geometry_msgs::msg::Pose & goal, const lanelet::ConstLanelets & lanes);
-
-/**
- * @brief Get the index of the point closest to the circumference of the circle whose center is the
- * goal and outside of it.
- * @param points Points to search.
- * @param goal Goal pose.
- * @param goal_lane_id Lane ID of the goal.
- * @param max_dist Maximum distance to search.
- * @return Index of the point closest to the circumference of the circle whose center is the goal
- * and outside of it.
- */
-std::optional<size_t> find_index_out_of_goal_search_range(
-  const std::vector<PathPointWithLaneId> & points, const geometry_msgs::msg::Pose & goal,
-  const int64_t goal_lane_id, const double max_dist);
-
-/**
- * @brief Get the path up to just before the pre_goal.
- * @param input Input path.
- * @param refined_goal Goal pose.
- * @return Recreated path
- */
-std::optional<PathWithLaneId> get_path_up_to_just_before_pre_goal(
-  const PathWithLaneId & input, const geometry_msgs::msg::Pose & goal,
-  const lanelet::Id goal_lane_id, const double search_radius_range);
-
-/**
  * @brief Recreate the path with a given goal pose.
  * @param input Input path.
  * @param refined_goal Goal pose.
  * @param planner_data Planner data.
  * @return Recreated path
  */
-PathWithLaneId refine_path_for_goal(
-  const PathWithLaneId & input, const geometry_msgs::msg::Pose & goal,
-  const PlannerData & planner_data);
+experimental::trajectory::Trajectory<PathPointWithLaneId> refine_path_for_goal(
+  const experimental::trajectory::Trajectory<PathPointWithLaneId> & input,
+  const geometry_msgs::msg::Pose & goal_pose, const lanelet::Id goal_lane_id,
+  const double refine_goal_search_radius_range);
 
 /**
- * @brief Extract lanelets from the path.
- * @param path Input path.
+ * @brief Extract lanelets from the trajectory.
+ * @param trajectory Input trajectory.
  * @param planner_data Planner data.
  * @return Extracted lanelets
  */
-std::optional<lanelet::ConstLanelets> extract_lanelets_from_path(
-  const PathWithLaneId & refined_path, const PlannerData & planner_data);
+lanelet::ConstLanelets extract_lanelets_from_trajectory(
+  const experimental::trajectory::Trajectory<PathPointWithLaneId> & trajectory,
+  const PlannerData & planner_data);
 
 /**
  * @brief Check if the pose is in the lanelets.
@@ -260,6 +229,16 @@ std::optional<lanelet::ConstLanelets> extract_lanelets_from_path(
  * @return True if the pose is in the lanelets, false otherwise
  */
 bool is_in_lanelets(const geometry_msgs::msg::Pose & pose, const lanelet::ConstLanelets & lanes);
+
+/**
+ * @brief Check if the trajectory is inside the lanelets.
+ * @param refined_path Input trajectory.
+ * @param lanelets Lanelets to check against.
+ * @return True if the trajectory is inside the lanelets, false otherwise
+ */
+bool is_trajectory_inside_lanelets(
+  const experimental::trajectory::Trajectory<PathPointWithLaneId> & refined_path,
+  const lanelet::ConstLanelets & lanelets);
 
 std::optional<experimental::trajectory::Trajectory<PathPointWithLaneId>>
 modify_path_for_smooth_goal_connection(
