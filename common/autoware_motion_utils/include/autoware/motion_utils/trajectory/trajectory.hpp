@@ -16,6 +16,7 @@
 #define AUTOWARE__MOTION_UTILS__TRAJECTORY__TRAJECTORY_HPP_
 
 #include <Eigen/Geometry>
+#include <autoware/interpolation/spline_interpolation_points_2d.hpp>
 #include <autoware_utils_geometry/geometry.hpp>
 #include <autoware_utils_geometry/pose_deviation.hpp>
 #include <autoware_utils_math/constants.hpp>
@@ -1916,6 +1917,55 @@ insertOrientation<std::vector<autoware_internal_planning_msgs::msg::PathPointWit
   std::vector<autoware_internal_planning_msgs::msg::PathPointWithLaneId> & points,
   const bool is_driving_forward);
 extern template void insertOrientation<std::vector<autoware_planning_msgs::msg::TrajectoryPoint>>(
+  std::vector<autoware_planning_msgs::msg::TrajectoryPoint> & points,
+  const bool is_driving_forward);
+
+/**
+ * @brief Insert orientation to each point in points container (trajectory, path, ...)
+ * @param points points of trajectory, path, ... (input / output)
+ * @param is_driving_forward  flag indicating the order of points is forward or backward
+ */
+template <class T>
+void insertOrientationAsSpline(T & points, const bool is_driving_forward)
+{
+  if (points.size() < 2) {
+    return;
+  }
+
+  const double yaw_offset = is_driving_forward ? 0.0 : M_PI;
+  const int8_t pitch_sign = is_driving_forward ? 1 : -1;
+
+  std::vector<geometry_msgs::msg::Point> geometry_points_vec(points.size());
+  for (size_t i = 0; i < points.size(); ++i) {
+    geometry_points_vec.at(i) = autoware_utils_geometry::get_point(points.at(i));
+  }
+
+  const auto yaw_vec = autoware::interpolation::splineYawFromPoints(geometry_points_vec);
+  for (size_t i = 0; i < points.size(); ++i) {
+    geometry_msgs::msg::Point src_point, dst_point;
+    if (i == points.size() - 1) {
+      src_point = geometry_points_vec.at(i - 1);
+      dst_point = geometry_points_vec.at(i);
+    } else {
+      src_point = geometry_points_vec.at(i);
+      dst_point = geometry_points_vec.at(i + 1);
+    }
+
+    const double yaw = yaw_offset + yaw_vec.at(i);
+    const double pitch =
+      pitch_sign * autoware_utils_geometry::calc_elevation_angle(src_point, dst_point);
+    autoware_utils_geometry::set_orientation(
+      autoware_utils_geometry::create_quaternion_from_rpy(0.0, pitch, yaw), points.at(i));
+  }
+}
+extern template void insertOrientationAsSpline<std::vector<autoware_planning_msgs::msg::PathPoint>>(
+  std::vector<autoware_planning_msgs::msg::PathPoint> & points, const bool is_driving_forward);
+extern template void
+insertOrientationAsSpline<std::vector<autoware_internal_planning_msgs::msg::PathPointWithLaneId>>(
+  std::vector<autoware_internal_planning_msgs::msg::PathPointWithLaneId> & points,
+  const bool is_driving_forward);
+extern template void
+insertOrientationAsSpline<std::vector<autoware_planning_msgs::msg::TrajectoryPoint>>(
   std::vector<autoware_planning_msgs::msg::TrajectoryPoint> & points,
   const bool is_driving_forward);
 
