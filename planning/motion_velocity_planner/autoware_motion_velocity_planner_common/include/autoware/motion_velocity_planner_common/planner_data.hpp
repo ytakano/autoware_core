@@ -95,6 +95,10 @@ struct PointcloudObstacleFilteringParam
 struct PlannerData
 {
 public:
+  PlannerData(const PlannerData &) = delete;
+  PlannerData & operator=(const PlannerData &) = delete;
+  PlannerData(PlannerData &&) = default;
+  PlannerData & operator=(PlannerData &&) = default;
   explicit PlannerData(rclcpp::Node & node);
   class Object
   {
@@ -146,6 +150,8 @@ public:
     void set_pointcloud(pcl::PointCloud<pcl::PointXYZ> && arg_pointcloud)
     {
       pointcloud = arg_pointcloud;
+      filtered_pointcloud_ptr.reset();
+      cluster_indices.reset();
     }
 
     pcl::PointCloud<pcl::PointXYZ> pointcloud;
