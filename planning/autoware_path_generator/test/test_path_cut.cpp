@@ -14,28 +14,33 @@
 
 #include "utils_test.hpp"
 
+#include <autoware/trajectory/interpolator/linear.hpp>
+
 #include <lanelet2_core/geometry/Lanelet.h>
 
+namespace autoware::path_generator
+{
 namespace
 {
-std::vector<autoware_internal_planning_msgs::msg::PathPointWithLaneId> create_path_points(
-  const std::vector<std::pair<lanelet::Ids, lanelet::BasicPoint2d>> & points)
+using Trajectory = experimental::trajectory::Trajectory<PathPointWithLaneId>;
+
+Trajectory create_path(const std::vector<std::pair<lanelet::Ids, lanelet::BasicPoint2d>> & points)
 {
-  std::vector<autoware_internal_planning_msgs::msg::PathPointWithLaneId> path_points;
+  std::vector<PathPointWithLaneId> path_points;
   path_points.reserve(points.size());
   for (const auto & [lane_ids, point] : points) {
-    autoware_internal_planning_msgs::msg::PathPointWithLaneId path_point;
+    PathPointWithLaneId path_point;
     path_point.point.pose.position.x = point.x();
     path_point.point.pose.position.y = point.y();
     path_point.lane_ids = lane_ids;
     path_points.push_back(path_point);
   }
-  return path_points;
+  return *Trajectory::Builder{}
+            .set_xy_interpolator<autoware::experimental::trajectory::interpolator::Linear>()
+            .build(path_points);
 }
 }  // namespace
 
-namespace autoware::path_generator
-{
 struct GetFirstIntersectionArcLengthTestParam
 {
   std::string description;
@@ -206,16 +211,10 @@ TEST_F(UtilsTest, GetArcLengthOnPath)
   constexpr auto epsilon = 1e-1;
 
   const auto path =
-    create_path_points({{{55, 122}, {3757.5609, 73751.8479}}, {{122}, {3752.1707, 73762.1772}}});
+    create_path({{{55, 122}, {3757.5609, 73751.8479}}, {{122}, {3752.1707, 73762.1772}}});
 
   {  // lanelet sequence is empty
     const auto result = utils::get_arc_length_on_path({}, path, {});
-
-    ASSERT_NEAR(result, 0.0, epsilon);
-  }
-
-  {  // path is empty
-    const auto result = utils::get_arc_length_on_path(get_lanelets_from_ids({122}), {}, {});
 
     ASSERT_NEAR(result, 0.0, epsilon);
   }
