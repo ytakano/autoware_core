@@ -77,10 +77,10 @@ struct StopPoint
 };
 struct TrajectoryPolygonCollisionCheck
 {
-  double decimate_trajectory_step_length;
-  double goal_extended_trajectory_length;
-  bool enable_to_consider_current_pose;
-  double time_to_convergence;
+  double decimate_trajectory_step_length{};
+  double goal_extended_trajectory_length{};
+  bool enable_to_consider_current_pose{};
+  double time_to_convergence{};
 };
 
 struct PointcloudObstacleFilteringParam  // TODO(takagi): delete this obsolete parameter type
@@ -180,6 +180,12 @@ public:
     }
     autoware_perception_msgs::msg::PredictedObject predicted_object;
 
+    /**
+     * @brief compute and the minimal distance to `decimated_traj_polys` by bg::distance and cache
+     * the result
+     * @note is it really OK to cache the result if the object itself is also cached and used in
+     * next iteration ?
+     */
     double get_dist_to_traj_poly(
       const std::vector<autoware_utils_geometry::Polygon2d> & decimated_traj_polys) const;
     double get_dist_to_traj_lateral(const std::vector<TrajectoryPoint> & traj_points) const;
