@@ -193,14 +193,14 @@ visualization_msgs::msg::MarkerArray create_geometry_msgs_marker_array(
 }
 
 visualization_msgs::msg::MarkerArray create_geometry_msgs_marker_array(
-  const geometry_msgs::msg::Point & stop_obstacle_point, const rclcpp::Time & stamp,
-  const std::string & ns, int32_t id, uint32_t marker_type,
-  const geometry_msgs::msg::Vector3 & scale, const std_msgs::msg::ColorRGBA & color)
+  const geometry_msgs::msg::Point & point, const rclcpp::Time & stamp, const std::string & ns,
+  int32_t id, uint32_t marker_type, const geometry_msgs::msg::Vector3 & scale,
+  const std_msgs::msg::ColorRGBA & color)
 {
   visualization_msgs::msg::MarkerArray marker_array;
   auto marker = create_default_marker("map", stamp, ns, id, marker_type, scale, color);
 
-  marker.pose.position = stop_obstacle_point;
+  marker.pose.position = point;
   marker.pose.position.z += 2.0;
 
   marker.text = "!";
@@ -218,19 +218,13 @@ visualization_msgs::msg::MarkerArray create_geometry_msgs_marker_array(
   visualization_msgs::msg::Marker marker_line = create_default_marker(
     "map", stamp, ns + "_line", id, visualization_msgs::msg::Marker::LINE_STRIP, scale, color);
 
-  const double yaw = tf2::getYaw(pose.orientation);
-
-  const double a = 3.0;
-  geometry_msgs::msg::Point p0;
-  p0.x = pose.position.x - a * std::sin(yaw);
-  p0.y = pose.position.y + a * std::cos(yaw);
-  p0.z = pose.position.z;
+  constexpr double a = 3.0;
+  geometry_msgs::msg::Point p0 =
+    autoware_utils_geometry::calc_offset_pose(pose, 0.0, a, 0.0, 0.0).position;
   marker_line.points.push_back(p0);
 
-  geometry_msgs::msg::Point p1;
-  p1.x = pose.position.x + a * std::sin(yaw);
-  p1.y = pose.position.y - a * std::cos(yaw);
-  p1.z = pose.position.z;
+  geometry_msgs::msg::Point p1 =
+    autoware_utils_geometry::calc_offset_pose(pose, 0.0, -a, 0.0, 0.0).position;
   marker_line.points.push_back(p1);
 
   marker_array.markers.push_back(marker_line);
@@ -289,15 +283,15 @@ visualization_msgs::msg::MarkerArray create_geometry_msgs_marker_array(
 }
 
 visualization_msgs::msg::MarkerArray create_autoware_geometry_marker_array(
-  const autoware_utils_geometry::MultiPolygon2d & area_polygons, const rclcpp::Time & stamp,
+  const autoware_utils_geometry::MultiPolygon2d & polygons, const rclcpp::Time & stamp,
   const std::string & ns, const int32_t & id, uint32_t marker_type,
   const geometry_msgs::msg::Vector3 & scale, const std_msgs::msg::ColorRGBA & color, double z)
 {
   visualization_msgs::msg::MarkerArray marker_array;
 
-  for (size_t i = 0; i < area_polygons.size(); ++i) {
-    const auto marker = create_autoware_geometry_marker(
-      area_polygons[i], stamp, ns, id, marker_type, scale, color, z);
+  for (size_t i = 0; i < polygons.size(); ++i) {
+    const auto marker =
+      create_autoware_geometry_marker(polygons[i], stamp, ns, id, marker_type, scale, color, z);
     marker_array.markers.push_back(marker);
   }
   return marker_array;
@@ -507,7 +501,7 @@ visualization_msgs::msg::MarkerArray create_predicted_objects_marker_array(
 }
 
 visualization_msgs::msg::MarkerArray create_vehicle_trajectory_point_marker_array(
-  const std::vector<autoware_planning_msgs::msg::TrajectoryPoint> & mpt_traj,
+  const std::vector<autoware_planning_msgs::msg::TrajectoryPoint> & trajectory,
   const autoware::vehicle_info_utils::VehicleInfo & vehicle_info, const std::string & ns,
   const int32_t id)
 {
@@ -521,11 +515,11 @@ visualization_msgs::msg::MarkerArray create_vehicle_trajectory_point_marker_arra
   const double base_to_rear = vehicle_info.rear_overhang_m;
 
   visualization_msgs::msg::MarkerArray marker_array;
-  for (size_t i = 0; i < mpt_traj.size(); ++i) {
+  for (size_t i = 0; i < trajectory.size(); ++i) {
     marker.id = i;
     marker.points.clear();
 
-    const auto & traj_point = mpt_traj.at(i);
+    const auto & traj_point = trajectory.at(i);
     create_vehicle_footprint_marker(
       marker, traj_point.pose, base_to_right, base_to_left, base_to_front, base_to_rear);
     marker_array.markers.push_back(marker);
