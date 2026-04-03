@@ -2,7 +2,6 @@ Checks: "
   -*,
   bugprone-*,
   -bugprone-easily-swappable-parameters,
-  -bugprone-exception-escape,
   -bugprone-narrowing-conversions,
   -bugprone-reserved-identifier"
 
