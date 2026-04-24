@@ -248,6 +248,8 @@ private:
   friend TemporalTrajectory insert_stop_duration(
     TemporalTrajectory trajectory, double arc_length, double duration);
   friend TemporalTrajectory set_time_offset(TemporalTrajectory trajectory, double offset);
+  friend TemporalTrajectory align_orientation_with_trajectory_direction(
+    TemporalTrajectory trajectory);
 
   SpatialTrajectory spatial_trajectory_;
   detail::TimeDistanceMapping time_distance_mapping_;
