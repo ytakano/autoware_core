@@ -230,9 +230,9 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_prep
 // --- the sensor-callback *middle* orchestrator ---
 // One Rust call replaces the C++ glue between the prologue and the publishers: the activation /
 // interpolate / map gates, regularization, `run_align` + convergence, and the covariance block —
-// emitting the same `/diagnostics` keys (in order) through the `Diagnostics` vtable. The C++ shell
-// still publishes, reading the returned [`AwSensorPointsMatchOutput`]; the publish vtable + collapsing
-// the base_link round-trip are later sub-slices. std-only node glue.
+// emitting the same `/diagnostics` keys (in order) through the `Diagnostics` vtable. Results are
+// published through the host vtable; the C++ shell reads the returned [`AwSensorPointsMatchOutput`]
+// for the base_link cloud it still transforms. std-only node glue.
 
 /// Outcome of [`autoware_ndt_scan_matcher_rs_node_on_sensor_points_match`]. `MATCHED` = the align ran
 /// and `out` is filled (C++ publishes from it — pose publication is still gated on `out.is_converged`).
@@ -263,9 +263,9 @@ pub struct AwSensorPointsMatchParams {
     pub no_ground_points_z_margin_for_ground_removal: f64,
 }
 
-/// C-ABI result of the middle (the publishers now go through the `AwHost` publish
-/// ops, so this shrank to what the C++ shell still needs). `result_pose` (row-major 4x4) lets C++
-/// transform the `base_link` cloud → map for the still-C++ cloud publishers; `is_converged` feeds the
+/// C-ABI result of the middle (the publishers go through the `AwHost` publish
+/// ops, so this carries only what the C++ shell needs). `result_pose` (row-major 4x4) lets C++
+/// transform the `base_link` cloud → map for the C++ cloud publishers; `is_converged` feeds the
 /// wrapper's `skipping_publish_num`.
 #[repr(C)]
 pub struct AwSensorPointsMatchOutput {
@@ -438,7 +438,7 @@ fn aw_poses(poses: &[Matrix4<f32>]) -> alloc::vec::Vec<AwPose> {
 
 /// The sensor-callback middle: gates → align → convergence → covariance, emitting the diagnostics and
 /// **publishing the POD results through the `AwHost` publish ops**; `out` carries
-/// only the result pose + convergence for the still-C++ cloud publishers + `skipping_publish_num`.
+/// only the result pose + convergence for the C++ cloud publishers + `skipping_publish_num`.
 /// Returns an `SM_*` status. Mirrors `callback_sensor_points_main` lines ~560–981 in order.
 ///
 /// # Safety
@@ -683,7 +683,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_matc
     }
 
     // Publish results through the host: the C++ trampolines build the ROS
-    // messages + markers and know the frame_ids. `exe_time` + the cloud publishers stay C++ (sub-slice 4).
+    // messages + markers and know the frame_ids. `exe_time` and the cloud publishers are C++-side.
     let result_pose_aw = matrix4_to_aw_pose(&outcome.pose);
     let initial_pose_aw = AwPose {
         position: interp.position,

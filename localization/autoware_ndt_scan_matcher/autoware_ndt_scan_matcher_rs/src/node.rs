@@ -31,9 +31,8 @@ use crate::node_handle::{AwPoseWithCovarianceStampedView, NdtScanMatcherRs};
 /// `make_diagnostics`; lets a Rust-owned callback emit the exact same diagnostics the C++ body did
 /// (key order + values preserved). Keys/messages cross as `(ptr, len)` (UTF-8, not NUL-terminated).
 /// Field order must match the C `AwDiagnostics` struct. The full vtable mirrors the C++
-/// `DiagnosticsInterface` (all 7 ops); the safe wrapper methods below are the diagnostics surface for
-/// every migrated callback — `on_trigger` (slice 1) uses 4; the rest (`add_f64`/`add_str`/
-/// `update_level`) are the public API later callback slices build on.
+/// `DiagnosticsInterface` (all 7 ops); the safe wrapper methods below are the diagnostics surface a
+/// Rust-owned callback uses to emit keys/messages (`add_f64` / `add_str` / `update_level`, etc.).
 #[repr(C)]
 pub struct Diagnostics {
     diag: *mut c_void,

@@ -13,15 +13,14 @@
 // limitations under the License.
 
 //! The ROS **side-effects host vtable** (`AwHost`) — the C-ABI adapter that realizes the portable
-//! [`crate::host`] `Host` seam for the rclcpp node. A migrated callback body drives ROS side effects
-//! (clock, logging, TF lookup, and — added as later sub-slices land — publishing) through this vtable
+//! [`crate::host`] `Host` seam for the rclcpp node. A callback body drives ROS side effects
+//! (clock, logging, TF lookup, and publishing) through this vtable
 //! of C function pointers over an opaque `ctx` (the `NDTScanMatcher *`), instead of touching rclcpp
 //! directly. Side-effects only; no node state (that lives Rust-side on the handle). Field order must
 //! match the C `AwHost` struct.
 //!
-//! This is deliberately minimal for now (the sensor-callback prologue needs only
-//! `now_ns` / `log` / `lookup_transform`); publish ops are added with the sub-slices that move the
-//! align + publish tail.
+//! The vtable carries the side-effect ops a callback needs: the clock (`now_ns`), logging (`log`),
+//! TF lookup (`lookup_transform`), and the publish ops used by the align + publish tail.
 
 use core::ffi::c_void;
 

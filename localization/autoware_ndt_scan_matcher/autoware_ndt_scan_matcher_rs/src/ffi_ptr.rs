@@ -256,7 +256,9 @@ macro_rules! ffi_mut {
 /// Expands to an `unsafe {}` call to [`opt_slice`].
 macro_rules! ffi_slice {
     ($p:expr, $len:expr, $elem:ty, else $ret:expr) => {
-        ffi_slice!($p.cast::<$elem>(), $len, else $ret)
+        // Fully qualified so the recursion resolves even when the macro is invoked by path
+        // (`crate::ffi_ptr::ffi_slice!`) from another module.
+        $crate::ffi_ptr::ffi_slice!($p.cast::<$elem>(), $len, else $ret)
     };
     ($p:expr, $len:expr, else $ret:expr) => {{
         // SAFETY: deref audited in `ffi_ptr::opt_slice`; caller contract per this fn's `# Safety`.
@@ -287,7 +289,9 @@ macro_rules! ffi_mut_slice {
 /// Expands to an `unsafe {}` call to [`read_copy`].
 macro_rules! ffi_read {
     ($p:expr, $ty:ty, else $ret:expr) => {
-        ffi_read!($p.cast::<$ty>(), else $ret)
+        // Fully qualified so the recursion resolves even when the macro is invoked by path
+        // (`crate::ffi_ptr::ffi_read!`) from another module.
+        $crate::ffi_ptr::ffi_read!($p.cast::<$ty>(), else $ret)
     };
     ($p:expr, else $ret:expr) => {{
         // SAFETY: read audited in `ffi_ptr::read_copy`; caller contract per this fn's `# Safety`.

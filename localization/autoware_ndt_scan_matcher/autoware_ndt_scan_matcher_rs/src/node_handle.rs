@@ -34,7 +34,7 @@ use crate::pose_buffer::{InterpolateResult, PoseBuffer, TimedPoseWithCov};
 /// The validated, Rust-owned parameters the node needs (the union of the engine's `set_params` /
 /// `set_convergence_params` / `set_covariance_config` inputs). Converted once from [`AwNdtParams`]
 /// at construction; the offset-model vectors are **copied** so nothing borrows C++ memory past the
-/// call (roadmap rules 10/11).
+/// call.
 #[derive(Clone, Debug)]
 pub struct Params {
     // Engine construction (the `MultiVoxelGridCovariance` knobs).
@@ -653,8 +653,8 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_engine(
 /// Interpolate the regularization pose at `stamp_ns` from the handle's Rust-owned buffer, writing the
 /// result into `*out` and returning `true`; returns `false` (leaving `*out` untouched) if
 /// regularization is disabled or the buffer cannot interpolate (the C++ `if (!opt) return;`). Also
-/// drops buffer entries older than `stamp_ns` (the C++ `pop_old`). Transitional: the still-C++ sensor
-/// callback calls this; it is removed when the sensor callback itself moves to Rust.
+/// drops buffer entries older than `stamp_ns` (the C++ `pop_old`). Called by the C++ sensor-callback
+/// dispatcher.
 ///
 /// # Safety
 /// `handle` must be a valid, live `NdtScanMatcherRs` from `_new` (or null → `false`), and `out` a
@@ -683,8 +683,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_regularization_interpolate
 }
 
 /// Read the node activation flag from the handle (the C++ `is_activated_`). `false` if `handle` is
-/// null. Transitional read for the still-C++ sensor/timer gates (removed when the sensor callback
-/// moves to Rust).
+/// null. Read by the C++ sensor/timer callback gates.
 ///
 /// # Safety
 /// `handle` must be a valid, live `NdtScanMatcherRs` from `_new`, or null → `false`.
@@ -700,8 +699,8 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_is_activated(
 }
 
 /// Write the latest EKF position `[x, y, z]` into `*out_xyz` and return `true`; `false` (leaving
-/// `*out_xyz` untouched) if none is recorded yet or `handle`/`out_xyz` is null. Transitional read for
-/// the still-C++ map-update timer (removed when map update moves to Rust).
+/// `*out_xyz` untouched) if none is recorded yet or `handle`/`out_xyz` is null. Read by the C++
+/// map-update timer.
 ///
 /// # Safety
 /// `handle` must be a valid, live `NdtScanMatcherRs` from `_new` (or null → `false`), and `out_xyz`
@@ -727,7 +726,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_latest_ekf_position(
 /// Interpolate the initial pose at `stamp_ns` from the handle's buffer (then `pop_old`), writing the
 /// interpolated pose + the two bracket positions into `*out` and returning `true`; `false` (leaving
 /// `*out` untouched) if the buffer cannot interpolate or a pointer is null (the C++ sensor callback's
-/// `if (!opt) return false;`). Transitional: removed when the sensor callback moves to Rust.
+/// `if (!opt) return false;`). Called by the C++ sensor-callback dispatcher.
 ///
 /// # Safety
 /// `handle` must be a valid, live `NdtScanMatcherRs` from `_new` (or null → `false`), and `out` a

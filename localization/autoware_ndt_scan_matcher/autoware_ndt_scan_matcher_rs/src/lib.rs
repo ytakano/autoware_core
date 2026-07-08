@@ -111,7 +111,7 @@ pub mod pose_buffer;
 // ROS-node callback glue; std-only (not part of the no_std engine path).
 #[cfg(feature = "std")]
 pub mod node;
-// Opaque object-level node handle (NdtScanMatcherRs) + AwNdtParams; the roadmap foundation. std-only.
+// Opaque object-level node handle (NdtScanMatcherRs) + AwNdtParams. std-only.
 #[cfg(feature = "std")]
 pub mod node_handle;
 // ROS map-update glue: drives the portable `apply_map_update` (the `MapSource` port) from C++; std-only.
