@@ -1,0 +1,323 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Using the Rust crate - autoware_ndt_scan_matcher — NDT in Rust</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Design and porting documentation for the Rust port of the Autoware NDT scan matcher.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">autoware_ndt_scan_matcher — NDT in Rust</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/autowarefoundation/autoware_core" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="using-the-rust-crate"><a class="header" href="#using-the-rust-crate">Using the Rust crate</a></h1>
+<p><code>autoware_ndt_scan_matcher_rs</code> is usable as a plain Rust library, independently of ROS. This
+chapter tours the public API. The examples are the crate's own rustdoc doctests (verified with
+<code>cargo test --doc</code>); browse the full reference with <code>cargo doc --no-deps --open</code>.</p>
+<h2 id="the-nalgebra-re-export"><a class="header" href="#the-nalgebra-re-export">The <code>nalgebra</code> re-export</a></h2>
+<p>Pose guesses and results are <code>nalgebra</code> matrices (<code>Matrix4&lt;f32&gt;</code> for poses, <code>Matrix6&lt;f64&gt;</code> for
+Hessians/covariances). The crate <strong>re-exports the exact <code>nalgebra</code> version it is built against</strong>,
+so construct those matrices through <code>autoware_ndt_scan_matcher_rs::nalgebra</code> rather than pinning
+your own (a different version is a distinct, incompatible type).</p>
+<h2 id="primary-api-ndtengine"><a class="header" href="#primary-api-ndtengine">Primary API: <code>NdtEngine</code></a></h2>
+<p>The persistent engine (<a href="../arch/engine.html"><code>engine::NdtEngine</code></a>) is the main entry point. Load a
+target map, build the kd-tree, then align sensor clouds:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use autoware_ndt_scan_matcher_rs::engine::NdtEngine;
+use autoware_ndt_scan_matcher_rs::nalgebra::Matrix4;
+
+// Empty engine: 2.0 m voxels; MultiVoxelGridCovariance defaults (min 6 points / eig 0.01).
+let engine = NdtEngine::new(2.0, 6, 0.01);
+
+// Register a target map tile (id 0) and build the kd-tree over the voxel centroids.
+let target: Vec&lt;[f32; 3]&gt; = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
+engine.add_target(&amp;target, 0);
+engine.create_kdtree();
+assert!(engine.has_target());
+
+// Align a source cloud from an identity initial guess, then read the result back.
+let source = target.clone();
+engine.align(&amp;Matrix4::identity(), &amp;source);
+let result = engine.result();
+assert!(result.iteration_num &gt;= 0);
+<span class="boring">}</span></code></pre></pre>
+<h3 id="scratch-and-the-_with-methods"><a class="header" href="#scratch-and-the-_with-methods">Scratch and the <code>_with</code> methods</a></h3>
+<p>The align scratch (workspace + last result) is a <a href="../arch/scratch.html"><code>engine::MatchScratch</code></a>.
+The <code>_with</code> methods take one you own — reuse it across frames to stay allocation-free after
+warmup. These are the <strong>only</strong> align entry points under the <code>mt</code> feature (the implicit-scratch
+variants are compiled out):</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use autoware_ndt_scan_matcher_rs::engine::{MatchScratch, NdtEngine};
+use autoware_ndt_scan_matcher_rs::nalgebra::Matrix4;
+
+let engine = NdtEngine::new(2.0, 6, 0.01);
+let target: Vec&lt;[f32; 3]&gt; = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
+engine.add_target(&amp;target, 0);
+engine.create_kdtree();
+
+let mut scratch = MatchScratch::new();
+engine.align_with(&amp;Matrix4::identity(), &amp;target, &amp;mut scratch);
+assert!(scratch.result().iteration_num &gt;= 0);
+<span class="boring">}</span></code></pre></pre>
+<h2 id="portable-orchestration-scanmatcher"><a class="header" href="#portable-orchestration-scanmatcher">Portable orchestration: <code>ScanMatcher</code></a></h2>
+<p><a href="../arch/portability.html"><code>scan_matcher::ScanMatcher</code></a> wraps the engine and drives it over the
+<a href="../arch/host-vtable.html">host ports</a> (<code>MapSource</code> / <code>OutputSink</code> / <code>Clock</code>). Map loading is
+<code>async</code>; the match is the synchronous WCET hot path. It runs unchanged under ROS, a kernel, or an
+async runtime — <code>examples/tokio_ndt.rs</code> is the reference host implementation.</p>
+<h2 id="the-lower-level-kernel-ndtalign"><a class="header" href="#the-lower-level-kernel-ndtalign">The lower-level kernel: <code>ndt::align</code></a></h2>
+<p><a href="../arch/align.html"><code>ndt::align</code></a> is the RT-critical alignment function the engine drives. Use it
+directly when you hold a <code>VoxelGridMap</code> yourself:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use autoware_ndt_scan_matcher_rs::ndt::{align, AlignResult, AlignWorkspace, NdtParams};
+use autoware_ndt_scan_matcher_rs::voxel_grid::VoxelGridMap;
+use autoware_ndt_scan_matcher_rs::nalgebra::Matrix4;
+
+let mut map = VoxelGridMap::new([2.0; 3], 6, 0.01);
+let target: Vec&lt;[f32; 3]&gt; = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
+map.add_target(&amp;target, 0);
+map.create_kdtree();
+
+let params = NdtParams { resolution: 2.0, ..NdtParams::default() };
+let mut ws = AlignWorkspace::new();
+let mut out = AlignResult::default();
+align(&amp;map, &amp;target, &amp;Matrix4::identity(), &amp;params, &amp;mut ws, &amp;mut out);
+assert!(out.iteration_num &gt;= 0);
+<span class="boring">}</span></code></pre></pre>
+<h2 id="parallelism"><a class="header" href="#parallelism">Parallelism</a></h2>
+<p>Under the <code>parallel</code> feature, set <code>num_threads &gt; 1</code> (in <code>NdtParams</code> / <code>set_params</code>) to use the
+rayon backend. The rayon <em>worker count</em> is the process-global pool size — set it once with
+<code>init_thread_pool(n)</code> or <code>RAYON_NUM_THREADS</code>; see
+<a href="features.html#parallelism-and-worker-threads">Feature flags and build configurations</a>.</p>
+<h2 id="other-public-modules"><a class="header" href="#other-public-modules">Other public modules</a></h2>
+<ul>
+<li><a href="../arch/tpe.html"><code>tpe::TreeStructuredParzenEstimator</code></a> — the align-service pose-search sampler.</li>
+<li><a href="../concepts/scores.html"><code>convergence</code></a>, <code>covariance</code>, <code>cov_estimate</code> — pure decision/estimation
+kernels reused across the ROS and kernel builds.</li>
+<li><code>pose_buffer</code> — a time-ordered pose interpolation buffer.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../start/features.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../start/ros-node.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../start/features.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../start/ros-node.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

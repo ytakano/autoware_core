@@ -1,0 +1,1953 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>autoware_ndt_scan_matcher — NDT in Rust</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Design and porting documentation for the Rust port of the Autoware NDT scan matcher.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">autoware_ndt_scan_matcher — NDT in Rust</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/autowarefoundation/autoware_core" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
+<p>This book documents the <strong>Rust port of the Autoware NDT scan matcher</strong>
+(<code>autoware_ndt_scan_matcher</code>). It is written for the people who build on, review, and
+maintain the port — not as a user manual for the ROS node (see the package
+<a href="https://github.com/autowarefoundation/autoware_core"><code>README.md</code></a> for node I/O and
+parameters).</p>
+<p>The port keeps <code>rclcpp</code> as the ROS 2 runtime and moves the <em>algorithmic core</em> — the NDT
+engine, scan-matching state, convergence judgement, covariance estimation, map-update
+decisions, and callback bodies — into a Rust crate,
+<a href="https://github.com/autowarefoundation/autoware_core"><code>autoware_ndt_scan_matcher_rs</code></a>.
+The C++ side becomes a thin shell that owns only the ROS 2 boundary and forwards each
+callback to a single Rust entry point.</p>
+<h2 id="why-this-exists"><a class="header" href="#why-this-exists">Why this exists</a></h2>
+<ul>
+<li><strong>Memory safety at the boundary.</strong> Every pointer and struct that crosses the C ABI is
+validated on the Rust side before use.</li>
+<li><strong>Panic-free, WCET-bounded real time.</strong> The align hot path is allocation-free after
+warmup, has a documented worst-case execution-time contract, and cannot panic.</li>
+<li><strong>A <code>no_std</code> / kernel target.</strong> The same algorithm core builds without <code>std</code>, so it can
+run under a bare-metal kernel — a portability goal that shaped the whole design.</li>
+</ul>
+<h2 id="what-is-and-isnt-in-scope"><a class="header" href="#what-is-and-isnt-in-scope">What is and isn't in scope</a></h2>
+<p><strong>In scope (Rust):</strong> the NDT engine and voxel-grid map, the align kernel, scores
+(transform probability and nearest-voxel likelihood), covariance estimation, the align-service
+pose search, pose buffers, convergence, map-update policy, and diagnostics content.</p>
+<p><strong>Out of scope (stays C++ / <code>rclcpp</code>):</strong> node construction, publishers/subscribers/services/
+timers, parameter declaration, TF lookup, the map-loader service call, and actual message
+publication. Rust never links <code>rclcpp</code> and never subscribes to topics; it requests ROS side
+effects through a host vtable that C++ implements.</p>
+<h2 id="the-shape-of-the-system"><a class="header" href="#the-shape-of-the-system">The shape of the system</a></h2>
+<pre class="mermaid">flowchart TB
+    subgraph cpp[&quot;C++ / rclcpp shell&quot;]
+        node[&quot;rclcpp::Node\nsubscriptions · publishers\nservices · timers · TF&quot;]
+        host[&quot;Host vtable impl\n(ROS side effects)&quot;]
+    end
+    subgraph rust[&quot;Rust / autoware_ndt_scan_matcher_rs&quot;]
+        handle[&quot;NdtScanMatcherRs\n(std FFI shell: node state)&quot;]
+        matcher[&quot;ScanMatcher (no_std core)&quot;]
+        engine[&quot;NdtEngine\n(&amp;self-only, lock-free map)&quot;]
+        handle --&gt; matcher --&gt; engine
+    end
+    node -- &quot;one on_* call per callback\n(C ABI, message views)&quot; --&gt; handle
+    handle -- &quot;side effects\n(publish, TF, log, map load)&quot; --&gt; host
+    host --&gt; node
+</pre>
+<p>Read <a href="reader-map.html">How to read this book</a> next — it routes each kind of reader to the
+chapters that matter most for them.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="how-to-read-this-book"><a class="header" href="#how-to-read-this-book">How to read this book</a></h1>
+<p>The book serves four audiences. Start where your goal sits; every chapter cross-links the
+rest.</p>
+<div class="table-wrapper"><table><thead><tr><th>You are…</th><th>Start with</th><th>Then</th></tr></thead><tbody>
+<tr><td><strong>An upstream / PR reviewer</strong></td><td><a href="port/verification.html">Part IV — The C++ to Rust Port</a>, especially <a href="port/verification.html">Verification</a> and <a href="port/divergences.html">Divergences from upstream</a></td><td><a href="quality/hardening.html">Quality Gates</a> (lints) → <a href="arch/overview.html">System overview</a></td></tr>
+<tr><td><strong>A maintainer / contributor</strong></td><td><a href="arch/overview.html">Part III — Architecture</a> (overview → FFI → engine → align)</td><td><a href="port/divergences.html">Divergences</a>, <a href="port/symbol-map.html">Symbol map</a> → <a href="quality/tests.html">Test taxonomy</a></td></tr>
+<tr><td><strong>A Rust crate user</strong></td><td><a href="start/build-and-test.html">Part II — Getting Started</a> (build, features, using the crate)</td><td><a href="arch/engine.html">The NDT engine</a>, <a href="arch/align.html">The align hot path</a>, and the generated rustdoc</td></tr>
+<tr><td><strong>An RT / <code>no_std</code> (kernel) engineer</strong></td><td><a href="rt/wcet.html">Part V — Real-Time and no_std</a> (WCET, zero-alloc, <code>mt</code>, panic-free)</td><td><a href="arch/concurrency.html">Concurrency and interior mutability</a> → <a href="quality/hardening.html">lint gates</a></td></tr>
+</tbody></table>
+</div>
+<h2 id="conventions"><a class="header" href="#conventions">Conventions</a></h2>
+<ul>
+<li><strong>Code that is meant to compile</strong> is shown as tested <code>rust</code> doctests copied from the crate's
+rustdoc. <strong>Illustrative snippets and excerpts</strong> use <code>rust,ignore</code> or <code>text</code> and are not compiled.</li>
+<li><strong>Paths</strong> like <code>src/engine.rs</code> are relative to the crate root
+(<code>autoware_ndt_scan_matcher/autoware_ndt_scan_matcher_rs/</code>).</li>
+<li><strong><code>Aw*</code></strong> names are C-ABI FFI types; <strong><code>Ndt*</code> / <code>ScanMatcher</code></strong> are Rust-side types.</li>
+<li><strong>TP</strong> = transform probability, <strong>NVTL</strong> = nearest-voxel transformation likelihood
+(see the <a href="appendix/glossary.html">Glossary</a>).</li>
+<li>Each chapter ends with a <strong>Source</strong> note listing the in-tree files it distills, so a reader can go
+from the prose to the authoritative code.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="ndt-scan-matching-primer"><a class="header" href="#ndt-scan-matching-primer">NDT scan matching primer</a></h1>
+<p>Enough Normal Distributions Transform (NDT) background to read the rest of the book. NDT estimates a
+vehicle's pose by aligning a live LiDAR scan to a prebuilt point-cloud map.</p>
+<h2 id="the-registration-problem"><a class="header" href="#the-registration-problem">The registration problem</a></h2>
+<p>Given a <strong>target</strong> map (points in the <code>map</code> frame) and a <strong>source</strong> scan (points in <code>base_link</code>),
+find the rigid transform <code>T(p)</code> — a 6-DoF pose <code>p = [x, y, z, roll, pitch, yaw]</code> — that best places
+the source onto the map. NDT differs from ICP in how it represents the target: instead of matching
+point-to-point, it <strong>voxelizes the target into per-cell normal distributions</strong> and scores the source
+against those smooth Gaussians. That makes the objective differentiable and cheap to evaluate, so a
+few Newton steps converge.</p>
+<h2 id="the-voxel-grid"><a class="header" href="#the-voxel-grid">The voxel grid</a></h2>
+<p>The target is bucketed into a regular grid of <code>resolution</code>-sized voxels. Each voxel with at least
+<code>min_points</code> points is summarized by a <strong>mean</strong> and an <strong>inverse covariance</strong> (its Gaussian). The
+covariance is conditioned by inflating its smallest eigenvalues (<code>eig_mult</code>) so thin/planar cells
+stay invertible. This is the C++ <code>MultiVoxelGridCovariance</code>; in Rust it is
+<a href="concepts/../arch/voxel-grid.html"><code>voxel_grid::VoxelGridMap</code></a>, queried by a kd-tree over voxel centroids.</p>
+<h2 id="the-score-gradient-and-hessian"><a class="header" href="#the-score-gradient-and-hessian">The score, gradient, and Hessian</a></h2>
+<p>For a candidate pose <code>p</code>, each source point is transformed by <code>T(p)</code>, its nearest voxel(s) are found
+by radius search, and the point contributes a Gaussian response of its offset from the voxel mean.
+Summed over the cloud this is the <strong>NDT score</strong>; its first and second derivatives w.r.t. <code>p</code> give the
+<strong>gradient</strong> and <strong>Hessian</strong> that drive a Newton step. The mixture uses two Gauss constants derived
+from <code>outlier_ratio</code> and <code>resolution</code> (a robustifying outlier model). The derivative kernels live in
+<a href="concepts/../arch/derivatives.html">Serial and parallel derivatives</a>; the optimization loop (transform →
+derivatives → 6×6 SVD solve → step) is <a href="concepts/../arch/align.html">The align hot path</a>.</p>
+<p>The two scores NDT reports from a converged pose — transform probability and nearest-voxel
+transformation likelihood — are covered in <a href="concepts/scores.html">Scores: TP and NVTL</a>.</p>
+<blockquote>
+<p>Source: <code>src/voxel_grid.rs</code>, <code>src/derivatives.rs</code>, <code>src/ndt.rs</code>, <code>src/transform.rs</code>
+(<code>gauss_constants</code>); the package <code>README.md</code>. See the NDT references in the
+<a href="concepts/../appendix/references.html">appendix</a>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="scores-tp-and-nvtl"><a class="header" href="#scores-tp-and-nvtl">Scores: TP and NVTL</a></h1>
+<p>NDT reports two quality scores from a converged pose; both are published, and one of them gates the
+convergence decision.</p>
+<h2 id="transform-probability-tp"><a class="header" href="#transform-probability-tp">Transform Probability (TP)</a></h2>
+<p>TP is the NDT score accumulated over the whole cloud, normalized by the point count — the average
+per-point Gaussian response at the final pose (<code>red.score / source_len</code> in <code>ndt.rs</code>'s <code>finalize</code>,
+exposed as <code>AlignResult::transform_probability</code>). Higher is better; it reflects how well the source
+sits in the map's distributions overall.</p>
+<h2 id="nearest-voxel-transformation-likelihood-nvtl"><a class="header" href="#nearest-voxel-transformation-likelihood-nvtl">Nearest-Voxel Transformation Likelihood (NVTL)</a></h2>
+<p>NVTL scores each transformed point against only its <strong>nearest</strong> voxel and averages over the points
+that found one (<code>nearest_voxel_score / found</code>). It is more robust than TP on sparse or partially
+observed maps, so it is the default convergence gate in Autoware.</p>
+<h2 id="which-score-gates-convergence"><a class="header" href="#which-score-gates-convergence">Which score gates convergence</a></h2>
+<p><code>converged_param_type</code> selects the gate: <code>0</code> = transform probability, <code>1</code> = nearest-voxel likelihood
+(the config default is <code>1</code>). The selected score is compared against its threshold
+(<code>converged_param_transform_probability</code> or
+<code>converged_param_nearest_voxel_transformation_likelihood</code>); the pure decision — including the
+oscillation override — is <a href="concepts/../port/verification.html"><code>convergence::evaluate_convergence</code></a>, whose
+inputs/verdict are documented on <code>convergence::ConvergenceInput</code> / <code>ConvergenceVerdict</code>.</p>
+<h2 id="traces-and-no-ground-variants"><a class="header" href="#traces-and-no-ground-variants">Traces and no-ground variants</a></h2>
+<p><code>align</code> also records the per-iteration score traces (<code>transform_probability_array</code>,
+<code>nearest_voxel_likelihood_array</code>) for diagnostics/plotting. The sensor callback additionally computes
+<strong>no-ground</strong> TP/NVTL (scores on the cloud with ground points filtered) and publishes them as debug
+topics. Both scores travel out of a match in <a href="concepts/../arch/host-vtable.html"><code>host::MatchResult</code></a>.</p>
+<h2 id="how-the-scores-feed-downstream"><a class="header" href="#how-the-scores-feed-downstream">How the scores feed downstream</a></h2>
+<p>The gate result drives publish/skip decisions; the align result's Hessian and NVTL also seed
+<a href="concepts/../arch/covariance.html">covariance estimation</a>.</p>
+<blockquote>
+<p>Source: <code>src/convergence.rs</code>, <code>src/ndt.rs</code> (<code>transformation_probability</code>,
+<code>nearest_voxel_transformation_likelihood</code>, <code>finalize</code>), <code>src/host.rs</code> (<code>MatchResult</code>).</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="why-a-rust-port"><a class="header" href="#why-a-rust-port">Why a Rust port</a></h1>
+<p>The motivation, expanded from the <a href="concepts/../introduction.html">Introduction</a>.</p>
+<h2 id="memory-safety-at-the-boundary"><a class="header" href="#memory-safety-at-the-boundary">Memory safety at the boundary</a></h2>
+<p>The C++/Rust seam is the riskiest part of any port. Here every pointer, length, and struct that
+crosses the C ABI is validated on the Rust side before use, through one audited module
+(<a href="concepts/../arch/ffi-ptr.html"><code>ffi_ptr</code></a>) and borrow-only <a href="concepts/../arch/ffi-types.html">view types</a> — Rust never
+retains a borrowed C++ pointer. The soundness argument is centralized rather than scattered across
+ad-hoc <code>unsafe</code> sites.</p>
+<h2 id="panic-free-wcet-bounded-real-time"><a class="header" href="#panic-free-wcet-bounded-real-time">Panic-free, WCET-bounded real time</a></h2>
+<p>The localization align path is safety-relevant and runs every frame. The Rust align kernel is
+<strong>allocation-free after warmup</strong>, cannot panic (the crate bans <code>unwrap</code>/<code>expect</code>/<code>panic</code>/indexing in
+non-test code), and carries a documented worst-case execution-time contract. See
+<a href="concepts/../rt/wcet.html">The WCET contract</a>, <a href="concepts/../rt/zero-alloc.html">Zero-allocation guarantees</a>, and
+<a href="concepts/../rt/panic-free.html">Panic-free, bounded execution</a>.</p>
+<h2 id="a-no_std--kernel-target"><a class="header" href="#a-no_std--kernel-target">A <code>no_std</code> / kernel target</a></h2>
+<p>Portability is the deeper driver: the same algorithm core builds without <code>std</code> so it can run under a
+bare-metal kernel, not just ROS. This shaped the two-layer split (portable core vs <code>std</code> FFI shell)
+and the <a href="concepts/../arch/host-vtable.html">Host ports</a>. See <a href="concepts/../arch/portability.html">Portability</a>.</p>
+<h2 id="keep-rclcpp-dont-rewrite-ros"><a class="header" href="#keep-rclcpp-dont-rewrite-ros">Keep rclcpp; don't rewrite ROS</a></h2>
+<p>The node keeps running through <code>rclcpp</code> — the port does <strong>not</strong> introduce <code>rclrs</code> or wrap ROS 2 in
+Rust. C++ owns the ROS runtime; Rust owns the algorithm (<a href="concepts/scope.html">Scope and non-goals</a>).</p>
+<h2 id="maintainability"><a class="header" href="#maintainability">Maintainability</a></h2>
+<p>The target shape is <strong>one Rust <code>on_*</code> forwarder per C++ callback</strong> instead of scattered in-function
+<code>#ifdef NDT_USE_RUST</code> branches. The two backends are selected at the translation-unit / build-target
+level, keeping both the Rust and legacy-C++ builds clean.</p>
+<blockquote>
+<p>Source: the package <code>README.md</code>; <code>src/lib.rs</code> (crate overview + module layout).</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="scope-and-non-goals"><a class="header" href="#scope-and-non-goals">Scope and non-goals</a></h1>
+<p>Exactly which responsibilities are Rust's and which stay in C++.</p>
+<h2 id="rust-owns-the-algorithm"><a class="header" href="#rust-owns-the-algorithm">Rust owns (the algorithm)</a></h2>
+<ul>
+<li>The NDT engine and voxel-grid map, the align kernel, and the TP/NVTL scores.</li>
+<li>Covariance estimation and the align-service pose search (TPE).</li>
+<li>Node-level algorithmic state: pose buffers, activation flag, map-update policy/bookkeeping.</li>
+<li>The convergence decision, publish/skip decisions, and diagnostics <em>content</em>.</li>
+</ul>
+<p>These live in the <code>autoware_ndt_scan_matcher_rs</code> crate — a portable <code>no_std</code> core plus a <code>std</code> FFI
+shell (see <a href="concepts/../arch/overview.html">System overview</a>).</p>
+<h2 id="c--rclcpp-owns-the-runtime-boundary"><a class="header" href="#c--rclcpp-owns-the-runtime-boundary">C++ / rclcpp owns (the runtime boundary)</a></h2>
+<ul>
+<li><code>rclcpp::Node</code> construction; publishers, subscribers, services, timers.</li>
+<li>ROS 2 parameter declaration; callback entry points.</li>
+<li>TF lookup, the map-loader service call, and the actual message publication.</li>
+<li>Diagnostics publication through the existing ROS APIs; component registration.</li>
+</ul>
+<p>C++ requests these side effects on Rust's behalf only through the <a href="concepts/../arch/host-vtable.html">Host vtable</a>.</p>
+<h2 id="non-goals"><a class="header" href="#non-goals">Non-goals</a></h2>
+<ul>
+<li>No full ROS 2 wrapper in Rust; no <code>rclrs</code> as the node runtime.</li>
+<li>No STL / Eigen / PCL / <code>rclcpp</code> / <code>tf2</code> types across the FFI boundary.</li>
+<li>Rust never subscribes to topics or calls <code>rclcpp</code> directly.</li>
+<li>No borrowed C++ message memory retained in Rust (copy into Rust-owned data first).</li>
+</ul>
+<h2 id="backend-selection"><a class="header" href="#backend-selection">Backend selection</a></h2>
+<p>Which implementation compiles is chosen at build time by the CMake option <code>NDT_USE_RUST</code> (default
+<code>OFF</code> = legacy C++; <code>ON</code> = the Rust port over FFI), applied at the translation-unit level rather than
+with in-function <code>#ifdef</code>s. See <a href="concepts/../start/build-and-test.html#selecting-the-backend-c-vs-rust">Build and test</a>.</p>
+<blockquote>
+<p>Source: the package <code>README.md</code>; <code>src/lib.rs</code> (module layout + <code>no_std</code> gating); <code>CMakeLists.txt</code>
+(<code>NDT_USE_RUST</code> translation-unit selection).</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="build-and-test"><a class="header" href="#build-and-test">Build and test</a></h1>
+<p><code>autoware_ndt_scan_matcher</code> is a standard ROS 2 (Humble) <code>ament_cmake</code> package. The Rust crate
+<code>autoware_ndt_scan_matcher_rs</code> is compiled as part of the package build (via corrosion/cargo) and
+linked into the C++ library over the C ABI.</p>
+<h2 id="building-with-colcon"><a class="header" href="#building-with-colcon">Building with colcon</a></h2>
+<p>From your Autoware Core colcon workspace root, after <code>rosdep install</code> has satisfied dependencies:</p>
+<pre><code class="language-sh">source /opt/ros/humble/setup.bash
+colcon build --symlink-install \
+  --packages-up-to autoware_ndt_scan_matcher \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release
+</code></pre>
+<h2 id="selecting-the-backend-c-vs-rust"><a class="header" href="#selecting-the-backend-c-vs-rust">Selecting the backend (C++ vs Rust)</a></h2>
+<p>The package builds one of two backends, chosen by the CMake option <strong><code>NDT_USE_RUST</code></strong> (defined in
+<code>CMakeLists.txt</code>):</p>
+<div class="table-wrapper"><table><thead><tr><th><code>NDT_USE_RUST</code></th><th>Backend</th><th>Notes</th></tr></thead><tbody>
+<tr><td><code>OFF</code> (default)</td><td>legacy C++ (<code>multigrid_ndt_omp</code>)</td><td>No dependency on Rust/corrosion at all.</td></tr>
+<tr><td><code>ON</code></td><td>Rust port over FFI</td><td>Builds the nested <code>autoware_ndt_scan_matcher_rs</code> crate via corrosion, generates the cbindgen C header, links it, and compiles the C++ shell with <code>-DNDT_USE_RUST</code> so the node/map-update translation units dispatch to the Rust engine.</td></tr>
+</tbody></table>
+</div>
+<p>Build the <strong>Rust</strong> backend by passing the flag:</p>
+<pre><code class="language-sh">colcon build --symlink-install \
+  --packages-up-to autoware_ndt_scan_matcher \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DNDT_USE_RUST=ON
+</code></pre>
+<p>The two backends are selected at the <em>translation-unit</em> level (not with in-function <code>#ifdef</code>s).</p>
+<h2 id="running-the-tests"><a class="header" href="#running-the-tests">Running the tests</a></h2>
+<pre><code class="language-sh">source /opt/ros/humble/setup.bash
+source install/setup.bash
+colcon test --packages-select autoware_ndt_scan_matcher --return-code-on-test-failure
+colcon test-result --verbose
+</code></pre>
+<blockquote>
+<p><strong>The Rust test suite only exists under <code>-DNDT_USE_RUST=ON</code>.</strong> With the default <code>OFF</code> build,
+<code>colcon test</code> runs only the C++/legacy tests (the launch test, the <code>standard_sequence_*</code> /
+<code>once_initialize_*</code> / <code>particles_num_*</code> / <code>missing_sensor_*</code> / <code>align_service_tpe_baseline</code>
+integration gtests, and the fast <code>test_estimate_covariance</code> / <code>test_ndt_scan_matcher_helper</code>).
+Building with <code>-DNDT_USE_RUST=ON</code> additionally registers the crate's own <code>cargo test</code> (run through
+CTest as <code>autoware_ndt_scan_matcher_rs_cargo_test</code>) <strong>plus the ~17 Rust differential/FFI gtests</strong>
+(<code>test_voxel_grid</code>, <code>test_align</code>, <code>test_ndt_engine</code>, <code>test_estimate_covariance_multi</code>,
+<code>test_tpe_ffi</code>, <code>test_convergence_verdict</code>, <code>test_map_update_verdict</code>, <code>test_sensor_points_match</code>,
+…). So to exercise the port through colcon, build with <code>-DNDT_USE_RUST=ON</code> first.</p>
+</blockquote>
+<p>Target a single ctest by regex:</p>
+<pre><code class="language-sh">colcon test --packages-select autoware_ndt_scan_matcher \
+  --ctest-args -R test_estimate_covariance
+</code></pre>
+<p><strong>Fast vs slow.</strong> The fast math tests are <code>test_estimate_covariance</code> and
+<code>test_ndt_scan_matcher_helper</code>. The <code>standard_sequence_*</code> / launch tests are slow (300 s timeouts,
+need PCD maps), so filter with <code>--ctest-args -R</code> while iterating.</p>
+<h2 id="working-on-the-rust-crate-directly"><a class="header" href="#working-on-the-rust-crate-directly">Working on the Rust crate directly</a></h2>
+<p>The crate lives at <code>autoware_ndt_scan_matcher/autoware_ndt_scan_matcher_rs/</code>. Iterating with cargo
+is much faster than a full colcon build, and covers everything except the ROS-message FFI shims
+(see the <code>ros</code> note below):</p>
+<pre><code class="language-sh">cd .../autoware_ndt_scan_matcher/autoware_ndt_scan_matcher_rs
+
+# Tests
+cargo test               # unit + doctests + integration tests (tests/zero_alloc.rs, tests/concurrency.rs)
+cargo test --lib         # unit tests only (fastest)
+cargo test --doc         # the doctests shown throughout this book
+
+# Lints (the hardening gate — see Quality Gates)
+cargo clippy --all-targets -- -D warnings                                   # std (default)
+cargo clippy --no-default-features --features mt,awkernel_sync/std -- -D warnings   # no_std multi-core
+
+# no_std build gate (the portable core must compile without std)
+rustup target add x86_64-unknown-none            # once, if not already installed
+cargo rustc --no-default-features --lib --target x86_64-unknown-none --crate-type rlib
+#   (repeat with aarch64-unknown-none for the arm64 kernel target)
+
+# API reference
+cargo doc --no-deps --open
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li>The <strong><code>ros</code> feature</strong> builds the <code>geometry_msgs</code> bindgen bindings, which need the rosidl C headers
+on the include path. That is wired up by colcon (the CTest <code>autoware_ndt_scan_matcher_rs_cargo_test</code>
+runs <code>cargo test --features ros</code> with <code>ROS_INCLUDE_DIRS</code> set), so run the <code>ros</code>-gated shims through
+colcon rather than bare <code>cargo</code>. Plain <code>cargo test</code> covers everything else.</li>
+<li>The single-core <code>no_std</code> config is verified with the <code>cargo rustc … --target …-unknown-none</code> gate
+above, <strong>not</strong> <code>cargo clippy --no-default-features</code> (that fails standalone — a <code>no_std</code> staticlib
+needs a <code>#[panic_handler]</code> from the final binary).</li>
+<li><strong>Miri</strong> (unsafe FFI) and <strong>coverage</strong> are in <a href="start/../port/verification.html">Behavior equivalence and verification</a>;
+<strong>benchmarks</strong> are in <a href="start/../quality/benchmarks.html">Benchmarking</a>.</li>
+</ul>
+<p>See <a href="start/features.html">Feature flags and build configurations</a> for the <code>std</code> / <code>parallel</code> / <code>mt</code> / <code>ros</code>
+matrix, and <a href="start/using-the-crate.html">Using the Rust crate</a> for the API tour.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="feature-flags-and-build-configurations"><a class="header" href="#feature-flags-and-build-configurations">Feature flags and build configurations</a></h1>
+<p>The crate has one code base and several build configurations, selected by Cargo features. The
+<code>std</code> feature is default-on so a plain <code>cargo build</code>/<code>test</code>/<code>clippy</code> has <code>std</code> (test harness +
+panic handler); the <code>no_std</code> build opts out with <code>--no-default-features</code>.</p>
+<h2 id="features"><a class="header" href="#features">Features</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Feature</th><th>Default</th><th>Effect</th></tr></thead><tbody>
+<tr><td><code>std</code></td><td>✅</td><td>Host/ROS build. Pulls <code>arc-swap</code> (the lock-free engine-state double-buffer) and puts the align scratch in a thread-local. The engine is <code>Sync</code>.</td></tr>
+<tr><td><code>parallel</code></td><td>✅</td><td>rayon-backed <code>compute_derivatives</code> reduction. Implies <code>std</code>. Bit-identical to serial (per-point contributions reduced in index order), so it is a pure throughput option — the serial backend stays the predictable WCET baseline.</td></tr>
+<tr><td><code>mt</code></td><td>❌</td><td>Multi-core <code>no_std</code> (kernel). Replaces the single-core <code>RefCell</code> cells with <code>awkernel_sync</code> mutexes and removes the engine-owned align scratch (callers pass a <code>&amp;mut MatchScratch</code>). Ignored when <code>std</code> is also on.</td></tr>
+<tr><td><code>ros</code></td><td>❌</td><td>Builds the rosidl <code>bindgen</code> bindings for the <code>geometry_msgs</code> C structs + the <code>Pose</code>-pointer FFI shims. Independent of <code>std</code>.</td></tr>
+</tbody></table>
+</div>
+<h2 id="parallelism-and-worker-threads"><a class="header" href="#parallelism-and-worker-threads">Parallelism and worker threads</a></h2>
+<p>The <code>parallel</code> backend runs the derivative reduction on rayon's <strong>process-global thread pool</strong>.
+There are two independent knobs:</p>
+<ul>
+<li>
+<p><strong>Enable parallel</strong> — set the <code>num_threads</code> param <code>&gt; 1</code> (<code>NdtParams.num_threads</code>, the ROS node's
+<code>num_threads</code> parameter, or <code>ScanMatcher::set_params</code>). This is a <em>switch</em>: <code>&gt; 1</code> selects the rayon
+backend, <code>≤ 1</code> stays serial. It does <strong>not</strong> by itself decide how many workers rayon uses.</p>
+</li>
+<li>
+<p><strong>Set the worker count</strong> — size the process-global pool, in one of three ways (all equivalent,
+process-wide):</p>
+<ol>
+<li><strong>The <code>num_threads</code> param, via the node handle.</strong> When <code>autoware_ndt_scan_matcher_rs_new</code>
+builds the handle with <code>num_threads &gt; 1</code>, it sizes the global pool to that value once, before
+any align. So a ROS node needs only its existing <code>num_threads</code> parameter.</li>
+<li><strong>Explicit API.</strong> Call <code>init_thread_pool(n)</code> (C ABI:
+<code>autoware_ndt_scan_matcher_rs_init_thread_pool(n)</code>) once, early. Best-effort and idempotent.</li>
+<li><strong>Environment.</strong> <code>RAYON_NUM_THREADS=n</code> (rayon's built-in), read on first use.</li>
+</ol>
+<p>If none is set, the pool defaults to the number of logical CPUs.</p>
+</li>
+</ul>
+<p>Because the pool is process-global, <code>n</code> is the total worker count for the whole process (not
+per-engine). The reduction is bit-identical regardless of <code>n</code>, so this only trades throughput for
+WCET predictability — the serial backend (<code>num_threads ≤ 1</code>) stays the predictable RT baseline.</p>
+<h2 id="the-three-engine-configurations"><a class="header" href="#the-three-engine-configurations">The three engine configurations</a></h2>
+<p>The interior mutability of the engine (its target map + params) is chosen at compile time. This
+is the single most important thing to understand about the build matrix; it is detailed in
+<a href="start/../arch/concurrency.html">Concurrency and interior mutability</a>.</p>
+<div class="table-wrapper"><table><thead><tr><th>Configuration</th><th>How to build</th><th>Cells</th><th>Align scratch</th><th><code>Sync</code>?</th></tr></thead><tbody>
+<tr><td><strong>std</strong> (default)</td><td><code>cargo build</code></td><td><code>ArcSwap&lt;EngineState&gt;</code> (lock-free)</td><td>thread-local</td><td>yes</td></tr>
+<tr><td><strong><code>no_std</code> single-core</strong></td><td><code>--no-default-features</code></td><td><code>RefCell&lt;Arc&lt;…&gt;&gt;</code></td><td>engine-owned</td><td><strong>no</strong> (rejected at compile time)</td></tr>
+<tr><td><strong><code>no_std</code> multi-core</strong></td><td><code>--no-default-features --features mt</code></td><td><code>awkernel_sync::Mutex&lt;Arc&lt;…&gt;&gt;</code></td><td><strong>caller-owned</strong> <code>MatchScratch</code></td><td>yes</td></tr>
+</tbody></table>
+</div>
+<p>Notes:</p>
+<ul>
+<li><code>parallel</code> implies <code>std</code>, so <code>mt</code> + <code>parallel</code> resolves to the <code>std</code> backend (<code>mt</code> is ignored).</li>
+<li>Under <code>mt</code> the implicit-scratch align API (<code>align</code>, <code>result</code>, <code>score_arrays</code>, …) is <strong>compiled
+out</strong>; only the <code>_with</code> methods that take a <code>&amp;mut MatchScratch</code> exist. A cross-call scratch
+dependency therefore cannot even compile.</li>
+<li>The <code>no_std</code> builds are <em>libraries</em> linked into a final binary that supplies the
+<code>#[panic_handler]</code>; building the <code>no_std</code> staticlib standalone will report a missing panic
+handler. The kernel gate used in CI is a targeted <code>cargo rustc --no-default-features --lib --target {x86_64,aarch64}-unknown-none --crate-type rlib</code>.</li>
+</ul>
+<h2 id="source-of-truth"><a class="header" href="#source-of-truth">Source of truth</a></h2>
+<p>The feature definitions and their rationale live in the crate's <code>Cargo.toml</code>; the engine's
+interior-mutability matrix is documented at the top of <code>src/engine.rs</code>; the crate-level overview
+is the <code>//!</code> doc in <code>src/lib.rs</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="using-the-rust-crate"><a class="header" href="#using-the-rust-crate">Using the Rust crate</a></h1>
+<p><code>autoware_ndt_scan_matcher_rs</code> is usable as a plain Rust library, independently of ROS. This
+chapter tours the public API. The examples are the crate's own rustdoc doctests (verified with
+<code>cargo test --doc</code>); browse the full reference with <code>cargo doc --no-deps --open</code>.</p>
+<h2 id="the-nalgebra-re-export"><a class="header" href="#the-nalgebra-re-export">The <code>nalgebra</code> re-export</a></h2>
+<p>Pose guesses and results are <code>nalgebra</code> matrices (<code>Matrix4&lt;f32&gt;</code> for poses, <code>Matrix6&lt;f64&gt;</code> for
+Hessians/covariances). The crate <strong>re-exports the exact <code>nalgebra</code> version it is built against</strong>,
+so construct those matrices through <code>autoware_ndt_scan_matcher_rs::nalgebra</code> rather than pinning
+your own (a different version is a distinct, incompatible type).</p>
+<h2 id="primary-api-ndtengine"><a class="header" href="#primary-api-ndtengine">Primary API: <code>NdtEngine</code></a></h2>
+<p>The persistent engine (<a href="start/../arch/engine.html"><code>engine::NdtEngine</code></a>) is the main entry point. Load a
+target map, build the kd-tree, then align sensor clouds:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use autoware_ndt_scan_matcher_rs::engine::NdtEngine;
+use autoware_ndt_scan_matcher_rs::nalgebra::Matrix4;
+
+// Empty engine: 2.0 m voxels; MultiVoxelGridCovariance defaults (min 6 points / eig 0.01).
+let engine = NdtEngine::new(2.0, 6, 0.01);
+
+// Register a target map tile (id 0) and build the kd-tree over the voxel centroids.
+let target: Vec&lt;[f32; 3]&gt; = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
+engine.add_target(&amp;target, 0);
+engine.create_kdtree();
+assert!(engine.has_target());
+
+// Align a source cloud from an identity initial guess, then read the result back.
+let source = target.clone();
+engine.align(&amp;Matrix4::identity(), &amp;source);
+let result = engine.result();
+assert!(result.iteration_num &gt;= 0);
+<span class="boring">}</span></code></pre></pre>
+<h3 id="scratch-and-the-_with-methods"><a class="header" href="#scratch-and-the-_with-methods">Scratch and the <code>_with</code> methods</a></h3>
+<p>The align scratch (workspace + last result) is a <a href="start/../arch/scratch.html"><code>engine::MatchScratch</code></a>.
+The <code>_with</code> methods take one you own — reuse it across frames to stay allocation-free after
+warmup. These are the <strong>only</strong> align entry points under the <code>mt</code> feature (the implicit-scratch
+variants are compiled out):</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use autoware_ndt_scan_matcher_rs::engine::{MatchScratch, NdtEngine};
+use autoware_ndt_scan_matcher_rs::nalgebra::Matrix4;
+
+let engine = NdtEngine::new(2.0, 6, 0.01);
+let target: Vec&lt;[f32; 3]&gt; = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
+engine.add_target(&amp;target, 0);
+engine.create_kdtree();
+
+let mut scratch = MatchScratch::new();
+engine.align_with(&amp;Matrix4::identity(), &amp;target, &amp;mut scratch);
+assert!(scratch.result().iteration_num &gt;= 0);
+<span class="boring">}</span></code></pre></pre>
+<h2 id="portable-orchestration-scanmatcher"><a class="header" href="#portable-orchestration-scanmatcher">Portable orchestration: <code>ScanMatcher</code></a></h2>
+<p><a href="start/../arch/portability.html"><code>scan_matcher::ScanMatcher</code></a> wraps the engine and drives it over the
+<a href="start/../arch/host-vtable.html">host ports</a> (<code>MapSource</code> / <code>OutputSink</code> / <code>Clock</code>). Map loading is
+<code>async</code>; the match is the synchronous WCET hot path. It runs unchanged under ROS, a kernel, or an
+async runtime — <code>examples/tokio_ndt.rs</code> is the reference host implementation.</p>
+<h2 id="the-lower-level-kernel-ndtalign"><a class="header" href="#the-lower-level-kernel-ndtalign">The lower-level kernel: <code>ndt::align</code></a></h2>
+<p><a href="start/../arch/align.html"><code>ndt::align</code></a> is the RT-critical alignment function the engine drives. Use it
+directly when you hold a <code>VoxelGridMap</code> yourself:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use autoware_ndt_scan_matcher_rs::ndt::{align, AlignResult, AlignWorkspace, NdtParams};
+use autoware_ndt_scan_matcher_rs::voxel_grid::VoxelGridMap;
+use autoware_ndt_scan_matcher_rs::nalgebra::Matrix4;
+
+let mut map = VoxelGridMap::new([2.0; 3], 6, 0.01);
+let target: Vec&lt;[f32; 3]&gt; = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
+map.add_target(&amp;target, 0);
+map.create_kdtree();
+
+let params = NdtParams { resolution: 2.0, ..NdtParams::default() };
+let mut ws = AlignWorkspace::new();
+let mut out = AlignResult::default();
+align(&amp;map, &amp;target, &amp;Matrix4::identity(), &amp;params, &amp;mut ws, &amp;mut out);
+assert!(out.iteration_num &gt;= 0);
+<span class="boring">}</span></code></pre></pre>
+<h2 id="parallelism"><a class="header" href="#parallelism">Parallelism</a></h2>
+<p>Under the <code>parallel</code> feature, set <code>num_threads &gt; 1</code> (in <code>NdtParams</code> / <code>set_params</code>) to use the
+rayon backend. The rayon <em>worker count</em> is the process-global pool size — set it once with
+<code>init_thread_pool(n)</code> or <code>RAYON_NUM_THREADS</code>; see
+<a href="start/features.html#parallelism-and-worker-threads">Feature flags and build configurations</a>.</p>
+<h2 id="other-public-modules"><a class="header" href="#other-public-modules">Other public modules</a></h2>
+<ul>
+<li><a href="start/../arch/tpe.html"><code>tpe::TreeStructuredParzenEstimator</code></a> — the align-service pose-search sampler.</li>
+<li><a href="start/../concepts/scores.html"><code>convergence</code></a>, <code>covariance</code>, <code>cov_estimate</code> — pure decision/estimation
+kernels reused across the ROS and kernel builds.</li>
+<li><code>pose_buffer</code> — a time-ordered pose interpolation buffer.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="running-the-ros-node"><a class="header" href="#running-the-ros-node">Running the ROS node</a></h1>
+<p><code>autoware_ndt_scan_matcher</code> runs as a standard Autoware localization node. This chapter summarizes
+the runtime interface; the package <code>README.md</code> is the authoritative reference for the full
+parameter list.</p>
+<h2 id="topics"><a class="header" href="#topics">Topics</a></h2>
+<p><strong>In:</strong> <code>ekf_pose_with_covariance</code> (initial pose), <code>points_raw</code> (sensor cloud), and — only when
+regularization is enabled — <code>sensing/gnss/pose_with_covariance</code>.</p>
+<p><strong>Out:</strong> <code>ndt_pose</code> and <code>ndt_pose_with_covariance</code> (the estimate), <code>/diagnostics</code>, plus debug topics
+(<code>points_aligned</code>, <code>points_aligned_no_ground</code>, <code>initial_pose_with_covariance</code>, <code>multi_ndt_pose</code>,
+<code>transform_probability</code>, <code>no_ground_transform_probability</code>, <code>exe_time_ms</code>, …).</p>
+<h2 id="services"><a class="header" href="#services">Services</a></h2>
+<ul>
+<li><code>trigger_node</code> (<code>std_srvs/srv/SetBool</code>) — activate/deactivate the matcher.</li>
+<li><code>ndt_align_srv</code> — estimate an initial pose by the align-service search (see
+<a href="start/../arch/tpe.html">The TPE pose search</a>).</li>
+</ul>
+<h2 id="parameters"><a class="header" href="#parameters">Parameters</a></h2>
+<p>Grouped under <code>ros__parameters</code>: <code>frame.*</code> (base/ndt/map frames), <code>sensor_points.*</code> (timeout,
+required distance), <code>ndt.*</code> (<code>trans_epsilon</code>, <code>step_size</code>, <code>resolution</code>, <code>max_iterations</code>,
+<code>num_threads</code>, <code>regularization.*</code>), <code>initial_pose_estimation.*</code>, and <code>score_estimation.*</code>
+(<code>converged_param_type</code> — default <code>1</code> = NVTL — and the two thresholds). See
+<a href="start/../concepts/scores.html">Scores: TP and NVTL</a> for the convergence gate and
+<a href="start/../appendix/parameters.html">Parameter reference</a> for the full table.</p>
+<h2 id="regularization-optional-off-by-default"><a class="header" href="#regularization-optional-off-by-default">Regularization (optional, off by default)</a></h2>
+<p>Adds a longitudinal pull toward a GNSS base position; useful on feature-poor roads where GNSS is
+reliable, and counter-productive in tunnels/indoors. Enable it via the <code>ndt.regularization.*</code>
+parameters and remap the regularization pose topic. See the package <code>README.md</code> "Regularization"
+section.</p>
+<h2 id="choosing-the-backend"><a class="header" href="#choosing-the-backend">Choosing the backend</a></h2>
+<p>The node runs the legacy C++ engine or the Rust port depending on how the package was built
+(<code>-DNDT_USE_RUST=ON</code>); this is a build-time choice, not a runtime parameter. See
+<a href="start/build-and-test.html#selecting-the-backend-c-vs-rust">Build and test</a>.</p>
+<blockquote>
+<p>Source: the package <code>README.md</code>, <code>config/ndt_scan_matcher.param.yaml</code>, <code>launch/</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="system-overview"><a class="header" href="#system-overview">System overview</a></h1>
+<p>The port splits cleanly along one line: <strong>C++ owns the ROS 2 runtime; Rust owns the algorithm.</strong>
+The two meet at a narrow C ABI where C++ calls one Rust <code>on_*</code> function per callback, and Rust
+requests ROS side effects back through a host vtable.</p>
+<h2 id="layers"><a class="header" href="#layers">Layers</a></h2>
+<pre class="mermaid">flowchart TB
+    subgraph shell[&quot;C++ / rclcpp shell (thin)&quot;]
+        direction TB
+        cbs[&quot;callbacks &amp; services\nsensor_points · initial_pose\nregularization · timer · trigger · ndt_align&quot;]
+        ros[&quot;ROS runtime\nNode · pub/sub · services · timers\nTF · map-loader client · diagnostics&quot;]
+        hostimpl[&quot;Host vtable impl\n(aw_publish_pose, aw_lookup_transform, …)&quot;]
+    end
+
+    subgraph ruststd[&quot;Rust std FFI shell — src/node*.rs&quot;]
+        handle[&quot;NdtScanMatcherRs (opaque handle)\nnode state: pose buffers,\nactivation, map-update bookkeeping&quot;]
+    end
+
+    subgraph rustcore[&quot;Rust no_std core&quot;]
+        matcher[&quot;ScanMatcher — src/scan_matcher.rs\ngeneric over Host ports&quot;]
+        engine[&quot;NdtEngine — src/engine.rs\n&amp;self-only · lock-free ArcSwap map&quot;]
+        kernels[&quot;pure kernels\nndt · voxel_grid · convergence\ncovariance · cov_estimate · tpe&quot;]
+        matcher --&gt; engine
+        engine --&gt; kernels
+    end
+
+    cbs -- &quot;on_*(handle, &amp;host, &amp;view)\nC ABI, borrowed views&quot; --&gt; handle
+    handle --&gt; matcher
+    handle -- &quot;side effects via AwHost&quot; --&gt; hostimpl
+    hostimpl --&gt; ros
+</pre>
+<h2 id="the-two-rust-layers"><a class="header" href="#the-two-rust-layers">The two Rust layers</a></h2>
+<p>The Rust side is deliberately <strong>two</strong> layers, because the same core must run under a <code>no_std</code>
+kernel:</p>
+<ol>
+<li><strong>Portable core (<code>no_std</code>)</strong> — <code>ScanMatcher</code> is generic over the <a href="arch/host-vtable.html">host ports</a>
+and wraps the persistent <a href="arch/engine.html"><code>NdtEngine</code></a>. No ROS, no FFI, no <code>std</code>. It reuses the pure
+<code>convergence</code> / <code>covariance</code> / <code>cov_estimate</code> kernels. This is the kernel (Track-B) target.</li>
+<li><strong><code>std</code> FFI shell</strong> — <code>NdtScanMatcherRs</code> is the opaque handle C++ holds. It owns the <em>node-level</em>
+state the algorithm core does not (pose buffers, activation flag, map-update bookkeeping) and
+adapts everything to the C ABI. It lives in the <code>#[cfg(feature = "std")]</code> <code>node</code> /
+<code>node_map_update</code> / <code>node_align_service</code> modules and is never compiled into the <code>no_std</code> rlib.</li>
+</ol>
+<p><code>lib.rs</code> is <code>#![cfg_attr(not(any(test, feature = "std")), no_std)]</code>. New algorithmic code goes in
+the portable core so the kernel build keeps it; only ROS/FFI glue is <code>std</code>-gated.</p>
+<h2 id="the-opaque-handle"><a class="header" href="#the-opaque-handle">The opaque handle</a></h2>
+<p>C++ never knows the layout of <code>NdtScanMatcherRs</code>. It holds an <code>AwNdtScanMatcher *</code> behind a
+C++ RAII wrapper (<code>NDTScanMatcherRS</code>) that calls <code>autoware_ndt_scan_matcher_rs_new</code> /
+<code>_free</code>. The final C++ callback body is just:</p>
+<pre><code class="language-cpp ignore">void NDTScanMatcher::callback_sensor_points(
+  sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
+{
+  AwHost host = make_host();
+  AwPointCloud2View view = make_pointcloud2_view(*msg);
+  autoware_ndt_scan_matcher_rs_on_sensor_points(rs_.raw(), &amp;host, &amp;view);
+}
+</code></pre>
+<p>The next chapters go down each seam: the <a href="arch/ffi-boundary.html">FFI boundary</a>, the
+<a href="arch/engine.html">engine</a>, and the <a href="arch/align.html">align hot path</a>.</p>
+<blockquote>
+<p>Source: <code>src/lib.rs</code>, <code>src/scan_matcher.rs</code>, <code>src/engine.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="the-ffi-boundary"><a class="header" href="#the-ffi-boundary">The FFI boundary</a></h1>
+<p>The C ABI between the C++ shell and the Rust crate is hand-rolled (a <code>cbindgen</code>-generated header
+is the single source of truth) and follows a set of 26 FFI soundness rules. The guiding
+principle: <strong>every value, pointer, and struct crossing the boundary is untrusted until validated
+against its Rust-side binding.</strong></p>
+<h2 id="what-may-cross"><a class="header" href="#what-may-cross">What may cross</a></h2>
+<pre class="mermaid">flowchart LR
+    subgraph cpp[&quot;C++&quot;]
+        msg[&quot;ROS messages\nPointCloud2 · PoseWithCov&quot;]
+        vt[&quot;Host vtable impl&quot;]
+    end
+    subgraph abi[&quot;C ABI (cbindgen header)&quot;]
+        views[&quot;view types\nAwPointCloud2View · AwPose\nAwStr · AwPoint3fSlice&quot;]
+        handle[&quot;opaque handle\nAwNdtScanMatcher*&quot;]
+        host[&quot;AwHost (fn-ptr vtable)&quot;]
+        status[&quot;AwStatus (result code)&quot;]
+    end
+    subgraph rust[&quot;Rust&quot;]
+        ffiptr[&quot;ffi_ptr:: audited derefs\nffi_ref! · ffi_mut! · ffi_slice!&quot;]
+        owned[&quot;Rust-owned copies\n(Vec, nalgebra, …)&quot;]
+    end
+    msg --&gt; views --&gt; ffiptr --&gt; owned
+    vt --&gt; host
+    handle -.opaque.- rust
+    rust --&gt; status --&gt; cpp
+</pre>
+<p><strong>Allowed:</strong> raw pointer + length, fixed-size numeric arrays, <code>i32/u32/i64/u64/f32/f64</code>, explicit
+<code>bool</code>, opaque handles, <code>#[repr(C)]</code> structs, <code>#[repr(C)]</code> enums with explicit integer type.</p>
+<p><strong>Never crosses:</strong> <code>std::string</code>, <code>std::vector</code>, <code>std::shared_ptr</code>, <code>Eigen</code>, PCL, <code>rclcpp</code>/<code>tf2</code>
+types, Rust <code>Vec</code>/<code>String</code>, or any Rust reference with non-FFI-safe layout.</p>
+<h2 id="borrowed-view-types"><a class="header" href="#borrowed-view-types">Borrowed view types</a></h2>
+<p>ROS messages cross as thin <code>#[repr(C)]</code> <strong>views</strong> that borrow C++ memory <em>for the duration of the
+call only</em>:</p>
+<pre><code class="language-rust ignore">#[repr(C)]
+pub struct AwStr { pub ptr: *const u8, pub len: usize }
+
+#[repr(C)]
+pub struct AwPose { pub position_xyz: [f64; 3], pub orientation_xyzw: [f64; 4] }
+
+#[repr(C)]
+pub struct AwPointCloud2View {
+    pub stamp_ns: i64, pub frame_id: AwStr,
+    pub height: u32, pub width: u32, pub point_step: u32, pub row_step: u32,
+    pub data: *const u8, pub data_len: usize,
+    pub x_offset: i32, pub y_offset: i32, pub z_offset: i32,
+    pub is_bigendian: bool,
+}</code></pre>
+<p>Rust reads a view only during the FFI call and <strong>never stores a raw pointer into C++ memory</strong>. If
+it must retain data (e.g. the latest sensor cloud for the align service), it copies into a
+Rust-owned structure first. A <code>PointCloud2</code> view is untrusted: the field datatype and count are
+validated (expect <code>FLOAT32</code> x/y/z) before the bytes are decoded, never blindly reinterpreted.</p>
+<h2 id="audited-pointer-derefs-ffi_ptr"><a class="header" href="#audited-pointer-derefs-ffi_ptr">Audited pointer derefs: <code>ffi_ptr</code></a></h2>
+<p>Every raw-pointer dereference at the boundary goes through one audited module, <code>src/ffi_ptr.rs</code>,
+via guard macros — there are no ad-hoc <code>unsafe { *ptr }</code> sites scattered across the crate:</p>
+<ul>
+<li><code>ffi_ref!(ptr, else …)</code> — borrow <code>&amp;T</code>, running the <code>else</code> arm on null.</li>
+<li><code>ffi_mut!(ptr, else …)</code> — borrow <code>&amp;mut T</code>.</li>
+<li><code>ffi_slice!(ptr, len, T, else …)</code> — borrow <code>&amp;[T]</code> from a pointer + length.</li>
+</ul>
+<p>These are <code>core + alloc</code> only (not <code>std</code>-gated), because many FFI functions exist in the <code>no_std</code>
+build too. Centralizing the derefs is what makes the boundary auditable: the soundness argument
+lives in one file.</p>
+<h2 id="panic-containment"><a class="header" href="#panic-containment">Panic containment</a></h2>
+<p>No Rust panic may unwind into C++ (undefined behavior). Every entry point wraps its body in a
+boundary helper that catches unwinds and maps them to a status or null pointer — see
+<a href="arch/panic-containment.html">Panic containment and status codes</a>.</p>
+<h2 id="the-host-abstraction"><a class="header" href="#the-host-abstraction">The Host abstraction</a></h2>
+<p>Rust never publishes to ROS directly. It requests side effects (publish, TF lookup, map load,
+log) through the <code>AwHost</code> vtable of C function pointers that C++ implements. Crucially, the host
+abstraction is a <strong>portable Rust trait</strong> (<a href="arch/host-vtable.html"><code>host::Host</code></a>); the C vtable is just
+one adapter of it — see <a href="arch/host-vtable.html">The Host abstraction and C vtables</a>.</p>
+<h2 id="sub-chapters"><a class="header" href="#sub-chapters">Sub-chapters</a></h2>
+<ul>
+<li><a href="arch/ffi-types.html">C ABI types and view types</a></li>
+<li><a href="arch/ffi-ptr.html">ffi_ptr helpers and guard macros</a></li>
+<li><a href="arch/panic-containment.html">Panic containment and status codes</a></li>
+<li><a href="arch/host-vtable.html">The Host abstraction and C vtables</a></li>
+</ul>
+<blockquote>
+<p>Source: <code>src/ffi_ptr.rs</code>, <code>src/ffi.rs</code>, <code>src/ffi_host.rs</code>, <code>src/sensor_points.rs</code>, the generated
+cbindgen header.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="c-abi-types-and-view-types"><a class="header" href="#c-abi-types-and-view-types">C ABI types and view types</a></h1>
+<p>The concrete <code>#[repr(C)]</code> vocabulary that crosses the boundary. The cbindgen-generated header
+(<code>autoware_ndt_scan_matcher_rs.h</code>) is the single source of truth — the C++ side is never hand-synced
+against the Rust definitions.</p>
+<h2 id="what-may-cross-1"><a class="header" href="#what-may-cross-1">What may cross</a></h2>
+<p>Scalars (<code>i32</code>/<code>u32</code>/<code>i64</code>/<code>u64</code>/<code>f32</code>/<code>f64</code>), explicit <code>bool</code>, fixed-size numeric arrays (e.g.
+<code>[f64; 36]</code> for a row-major 6×6), raw pointer + length, opaque handles, and <code>#[repr(C)]</code> structs /
+enums with explicit integer representation. Nothing else — no STL, Eigen, PCL, <code>rclcpp</code>/<code>tf2</code>, Rust
+<code>Vec</code>/<code>String</code>, or non-FFI-safe references.</p>
+<h2 id="result-codes"><a class="header" href="#result-codes">Result codes</a></h2>
+<p><code>AwStatus</code> is the C-ABI result enum returned by the fallible entry points (see
+<a href="arch/panic-containment.html">Panic containment</a>); align-service and search entry points use their own
+<code>NDT_ALIGN_SERVICE_STATUS_*</code> / status integers.</p>
+<h2 id="borrowed-view-types-1"><a class="header" href="#borrowed-view-types-1">Borrowed view types</a></h2>
+<p>ROS messages cross as thin borrowed views, read <strong>only during the call</strong>:</p>
+<pre><code class="language-rust ignore">#[repr(C)] pub struct AwStr { ptr: *const u8, len: usize }        // UTF-8 bytes, not owned
+#[repr(C)] pub struct AwPose { position: [f64; 3], orientation: [f64; 4] }  // xyz + quat xyzw
+#[repr(C)] pub struct AwPointCloud2View { /* stamp, frame_id, strides, data ptr+len, x/y/z offsets */ }</code></pre>
+<p>A <code>PointCloud2</code> view is untrusted: its field datatype and count are validated (expect <code>FLOAT32</code>
+x/y/z) <em>before</em> the bytes are decoded — never reinterpreted blindly. Any data Rust must retain is
+copied into a Rust-owned structure first (<a href="arch/ffi-ptr.html"><code>ffi_ptr</code></a> does the audited reads).</p>
+<h2 id="parameters-1"><a class="header" href="#parameters-1">Parameters</a></h2>
+<p><code>AwNdtParams</code> crosses as a C-ABI struct of scalars plus <code>(ptr, len)</code> "offset model" arrays (the
+covariance search offsets), all <strong>copied</strong> into a Rust-owned <code>Params</code> at handle construction so no
+borrowed pointer is retained.</p>
+<blockquote>
+<p>Source: <code>src/sensor_points.rs</code> (<code>AwPointCloud2View</code>), <code>src/ffi_host.rs</code> (<code>AwStr</code>, <code>AwPose</code>),
+<code>src/node_handle.rs</code> (<code>AwNdtParams</code>), <code>build.rs</code> (cbindgen).</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="ffi_ptr-helpers-and-guard-macros"><a class="header" href="#ffi_ptr-helpers-and-guard-macros">ffi_ptr helpers and guard macros</a></h1>
+<p>Every raw-pointer dereference at the boundary goes through one audited module, <code>src/ffi_ptr.rs</code>.
+There are no ad-hoc <code>unsafe { *ptr }</code> sites elsewhere in the crate — so the soundness argument for
+foreign pointers lives in exactly one file.</p>
+<h2 id="guard-macros"><a class="header" href="#guard-macros">Guard macros</a></h2>
+<p>The macros borrow a foreign pointer and run an <code>else</code> arm on null (no panic), so callers write a
+total function:</p>
+<pre><code class="language-rust ignore">let input = ffi_ref!(input_ptr, else return AwStatus::NullPtr);      // &amp;T   (null -&gt; else)
+let out   = ffi_mut!(out_ptr,   else return AwStatus::NullPtr);      // &amp;mut T
+let src   = ffi_slice!(ptr, len, [f32; 3], else return STATUS_ERR);  // &amp;[T] from ptr + len
+let buf   = ffi_mut_slice!(ptr, len, else return STATUS_ERR);        // &amp;mut [T]
+let val   = ffi_read!(ptr, else return);                             // read a Copy value out</code></pre>
+<p>Under the hood they wrap the documented helpers <code>as_ref</code> / <code>as_mut</code> (thin, audited wrappers over
+<code>&lt;*const T&gt;::as_ref</code> / <code>as_mut</code>, which already null-check), plus <code>write_out</code> (write a value through
+an <code>*mut T</code>, no-op on null) and <code>into_handle</code> (box a value into an owned <code>*mut T</code>).</p>
+<h2 id="why-centralize"><a class="header" href="#why-centralize">Why centralize</a></h2>
+<p>Each macro carries the module's "master contract" (non-null-or-handled, aligned, initialized, valid
+for the borrow's lifetime, unique for <code>_mut</code>). Concentrating the derefs means a reviewer audits one
+module against the <a href="arch/ffi-boundary.html">26 FFI soundness rules</a> instead of every call site. The module
+is <code>core + alloc</code> only (not <code>std</code>-gated), because FFI functions exist in the <code>no_std</code> build too.</p>
+<blockquote>
+<p>Source: <code>src/ffi_ptr.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="panic-containment-and-status-codes"><a class="header" href="#panic-containment-and-status-codes">Panic containment and status codes</a></h1>
+<p>A Rust panic unwinding into C++ is undefined behavior, so every fallible FFI entry point contains
+unwinds at the boundary and reports a status instead. This lives in <code>src/ffi.rs</code> (std-only —
+<code>catch_unwind</code> needs <code>std</code>, and these wrap the ROS-node C ABI; the <code>no_std</code> kernel path does not
+cross this seam).</p>
+<h2 id="the-boundary-helpers"><a class="header" href="#the-boundary-helpers">The boundary helpers</a></h2>
+<pre><code class="language-rust ignore">pub fn ffi_boundary&lt;F: FnOnce() -&gt; Result&lt;(), Error&gt;&gt;(f: F) -&gt; AwStatus {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(Ok(()))  =&gt; AwStatus::Ok,
+        Ok(Err(e))  =&gt; e.into_status(),   // Error::NullPtr -&gt; AwStatus::NullPtr, ...
+        Err(_)      =&gt; AwStatus::Panic,   // a caught unwind, contained
+    }
+}
+pub fn ffi_boundary_ptr&lt;T, F&gt;(f: F) -&gt; *mut T   // same, but Ok -&gt; ptr, Err/panic -&gt; null</code></pre>
+<p><code>AssertUnwindSafe</code> is sound here: on an unwind the helper returns <code>AwStatus::Panic</code> (or null) and
+touches no shared state afterward. <code>Error</code> is the internal error enum (<code>NullPtr</code>, <code>InvalidParam</code>, …)
+mapped to <code>AwStatus</code> by <code>into_status</code>.</p>
+<h2 id="the-contract"><a class="header" href="#the-contract">The contract</a></h2>
+<p>An FFI function's body is a closure returning <code>Result&lt;(), Error&gt;</code>; validation failures become an
+error status, a bug that panics becomes <code>AwStatus::Panic</code>, and success is <code>AwStatus::Ok</code>. The C++
+side logs any non-OK status. No panic ever crosses into C++.</p>
+<blockquote>
+<p>Source: <code>src/ffi.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="the-host-abstraction-and-c-vtables"><a class="header" href="#the-host-abstraction-and-c-vtables">The Host abstraction and C vtables</a></h1>
+<p>The host abstraction — how Rust reaches ROS side effects — is a <strong>portable Rust trait</strong>. The C
+vtable is just one adapter of it, so the same core runs under ROS, a kernel, or an async runtime.</p>
+<h2 id="the-rust-ports-srchostrs"><a class="header" href="#the-rust-ports-srchostrs">The Rust ports (<code>src/host.rs</code>)</a></h2>
+<pre><code class="language-rust ignore">pub trait MapSource { fn load(&amp;self, center: [f64; 2], radius: f64) -&gt; impl Future&lt;Output = MapDelta&gt;; }
+pub trait OutputSink { fn publish_result(&amp;self, result: &amp;MatchResult); }
+pub trait Clock      { fn now_ns(&amp;self) -&gt; i64; }
+pub trait Host: MapSource + OutputSink + Clock {}   // blanket-impl'd</code></pre>
+<p>Portable node logic takes <code>host: &amp;H</code> with <code>H: Host</code> and never names ROS. <strong>Map loading is <code>async</code></strong>
+(a ROS service future, a kernel DMA read); the engine <strong>align hot path stays synchronous</strong> and runs
+between awaits — so a single-threaded executor can't deadlock on a blocking map call.</p>
+<h2 id="adapters"><a class="header" href="#adapters">Adapters</a></h2>
+<ul>
+<li><strong>ROS</strong> — a Rust <code>FfiHost</code> implements <code>Host</code> on top of the C vtable below.</li>
+<li><strong>Tokio</strong> — <code>examples/tokio_ndt.rs</code>, the async reference over synthetic data.</li>
+<li><strong>Kernel</strong> (future) — its own async runtime + flash/DMA map source.</li>
+</ul>
+<h2 id="the-c-vtable-srcffi_hostrs"><a class="header" href="#the-c-vtable-srcffi_hostrs">The C vtable (<code>src/ffi_host.rs</code>)</a></h2>
+<p><code>AwHost</code> is a <code>#[repr(C)]</code> struct of C function pointers over an opaque <code>ctx</code> (the <code>NDTScanMatcher*</code>).
+Rust never publishes directly; it requests side effects through the vtable:</p>
+<pre><code class="language-rust ignore">#[repr(C)] pub struct AwHost {
+    ctx: *mut c_void,
+    now_ns: extern "C" fn(*mut c_void) -&gt; i64,
+    log: extern "C" fn(*mut c_void, level: i32, msg: *const u8, msg_len: usize),
+    lookup_transform: extern "C" fn(*mut c_void, target: AwStr, source: AwStr,
+                                    out_matrix4x4_row_major: *mut f32) -&gt; bool,
+    publish_pose:       extern "C" fn(/* topic, stamp, *AwPose, *cov6x6 (null =&gt; PoseStamped) */),
+    publish_pose_array: extern "C" fn(/* topic, stamp, *AwPose, n */),
+    publish_marker:     extern "C" fn(/* iteration-trajectory MarkerArray */),
+    // … pointcloud / float / int / tf publishers …
+}</code></pre>
+<p>Each callback is POD-in; the C++ trampoline builds the ROS message, knows the static frame ids, and
+is <code>catch(...)</code>-guarded so a publish exception never unwinds across the boundary. Keep the vtable to
+<strong>ROS side effects only</strong> — clock, TF, publish, log, map-load — never algorithm state (that is
+Rust-owned; see <a href="arch/../concepts/scope.html">Scope</a>).</p>
+<blockquote>
+<p>Source: <code>src/host.rs</code>, <code>src/ffi_host.rs</code>, <code>src/node_map_update.rs</code>, <code>examples/tokio_ndt.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="the-ndt-engine"><a class="header" href="#the-ndt-engine">The NDT engine</a></h1>
+<p><code>NdtEngine</code> (<code>src/engine.rs</code>) is the persistent handle that wraps the target map + params over a
+stable interface. C++ drives incremental map updates, alignment, and scoring through it. The
+defining design choices are <strong><code>&amp;self</code>-only methods</strong> and <strong>interior mutability</strong>, chosen so a
+shared <code>&amp;NdtEngine</code> is sound across concurrent ROS callbacks <em>without an external mutex</em>.</p>
+<h2 id="state"><a class="header" href="#state">State</a></h2>
+<p>The engine holds its mutable state behind interior-mutability cells:</p>
+<ul>
+<li><strong><code>EngineState</code></strong> — the target <code>VoxelGridMap</code>, the <code>NdtParams</code>, the convergence params, the
+covariance config, and the cell-id → tile-id mapping.</li>
+<li><strong>regularization</strong> — a tiny separate cell, so setting it per frame never clones the map.</li>
+<li><strong>align scratch</strong> — the reused workspace + last result (see <a href="arch/scratch.html">MatchScratch</a>).</li>
+</ul>
+<p>The config API is a set of <code>&amp;self</code> setters that publish new state: <code>set_params</code>,
+<code>set_convergence_params</code>, <code>set_covariance_config</code>, <code>set_regularization</code>. Map lifecycle:
+<code>add_target</code> / <code>add_target_bytes</code>, <code>remove_target*</code>, <code>create_kdtree</code>, and <code>commit_from</code> (the
+atomic map-update commit). See <a href="arch/engine-state.html">Engine state and the config API</a>.</p>
+<h2 id="concurrency-three-configurations"><a class="header" href="#concurrency-three-configurations">Concurrency: three configurations</a></h2>
+<p>The interior-mutability cell is chosen at compile time. This is the crate's central concurrency
+decision; the full treatment is in <a href="arch/concurrency.html">Concurrency and interior mutability</a>.</p>
+<div class="table-wrapper"><table><thead><tr><th>Build</th><th>Cell</th><th>Read/align path</th><th>Scratch</th><th><code>Sync</code></th></tr></thead><tbody>
+<tr><td><strong>std</strong> (default)</td><td><code>ArcSwap&lt;EngineState&gt;</code></td><td><code>load</code> an immutable snapshot <strong>lock-free</strong></td><td>thread-local</td><td>yes</td></tr>
+<tr><td><strong><code>no_std</code> single-core</strong></td><td><code>RefCell&lt;Arc&lt;…&gt;&gt;</code></td><td>borrow</td><td>engine-owned</td><td><strong>no</strong></td></tr>
+<tr><td><strong><code>no_std</code> <code>mt</code></strong></td><td><code>awkernel_sync::Mutex&lt;Arc&lt;…&gt;&gt;</code></td><td>short critical section (refcount bump)</td><td><strong>caller-owned</strong></td><td>yes</td></tr>
+</tbody></table>
+</div>
+<p>Key properties in the concurrent configs (std, <code>mt</code>):</p>
+<ul>
+<li><strong>No lock is held across an alignment.</strong> The align path loads an <code>Arc</code> snapshot and works on
+it; a concurrent map update publishes a <em>new</em> state, and the old snapshot lives until its last
+reader drops it.</li>
+<li><strong>Map updates never mutate in place.</strong> <code>apply_map_update</code> builds the new map on a <strong>private
+staging engine</strong>, then <code>commit_from</code> swaps it in with a single atomic store — a lock-free
+double-buffer. A concurrent align therefore never observes a partial or kd-tree-less map.</li>
+<li>A compile-time <code>assert_send_sync::&lt;NdtEngine&gt;()</code> proves <code>Sync</code> in the std/<code>mt</code> configs; the
+single-core <code>no_std</code> engine is intentionally <code>!Sync</code>, so the compiler rejects sharing it.</li>
+</ul>
+<p>This replaces the C++ giant <code>ndt_ptr_</code> mutex on the hot path.</p>
+<h2 id="what-the-engine-is-not"><a class="header" href="#what-the-engine-is-not">What the engine is <em>not</em></a></h2>
+<p>The engine is the read/update data structure, not the control loop. The WCET-bounded computation
+is the free function <a href="arch/align.html"><code>ndt::align</code></a>; node-level state (pose buffers, activation) lives
+in the <a href="arch/overview.html"><code>NdtScanMatcherRs</code> shell</a>, not here.</p>
+<h2 id="sub-chapters-1"><a class="header" href="#sub-chapters-1">Sub-chapters</a></h2>
+<ul>
+<li><a href="arch/engine-state.html">Engine state and the config API</a></li>
+<li><a href="arch/concurrency.html">Concurrency and interior mutability</a></li>
+<li><a href="arch/scratch.html">MatchScratch and the align entry points</a></li>
+</ul>
+<blockquote>
+<p>Source: the module doc at the top of <code>src/engine.rs</code>; <code>tests/concurrency.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="engine-state-and-the-config-api"><a class="header" href="#engine-state-and-the-config-api">Engine state and the config API</a></h1>
+<p>The engine's data lives in <code>EngineState</code>, published through interior-mutability cells (see
+<a href="arch/concurrency.html">Concurrency</a>). This chapter covers its fields and the <code>&amp;self</code> API that mutates them.</p>
+<h2 id="enginestate"><a class="header" href="#enginestate"><code>EngineState</code></a></h2>
+<ul>
+<li><code>map</code> — the target <a href="arch/voxel-grid.html"><code>VoxelGridMap</code></a>.</li>
+<li><code>params</code> — the <code>NdtParams</code> (resolution, epsilon, step size, iteration cap, outlier ratio,
+<code>num_threads</code>).</li>
+<li><code>conv</code> — the <code>ConvergenceParams</code> (<code>converged_param_type</code> + the two thresholds).</li>
+<li><code>cov_config</code> — the <code>CovarianceConfig</code> (estimation mode, scale, temperature, configured 6×6, XY
+search offsets).</li>
+<li><code>id_map</code> / <code>next_id</code> — the cell-id (raw bytes) → tile-<code>u64</code> mapping the engine owns for
+string-keyed tiles.</li>
+</ul>
+<p>Regularization is <strong>not</strong> part of <code>EngineState</code>; it lives in its own tiny cell so setting it per
+frame never clones the map.</p>
+<h2 id="config-setters-self"><a class="header" href="#config-setters-self">Config setters (<code>&amp;self</code>)</a></h2>
+<p><code>set_params</code>, <code>set_convergence_params</code>, <code>set_covariance_config</code>, and <code>set_regularization</code> publish new
+state. Each is a read-copy-update: clone the current state, mutate the field, publish (see
+<a href="arch/concurrency.html">Concurrency</a>). <code>set_params</code> also rebuilds the (still-empty) map at the new
+resolution, mirroring the C++ order (params before <code>addTarget</code>).</p>
+<h2 id="map-lifecycle"><a class="header" href="#map-lifecycle">Map lifecycle</a></h2>
+<ul>
+<li><code>add_target(points, id)</code> / <code>add_target_bytes(points, cell_id)</code> — register a tile (byte-id variants
+assign a fresh <code>u64</code> on first use); <code>remove_target*</code> drop one.</li>
+<li><code>create_kdtree()</code> — rebuild the kd-tree over voxel centroids after tile changes.</li>
+<li><code>has_target()</code> — whether any tile is loaded.</li>
+<li><code>commit_from(&amp;src)</code> — atomically publish another engine's fully-built state (the map-update commit;
+see <a href="arch/map-update.html">Map update</a>).</li>
+<li><code>clone_empty()</code> — copy the config but start with an empty map (the rebuild path).</li>
+</ul>
+<blockquote>
+<p>Source: <code>src/engine.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="concurrency-and-interior-mutability"><a class="header" href="#concurrency-and-interior-mutability">Concurrency and interior mutability</a></h1>
+<p>The engine is <code>&amp;self</code>-only so a shared <code>&amp;NdtEngine</code> is sound across concurrent ROS callbacks
+<em>without</em> an external mutex. Its mutable state sits behind an interior-mutability cell whose backend
+is chosen at compile time — the crate's central concurrency decision.</p>
+<h2 id="the-swapt-cell"><a class="header" href="#the-swapt-cell">The <code>Swap&lt;T&gt;</code> cell</a></h2>
+<p>A <code>Swap&lt;T&gt;</code> alias abstracts the backend, with uniform <code>swap_new</code> / <code>swap_load</code> / <code>swap_store</code> /
+<code>swap_rcu</code> free functions:</p>
+<div class="table-wrapper"><table><thead><tr><th>Build</th><th><code>Swap&lt;T&gt;</code> backend</th><th>read/align path</th></tr></thead><tbody>
+<tr><td><strong>std</strong> (default)</td><td><code>arc_swap::ArcSwap&lt;T&gt;</code></td><td><code>load_full()</code> — an owned <code>Arc&lt;T&gt;</code> snapshot, <strong>lock-free</strong></td></tr>
+<tr><td><strong><code>no_std</code> single-core</strong></td><td><code>RefCell&lt;Arc&lt;T&gt;&gt;</code></td><td><code>borrow().clone()</code></td></tr>
+<tr><td><strong><code>no_std</code> <code>mt</code></strong></td><td><code>awkernel_sync::Mutex&lt;Arc&lt;T&gt;&gt;</code></td><td>short critical section: one <code>Arc</code> refcount bump</td></tr>
+</tbody></table>
+</div>
+<p><code>swap_load</code> returns an owned <code>Arc&lt;T&gt;</code> so a reader holds a stable snapshot while a concurrent
+<code>store</code>/<code>rcu</code> publishes a new version; the old <code>Arc</code> lives until its last reader drops it.</p>
+<h2 id="read-copy-update-and-the-mt-retry"><a class="header" href="#read-copy-update-and-the-mt-retry">Read-copy-update and the <code>mt</code> retry</a></h2>
+<p>Config/map changes go through <code>swap_rcu</code>: build the next value from the current one, publish
+atomically. Under <code>mt</code> the closure runs <strong>outside</strong> the lock (it may deep-clone a whole map — which
+must never happen with interrupts disabled) and publishes with an optimistic <code>Arc::ptr_eq</code> retry;
+old snapshots drop outside the lock too. Writers (params setup, map commit) are rare, so it converges
+immediately in practice.</p>
+<h2 id="load-free-hot-path--lock-free-map-update"><a class="header" href="#load-free-hot-path--lock-free-map-update">Load-free hot path + lock-free map update</a></h2>
+<ul>
+<li><strong>No lock is held across an alignment.</strong> The align path <code>load</code>s a snapshot and works on it.</li>
+<li><strong>Map updates never mutate in place.</strong> <a href="arch/map-update.html"><code>apply_map_update</code></a> builds the new map on a
+private staging engine, then <code>commit_from</code> swaps it in with one atomic store — a concurrent align
+never sees a partial or kd-tree-less map.</li>
+</ul>
+<h2 id="sendsync"><a class="header" href="#sendsync">Send/Sync</a></h2>
+<p>A compile-time <code>const _: () = assert_send_sync::&lt;NdtEngine&gt;()</code> proves the engine is <code>Sync</code> in the
+std and <code>mt</code> configs. The single-core <code>no_std</code> engine is intentionally <code>!Sync</code> (<code>RefCell</code>), so the
+compiler rejects sharing it. Per-align scratch placement follows the config —
+<a href="arch/scratch.html">MatchScratch</a>.</p>
+<blockquote>
+<p>Source: the module doc + <code>Swap</code> / <code>swap_*</code> helpers in <code>src/engine.rs</code>; <code>tests/concurrency.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="matchscratch-and-the-align-entry-points"><a class="header" href="#matchscratch-and-the-align-entry-points">MatchScratch and the align entry points</a></h1>
+<p><code>MatchScratch</code> is the per-align scratch — a reused <code>AlignWorkspace</code> plus the last <code>AlignResult</code>. It is
+never shared mutable state across threads; reusing it across frames keeps the align allocation-free
+after warmup (<a href="arch/../rt/zero-alloc.html">Zero-allocation guarantees</a>). It exposes <code>result()</code> (an owned
+copy of the last result) and <code>score_arrays()</code> (the per-iteration TP/NVTL traces).</p>
+<h2 id="two-families-of-align-methods"><a class="header" href="#two-families-of-align-methods">Two families of align methods</a></h2>
+<ul>
+<li><strong>Implicit-scratch API</strong> — <code>align</code>, <code>align_outcome</code>, <code>result</code>, <code>score_arrays</code>, the score helpers.
+These use an implicit scratch and exist only in the std and single-core <code>no_std</code> builds. Under std
+the scratch is a <strong>thread-local</strong> (<code>SCRATCH</code>, at most one align per thread → exclusive without a
+lock); under single-core <code>no_std</code> it is owned by the engine.</li>
+<li><strong>Explicit <code>_with</code> API</strong> — <code>align_with</code>, <code>align_outcome_with</code>, <code>estimate_covariance</code>, the
+<code>*_with</code> scorers. The caller passes a <code>&amp;mut MatchScratch</code>. This is the <strong>universal</strong> path and the
+<strong>only</strong> one under the <code>mt</code> feature.</li>
+</ul>
+<h2 id="why-the-implicit-api-is-compiled-out-under-mt"><a class="header" href="#why-the-implicit-api-is-compiled-out-under-mt">Why the implicit API is compiled out under <code>mt</code></a></h2>
+<p>A thread-local (std) or engine-owned (single-core) scratch can't be shared safely across the many
+tasks of a multi-core kernel. Under <code>mt</code> each task/thread owns its own <code>MatchScratch</code> and passes it
+in explicitly; the implicit variants are <code>#[cfg]</code>-compiled out, so a cross-call scratch dependency
+cannot even compile. Reuse one scratch per task/thread across frames; never share it.</p>
+<blockquote>
+<p>Source: <code>src/engine.rs</code> (<code>MatchScratch</code>, <code>align*</code>, the <code>SCRATCH</code> thread-local).</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="the-align-hot-path"><a class="header" href="#the-align-hot-path">The align hot path</a></h1>
+<p><code>ndt::align</code> (<code>src/ndt.rs</code>) is the RT-critical alignment kernel — the Rust equivalent of the
+C++ <code>align</code> / <code>computeTransformation</code> on the default path (<code>use_line_search = false</code>,
+<code>computeStepLengthMT</code>). It is the one function whose worst-case execution time is contracted; see
+<a href="arch/../rt/wcet.html">The WCET contract</a>.</p>
+<h2 id="signature"><a class="header" href="#signature">Signature</a></h2>
+<pre><code class="language-rust ignore">pub fn align(
+    map: &amp;VoxelGridMap,      // target map with kd-tree built
+    source: &amp;[[f32; 3]],     // sensor cloud, base_link frame
+    guess: &amp;Matrix4&lt;f32&gt;,    // initial pose (C++ Matrix4f guess)
+    params: &amp;NdtParams,
+    ws: &amp;mut AlignWorkspace, // reused buffers
+    out: &amp;mut AlignResult,   // result slot; Vec fields reused
+)</code></pre>
+<h2 id="the-iteration"><a class="header" href="#the-iteration">The iteration</a></h2>
+<p>Each of at most <code>params.max_iterations</code> iterations does:</p>
+<ol>
+<li><strong>Transform</strong> the source cloud by the current pose estimate <code>p</code> (an f32 <code>Matrix4f</code> transform,
+<code>O(P)</code> for <code>P</code> source points — mirroring the C++ pipeline exactly).</li>
+<li><strong>Compute derivatives</strong> — score, 6-vector gradient, and 6×6 Hessian — by, for each transformed
+point, a voxel-grid <code>radius_search</code> (<code>≤ MAX_NEIGHBORS</code> neighbours) and accumulating each
+neighbour's Gaussian contribution. This is <code>O(P · K)</code>, the dominant cost.</li>
+<li><strong>Solve</strong> <code>H · Δ = −gradient</code> via a fixed-size 6×6 SVD (mirroring the C++
+<code>JacobiSVD(ComputeFullU|ComputeFullV)</code>), and step the pose.</li>
+</ol>
+<p>The loop stops on the translation-epsilon convergence test or the iteration cap. The result
+carries the final pose, TP/NVTL scores, iteration count, Hessian, and the per-iteration score
+traces (<a href="arch/../concepts/scores.html">TP and NVTL</a>).</p>
+<h2 id="serial-and-parallel-are-bit-identical"><a class="header" href="#serial-and-parallel-are-bit-identical">Serial and parallel are bit-identical</a></h2>
+<p><code>params.num_threads &gt; 1</code> selects the rayon backend (built under the <code>parallel</code> feature) for the
+derivative reduction. Contributions are per-point-local and reduced in <strong>point-index order</strong>
+(<code>collect_into_vec</code>), so the parallel result is <strong>bit-for-bit identical</strong> to the serial one. The
+parallel backend is therefore a pure throughput option; the serial backend stays the predictable
+WCET baseline. The reduction runs on rayon's process-global pool, whose worker count is sized
+separately (the <code>num_threads</code> param via the node handle, <code>init_thread_pool</code>, or <code>RAYON_NUM_THREADS</code>)
+— see <a href="arch/../start/features.html#parallelism-and-worker-threads">Feature flags and build configurations</a>.
+See <a href="arch/derivatives.html">Serial and parallel derivatives</a>.</p>
+<h2 id="allocation-and-panics"><a class="header" href="#allocation-and-panics">Allocation and panics</a></h2>
+<p>After warmup the align frame does <strong>zero allocation</strong>: the result <code>Vec</code>s, <code>trans_cloud</code>, and the
+<code>neighbor_idx</code> buffer (bounded by <code>MAX_NEIGHBORS</code>) are pre-reserved and reused, and the 6×6 SVD is
+stack-only. It also cannot panic — the crate denies <code>unwrap</code>/<code>expect</code>/<code>panic</code>/<code>indexing_slicing</code>
+in non-test code. Both properties are load-bearing for the real-time story and are tested
+(<code>tests/zero_alloc.rs</code>) and audited by a real-time review of each engine/align patch.</p>
+<h2 id="the-map-is-read-only-here"><a class="header" href="#the-map-is-read-only-here">The map is read-only here</a></h2>
+<p><code>align</code> borrows the map immutably. Map building/update is the control plane
+(<a href="arch/map-update.html">map update</a>), which happens on a staging engine and is committed atomically, so
+the align path never contends with it.</p>
+<h2 id="sub-chapters-2"><a class="header" href="#sub-chapters-2">Sub-chapters</a></h2>
+<ul>
+<li><a href="arch/voxel-grid.html">Voxel grid and kd-tree</a></li>
+<li><a href="arch/derivatives.html">Serial and parallel derivatives</a></li>
+</ul>
+<blockquote>
+<p>Source: the <code>align</code> doc + WCET contract in <code>src/ndt.rs</code> (≈ lines 317, 617); <code>src/derivatives.rs</code>;
+<code>src/voxel_grid.rs</code>; <code>tests/zero_alloc.rs</code>; <code>examples/wcet_frame.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="voxel-grid-and-kd-tree"><a class="header" href="#voxel-grid-and-kd-tree">Voxel grid and kd-tree</a></h1>
+<p>The target-map data structure the align path queries. It ports the C++ <code>MultiVoxelGridCovariance</code>.</p>
+<h2 id="structures"><a class="header" href="#structures">Structures</a></h2>
+<ul>
+<li><strong><code>Leaf</code></strong> — one occupied voxel: its centroid and inverse covariance (the Gaussian the score
+evaluates against).</li>
+<li><strong><code>VoxelGrid</code></strong> — one map tile's voxels, built from a point cloud.</li>
+<li><strong><code>VoxelGridMap</code></strong> — the multi-tile map (a <code>BTreeMap&lt;u64, VoxelGrid&gt;</code>), plus a flat leaf list and a
+kd-tree over centroids for neighbor queries.</li>
+</ul>
+<h2 id="building-a-grid"><a class="header" href="#building-a-grid">Building a grid</a></h2>
+<p><code>VoxelGridMap::new([leaf_size; 3], min_points, eig_mult)</code> sets the voxel size and conditioning knobs.
+<code>add_target(points, id)</code> buckets <code>points</code> into voxels; a voxel with at least <code>min_points</code> points
+becomes a <code>Leaf</code> with a mean + covariance, and the covariance's smallest eigenvalues are inflated by
+<code>eig_mult</code> so thin/planar cells stay invertible (the pcl default 6 / 0.01). Adding or removing a tile
+invalidates the kd-tree.</p>
+<h2 id="the-kd-tree"><a class="header" href="#the-kd-tree">The kd-tree</a></h2>
+<p><code>create_kdtree()</code> flattens all tiles' leaves in id order (matching the C++ <code>std::map</code> order) and
+builds a 3-D kd-tree over the centroids. <code>radius_search(point, radius, max_nn, out)</code> returns the flat
+leaf indices whose centroid is within <code>radius</code>, up to <code>max_nn</code>; <code>leaf(idx)</code> fetches a leaf by that
+flat index. The tree splits on <code>axis = depth % 3</code>.</p>
+<h2 id="cost-and-the-wcet-residual"><a class="header" href="#cost-and-the-wcet-residual">Cost and the WCET residual</a></h2>
+<p>Each align iteration does one <code>radius_search</code> per source point, capped at <code>MAX_NEIGHBORS</code>. The
+kd-tree traversal is worst-case <code>O(N_leaves)</code> for adversarial point distributions — an <strong>accepted
+residual</strong> for the <a href="arch/../rt/wcet.html">WCET contract</a>, benign for physical, roughly-uniform voxel maps.</p>
+<blockquote>
+<p>Source: <code>src/voxel_grid.rs</code>, <code>src/kdtree.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="serial-and-parallel-derivatives"><a class="header" href="#serial-and-parallel-derivatives">Serial and parallel derivatives</a></h1>
+<p>How the NDT score, gradient, and 6×6 Hessian are accumulated for a candidate pose, and why the
+parallel backend is bit-identical to the serial one.</p>
+<h2 id="angle-derivatives-and-per-point-kernels"><a class="header" href="#angle-derivatives-and-per-point-kernels">Angle derivatives and per-point kernels</a></h2>
+<p>Once per pose, <code>compute_angle_derivatives</code> precomputes the angular Jacobian (<code>j_ang</code>, 8×4) and
+Hessian (<code>h_ang</code>, 16×4) tables — the derivatives of the rotation w.r.t. <code>[roll, pitch, yaw]</code>. For
+each transformed source point, <code>point_contribution</code> finds its voxel neighbors (radius search) and
+accumulates that point's score, gradient, and point-Hessian contribution; <code>finalize</code> folds in the
+optional <a href="arch/../concepts/ndt-primer.html">regularization</a> term and assembles the <code>Derivatives</code>.</p>
+<h2 id="serial-vs-parallel"><a class="header" href="#serial-vs-parallel">Serial vs parallel</a></h2>
+<p><code>compute_derivatives</code> is the serial backend (one reused neighbor buffer). <code>compute_derivatives_parallel</code>
+(under the <code>parallel</code> feature) runs the per-point work on rayon's process-global pool via
+<code>par_iter().zip(...).map_init(...).collect_into_vec(&amp;mut ws.contribs)</code>, giving each worker its own
+reusable neighbor buffer. <code>align</code> selects it when <code>params.num_threads &gt; 1</code>.</p>
+<h2 id="bit-for-bit-identical"><a class="header" href="#bit-for-bit-identical">Bit-for-bit identical</a></h2>
+<p><code>collect_into_vec</code> preserves point-index order, so the parallel contributions are folded in the
+<strong>same order</strong> as serial → the two agree <strong>bit-for-bit</strong> (pinned by tests). Parallelism is therefore
+a pure throughput option, never a numeric change; the serial backend stays the predictable WCET
+baseline. The worker count is sized separately (see
+<a href="arch/../start/features.html#parallelism-and-worker-threads">Parallelism and worker threads</a>).</p>
+<h2 id="exact-hessian"><a class="header" href="#exact-hessian">Exact Hessian</a></h2>
+<p>Since PR #1217 fixed the <code>h_ang</code> "d1" pitch² sign (<code>+sy</code> → <code>-sy</code>), the assembled Hessian equals the
+true second derivative and finite-difference-validates over all six rows (see
+<a href="arch/../port/divergences.html">Divergences from upstream</a>).</p>
+<blockquote>
+<p>Source: <code>src/derivatives.rs</code>, <code>src/ndt.rs</code> (<code>compute_derivatives[_parallel]</code>, <code>finalize</code>); the
+<code>*_bit_identical</code> tests.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="covariance-estimation"><a class="header" href="#covariance-estimation">Covariance estimation</a></h1>
+<p>After a match, the 6×6 pose covariance published with the estimate is produced by one of four modes,
+selected by <code>CovarianceConfig.estimation_type</code> and driven by
+<a href="arch/engine.html"><code>NdtEngine::estimate_covariance</code></a>.</p>
+<h2 id="the-four-modes"><a class="header" href="#the-four-modes">The four modes</a></h2>
+<ul>
+<li><strong><code>FIXED_VALUE</code> (0)</strong> — the configured <code>output_pose_covariance</code>, rotated into the map frame by the
+result pose's rotation (<code>helper::rotate_covariance</code>).</li>
+<li><strong><code>LAPLACE</code> (1)</strong> — the XY covariance from the align <strong>Hessian</strong> (<code>laplace_xy_covariance</code>, the
+Laplace approximation <code>H⁻¹</code>).</li>
+<li><strong><code>MULTI_NDT</code> (2)</strong> — re-run the full <code>align</code> from each candidate pose around the result
+(<code>propose_poses_to_search(center, offset_x, offset_y)</code>), then take the sample XY covariance of the
+converged poses with the unbiased <code>(n-1)/n</code> correction (<code>estimate_xy_covariance_by_multi_ndt</code>).</li>
+<li><strong><code>MULTI_NDT_SCORE</code> (3)</strong> — for each candidate, transform the source and score it (no re-align),
+then a temperature-scaled softmax of the scores weights a weighted mean/covariance
+(<code>estimate_xy_covariance_by_multi_ndt_score</code>, <code>calc_weight_vec</code>).</li>
+</ul>
+<h2 id="frame-handling"><a class="header" href="#frame-handling">Frame handling</a></h2>
+<p>The XY covariance is computed in base_link, clamped to floors, and rotated back to map:
+<code>rotate_covariance_to_base_link</code> / <code>rotate_covariance_to_map</code> (<code>Rᵀ C R</code> / <code>R C Rᵀ</code> on the 2×2 yaw
+block) and <code>adjust_diagonal_covariance</code>. The engine wrapper builds the 3×3 <code>rot3x3</code> from the result
+pose's rotation block, so the full 6×6's position block is rotated consistently.</p>
+<h2 id="configuration-and-checks"><a class="header" href="#configuration-and-checks">Configuration and checks</a></h2>
+<p>The mode, <code>scale_factor</code>, softmax <code>temperature</code>, the configured 6×6, and the XY search offsets come
+from <code>set_covariance_config</code>. The multi-NDT result is symmetric PSD (pinned by
+<code>multi_ndt_covariance_is_symmetric_psd</code>).</p>
+<blockquote>
+<p>Source: <code>src/cov_estimate.rs</code>, <code>src/covariance.rs</code>, <code>src/engine.rs</code> (<code>estimate_covariance</code>),
+<code>src/helper.rs</code> (<code>rotate_covariance</code>).</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="the-tpe-pose-search"><a class="header" href="#the-tpe-pose-search">The TPE pose search</a></h1>
+<p>The align-service (initial-pose) search uses a Tree-Structured Parzen Estimator over a 6-D pose
+<code>[x, y, z, roll, pitch, yaw]</code> — <code>tpe::TreeStructuredParzenEstimator</code>.</p>
+<h2 id="the-proposeevaluate-loop"><a class="header" href="#the-proposeevaluate-loop">The propose/evaluate loop</a></h2>
+<p>The search (<a href="arch/../port/trace-verification.html"><code>node_align_service::run_align_service_search_impl</code></a>)
+runs: draw a candidate with <code>get_next_input</code>, build a pose, <code>run_align</code> the engine from it, then feed
+the outcome back with <code>add_trial</code>. It keeps the best-scoring particle and reports the per-particle
+initial/result poses, scores, iteration counts, and marker/cloud publish counts.</p>
+<h2 id="the-sampler"><a class="header" href="#the-sampler">The sampler</a></h2>
+<p>Until <code>n_startup_trials</code> trials accumulate, TPE samples the prior: the five prior dims
+(<code>x, y, z, roll, pitch</code>) from Gaussians around the initial pose (standard deviations from the request
+covariance diagonal), plus <code>yaw</code> uniform over <code>[-π, π)</code>. After startup it partitions trials into an
+"above" (better) and "below" set and picks candidates by expected improvement from above/below
+Gaussian KDEs.</p>
+<h2 id="determinism"><a class="header" href="#determinism">Determinism</a></h2>
+<p>The RNG is a Rust-owned <code>SplitMix64</code> + Box-Muller, seeded per request with a fixed seed. This
+deliberately does <strong>not</strong> reproduce libstdc++'s <code>std::normal_distribution</code> sample sequence — that
+sequence is implementation-defined and not portable — which is why exact candidate-trace equivalence
+with the C++ search is out of scope (see <a href="arch/../port/verification.html">Verification</a> and
+<a href="arch/../port/divergences.html">Divergences</a>). It is deterministic for a fixed seed, so the search is
+reproducible and unit-testable.</p>
+<h2 id="c-abi"><a class="header" href="#c-abi">C ABI</a></h2>
+<p><code>AwTpe</code> is the opaque handle; <code>AW_TPE_STATUS_*</code> / <code>AW_TPE_DIRECTION_*</code> are the C-ABI status and
+minimize/maximize codes.</p>
+<blockquote>
+<p>Source: <code>src/tpe.rs</code>, <code>src/node_align_service.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="map-update"><a class="header" href="#map-update">Map update</a></h1>
+<p>How the target map is refreshed at runtime without disturbing concurrent alignment.</p>
+<h2 id="policy-and-state-rust-owned"><a class="header" href="#policy-and-state-rust-owned">Policy and state (Rust-owned)</a></h2>
+<p><code>MapUpdateState</code> holds the map-update decision state: <code>last_update_position</code>, whether the next update
+must <code>need_rebuild</code>, and the loaded cell ids live in the engine. Rust decides <em>when</em> an update is
+needed (first update, and whenever the vehicle has moved far enough that the loaded map can no longer
+cover the LiDAR range) and whether a full rebuild is required.</p>
+<h2 id="the-atomic-commit"><a class="header" href="#the-atomic-commit">The atomic commit</a></h2>
+<p><code>scan_matcher::apply_map_update</code> performs:</p>
+<ol>
+<li><code>source.load(center, radius).await</code> — fetch the delta through the async <a href="arch/host-vtable.html"><code>MapSource</code></a>
+port (empty delta ⇒ no-op, no republish).</li>
+<li>Build the new map on a <strong>private staging engine</strong> — <code>engine.clone()</code> for an incremental update, or
+<code>engine.clone_empty()</code> for a rebuild — apply the added/removed tiles, and <code>create_kdtree()</code>.</li>
+<li><code>engine.commit_from(&amp;staging)</code> — one atomic store publishes the fully-built map.</li>
+</ol>
+<p>Because the map is built off to the side and swapped in with a single atomic step
+(<a href="arch/concurrency.html">Concurrency</a>), a concurrent align never observes a partial or kd-tree-less map.</p>
+<h2 id="c--rust-split"><a class="header" href="#c--rust-split">C++ / Rust split</a></h2>
+<p>Rust owns the decision/state and the staging build; C++ keeps the ROS pcd-loader service I/O, the
+tile-apply, and the debug-map publish (<code>node_map_update.rs</code> bridges the C-ABI map-source vtable to
+the async port).</p>
+<blockquote>
+<p>Source: <code>src/scan_matcher.rs</code> (<code>apply_map_update</code>), <code>src/node_map_update.rs</code>, <code>src/engine.rs</code>
+(<code>commit_from</code>, <code>clone_empty</code>), <code>src/node_handle.rs</code> (<code>MapUpdateState</code>).</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="portability-and-the-host-ports"><a class="header" href="#portability-and-the-host-ports">Portability and the Host ports</a></h1>
+<p>The same algorithm core runs under ROS, a bare-metal kernel, or an async runtime because it is
+written against the <a href="arch/host-vtable.html">Host ports</a>, not against ROS.</p>
+<h2 id="scanmatcher-over-h-host"><a class="header" href="#scanmatcher-over-h-host"><code>ScanMatcher</code> over <code>H: Host</code></a></h2>
+<p><code>scan_matcher::ScanMatcher</code> wraps the <a href="arch/engine.html"><code>NdtEngine</code></a> and drives it generically:</p>
+<ul>
+<li><code>match_scan(guess, source, &amp;mut scratch) -&gt; MatchResult</code> and
+<code>match_scan_with_covariance(...) -&gt; (MatchResult, CovarianceResult)</code> — <strong>synchronous</strong>, the WCET
+hot path.</li>
+<li><code>update_map(&amp;source, center, radius).await</code> — <strong>async</strong>, over the <code>MapSource</code> port.</li>
+</ul>
+<p>It holds no per-align mutable state, so a shared <code>&amp;ScanMatcher</code> is sound across concurrent tasks in
+the std and <code>mt</code> configs (map updates publish atomically).</p>
+<h2 id="the-no_std-gating-discipline"><a class="header" href="#the-no_std-gating-discipline">The <code>no_std</code> gating discipline</a></h2>
+<p><code>lib.rs</code> is <code>#![cfg_attr(not(any(test, feature = "std")), no_std)]</code>. The portable modules
+(<code>scan_matcher</code>, <code>host</code>, <code>engine</code>, <code>convergence</code>, <code>covariance</code>, <code>cov_estimate</code>, <code>ndt</code>, <code>voxel_grid</code>,
+<code>tpe</code>, …) are <code>no_std</code>; the ROS/FFI glue (<code>node*</code>, <code>ffi</code>, <code>ffi_host</code>, <code>sensor_points</code>) is
+<code>#[cfg(feature = "std")]</code>. New algorithmic code goes in the portable core so the kernel build keeps
+it; only ROS/FFI glue may be <code>std</code>-gated.</p>
+<h2 id="reference-adapters"><a class="header" href="#reference-adapters">Reference adapters</a></h2>
+<ul>
+<li><code>examples/tokio_ndt.rs</code> — the async reference host over synthetic data (proves the <code>Host</code> seam).</li>
+<li><code>examples/threads_ndt.rs</code> — multi-threaded shared-engine usage.</li>
+</ul>
+<p>The kernel (Track-B) target is the reason for this split: it supplies its own async runtime and map
+source (flash/DMA) and builds the core with <code>--no-default-features</code> (single-core) or <code>--features mt</code>
+(multi-core); see <a href="arch/../rt/mt.html">The <code>mt</code> multi-core engine</a>.</p>
+<blockquote>
+<p>Source: <code>src/scan_matcher.rs</code>, <code>src/host.rs</code>, <code>examples/{tokio_ndt,threads_ndt}.rs</code>, <code>src/lib.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="behavior-equivalence-and-verification"><a class="header" href="#behavior-equivalence-and-verification">Behavior equivalence and verification</a></h1>
+<p>The port's correctness bar is <strong>observable equivalence with the C++ implementation</strong>. The
+mechanism is a differential oracle: drive the same inputs through the legacy C++ path (<code>NDT_USE_RUST=OFF</code>)
+and the Rust path (<code>ON</code>) and diff the observables. This follows a trace-based state-machine
+verification workflow.</p>
+<h2 id="layers-of-verification"><a class="header" href="#layers-of-verification">Layers of verification</a></h2>
+<ul>
+<li><strong>ON-vs-OFF differential (authoritative).</strong> Unit gtests (helpers, covariance), property tests
+(<code>voxel_grid</code> / <code>kdtree</code> vs brute force), an align <strong>trace diff</strong>, and the <code>standard_sequence_*</code>
+integration tests — all must match between OFF (C++) and ON (Rust). See
+<a href="port/differential.html">Differential testing</a> and
+<a href="port/trace-verification.html">Trace-based state-machine verification</a>.</li>
+<li><strong>Numeric parity.</strong> The f32 <code>Matrix4f</code> pipeline, the Gauss constants, and serial/parallel
+bit-identity are checked so scores and poses match to tight tolerances. See
+<a href="port/numeric-parity.html">Numeric parity</a>.</li>
+<li><strong>Bounded WCET.</strong> A zero-allocation-per-frame test (<code>tests/zero_alloc.rs</code>) and a worst-case
+frame-time benchmark (<code>examples/wcet_frame.rs</code>) on the serial backend, plus a real-time review
+per engine/align patch. See <a href="port/../rt/wcet.html">The WCET contract</a>.</li>
+<li><strong><code>no_std</code> gate.</strong> <code>cargo rustc --no-default-features --lib --target {x86_64,aarch64}-unknown-none --crate-type rlib</code> — proves the portable core stays kernel-buildable.</li>
+<li><strong>Unsafe FFI under Miri.</strong> <code>cargo +nightly miri test</code> with <code>libm/force-soft-floats</code>, exercising
+the <code>ffi_ptr</code> boundary.</li>
+<li><strong>Coverage as a map, not a target.</strong> <code>cargo llvm-cov</code> is diagnostic. Every test carries an oracle
+(assertion / invariant / round-trip / reference model / null-edge contract); <code>extern "C"</code> shims
+get Rust direct-call tests because <code>cargo llvm-cov</code> sees only Rust.</li>
+</ul>
+<h2 id="tolerances"><a class="header" href="#tolerances">Tolerances</a></h2>
+<p>For the deterministic paths the differential check is effectively exact; for the align result the
+accepted tolerances are: pose translation ≤ 1e-3 m, rotation ≤ 1e-3 rad, TP / NVTL ≤ 1e-4,
+iteration count <strong>exact</strong>. Where a documented upstream divergence exists the port <strong>mirrors</strong> it
+(rather than "fixing" it locally) until the upstream fix lands, then follows the fix — see
+<a href="port/divergences.html">Divergences from upstream</a>.</p>
+<p>Some behaviour is not amenable to exact traces — notably the align-service TPE search, which in
+C++ samples with a libstdc++-specific <code>std::mt19937_64</code> + distributions. There, verification
+splits into exact trace checks for deterministic control flow, tolerance checks for align
+outcomes, and property/statistical checks (success rate, p95 error envelope) for search quality.</p>
+<h2 id="running-it"><a class="header" href="#running-it">Running it</a></h2>
+<p>The differential (ON-vs-OFF) and FFI tests only build under <code>-DNDT_USE_RUST=ON</code> — build that way
+first, then:</p>
+<pre><code class="language-sh">colcon test --packages-select autoware_ndt_scan_matcher [--ctest-args -R &lt;regex&gt;]
+</code></pre>
+<p>For the integration tests, source the ROS + workspace environment first and filter the package's
+own results via <code>colcon test-result --test-result-base build/&lt;pkg&gt;</code>. See
+<a href="port/../start/build-and-test.html">Build and test</a> for the full command set (backend flag, cargo, clippy,
+<code>no_std</code> gate).</p>
+<h2 id="sub-chapters-3"><a class="header" href="#sub-chapters-3">Sub-chapters</a></h2>
+<ul>
+<li><a href="port/differential.html">Differential testing</a></li>
+<li><a href="port/trace-verification.html">Trace-based state-machine verification</a></li>
+<li><a href="port/numeric-parity.html">Numeric parity</a></li>
+</ul>
+<blockquote>
+<p>Source: the crate <code>tests/</code> + the package's C++ gtests and <code>standard_sequence_*</code> launch tests.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="differential-testing"><a class="header" href="#differential-testing">Differential testing</a></h1>
+<p>The ON-vs-OFF oracle in practice: drive identical inputs through the legacy C++ path
+(<code>NDT_USE_RUST=OFF</code>) and the Rust path (<code>ON</code>) and diff the observables. This is the authoritative
+correctness mechanism (see <a href="port/verification.html">Behavior equivalence and verification</a>).</p>
+<h2 id="building-both-paths"><a class="header" href="#building-both-paths">Building both paths</a></h2>
+<p>The Rust differential/FFI gtests are registered only under <code>-DNDT_USE_RUST=ON</code> (they link the crate
+alongside the C++ engine in one test binary). Build that way, then <code>colcon test</code>; the always-on
+C++/integration suites run in both backends. See <a href="port/../start/build-and-test.html">Build and test</a> for
+the exact commands.</p>
+<h2 id="layers-1"><a class="header" href="#layers-1">Layers</a></h2>
+<ul>
+<li><strong>Unit / property gtests</strong> — the pure kernels checked against a reference or a brute-force oracle:
+<code>test_voxel_grid</code> (Rust <code>VoxelGridMap</code> vs C++ <code>MultiVoxelGridCovariance</code>), <code>test_align</code>
+(Rust align vs the C++ NDT engine), <code>test_estimate_covariance_multi</code>, <code>test_ndt_engine</code>,
+<code>test_convergence_verdict</code>, <code>test_map_update_verdict</code>, …</li>
+<li><strong>FFI direct-call tests</strong> — because <code>cargo llvm-cov</code> sees only Rust, the <code>extern "C"</code> shims get
+Rust-side direct-call tests too (see <a href="port/../quality/tests.html">Test taxonomy</a>).</li>
+<li><strong>Integration</strong> — the <code>standard_sequence_*</code> launch/gtests drive the full node on a fixed sequence
+in both backends.</li>
+</ul>
+<h2 id="observables-compared"><a class="header" href="#observables-compared">Observables compared</a></h2>
+<p>Estimated pose, covariance, transform probability, NVTL, iteration count, convergence status,
+diagnostics, service responses, and map-update behavior — to the tolerances in
+<a href="port/verification.html">Verification</a>, with any documented <a href="port/divergences.html">upstream divergence</a> mirrored
+so the diff stays green.</p>
+<blockquote>
+<p>Source: the crate <code>tests/</code> + the package's C++ gtests and <code>standard_sequence_*</code> launch tests;
+<code>CMakeLists.txt</code> (the <code>NDT_USE_RUST</code> test registrations).</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="trace-based-state-machine-verification"><a class="header" href="#trace-based-state-machine-verification">Trace-based state-machine verification</a></h1>
+<p>For control-flow-heavy paths — notably the align service — a byte-for-byte output diff is too brittle
+and too coarse. Instead the port proves equivalence with an <strong>abstract semantic trace</strong>: a spec-level
+state machine emitting only the fields that matter, instrumented on both sides and diffed.</p>
+<h2 id="the-workflow"><a class="header" href="#the-workflow">The workflow</a></h2>
+<ol>
+<li>Establish the C++ baseline behavior.</li>
+<li>Model it as a spec-level state machine (the decision points, not the ROS plumbing).</li>
+<li>Emit an abstract trace of semantic events from both C++ and Rust.</li>
+<li>Differentially test the traces; triage divergences; add regression tests.</li>
+</ol>
+<h2 id="the-align-service-trace-abi"><a class="header" href="#the-align-service-trace-abi">The align-service trace ABI</a></h2>
+<p><code>node_align_service</code> carries a <code>#[repr(C)]</code> trace buffer (<code>AwNdtAlignServiceTrace</code> + typed
+<code>AwNdtAlignServiceTraceEvent</code>s) written by <code>append_trace_event</code> / <code>append_search_summary_trace</code> /
+<code>append_response_trace</code>. Events record <strong>semantic</strong> fields only — the gate decision
+(status/success/reliable/valid), the diagnostic level + message kind, the search summary (requested
+/ evaluated particles, best iteration/score, publish counts), and the response payload — never raw
+ROS message bytes. A null trace pointer is a no-op, so production carries no cost; tests install a
+buffer and assert the exact event sequence.</p>
+<h2 id="split-by-determinism"><a class="header" href="#split-by-determinism">Split by determinism</a></h2>
+<p>Deterministic control flow (request validation, availability gates, initial-pose branch selection,
+response packaging, and the host side-effect summary: topic/type/count) gets <strong>exact</strong> trace checks.
+The TPE/NDT search — where libstdc++'s sampler makes exact candidate traces unstable — gets
+tolerance checks on the align outcome and property/statistical checks on search quality instead (see
+<a href="port/verification.html">Verification</a>). Tolerances are established from measured C++ baseline self-variance,
+not invented up front.</p>
+<blockquote>
+<p>Source: <code>src/node_align_service.rs</code> (the trace events + the deterministic decision functions).</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="numeric-parity"><a class="header" href="#numeric-parity">Numeric parity</a></h1>
+<p>Keeping the Rust math bit-comparable to the C++/pcl reference, so the <a href="port/differential.html">differential
+tests</a> can hold tight tolerances.</p>
+<h2 id="the-f32-matrix4f-pipeline"><a class="header" href="#the-f32-matrix4f-pipeline">The f32 <code>Matrix4f</code> pipeline</a></h2>
+<p>The per-iteration cloud transform runs in <strong>f32</strong>, mirroring the C++ <code>Matrix4f</code> pipeline exactly —
+including the deliberate <code>f32</code>/<code>usize</code>↔int casts that the crate's lint allowlist documents. Matching
+the quantization (not "improving" it to f64) is what keeps the poses bit-comparable.</p>
+<h2 id="correctly-rounded-scalar-math"><a class="header" href="#correctly-rounded-scalar-math">Correctly-rounded scalar math</a></h2>
+<p><code>libm</code> provides <code>sqrt</code>/trig in both std and <code>no_std</code>. IEEE <code>sqrt</code> is correctly rounded, so it matches
+<code>std::sqrt</code> and keeps the differential oracle exact; the Gauss constants (<code>gauss_constants</code> from
+<code>outlier_ratio</code> / <code>resolution</code>) are computed identically.</p>
+<h2 id="serialparallel-bit-identity"><a class="header" href="#serialparallel-bit-identity">Serial/parallel bit-identity</a></h2>
+<p>The parallel derivative reduction is order-preserving, so it is bit-for-bit identical to serial (see
+<a href="port/../arch/derivatives.html">Serial and parallel derivatives</a>) — parallelism never perturbs parity.</p>
+<h2 id="the-hessian"><a class="header" href="#the-hessian">The Hessian</a></h2>
+<p>The NDT angle Hessian (<code>h_ang</code>) is the exact analytic second derivative since the PR #1217 "d1"
+pitch² sign fix; the full 6×6 Hessian now finite-difference-validates. Historically this was the one
+place the port intentionally reproduced a C++ quirk — see <a href="port/divergences.html">Divergences from upstream</a>.</p>
+<h2 id="tolerances-1"><a class="header" href="#tolerances-1">Tolerances</a></h2>
+<p>The differential checks use: pose translation ≤ 1e-3 m, rotation ≤ 1e-3 rad, TP / NVTL ≤ 1e-4,
+iteration count <strong>exact</strong>.</p>
+<blockquote>
+<p>Source: <code>src/transform.rs</code>, <code>src/ndt.rs</code>, <code>src/derivatives.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="divergences-from-upstream"><a class="header" href="#divergences-from-upstream">Divergences from upstream</a></h1>
+<p>Porting diffs the C++ and Rust implementations directly, which makes it the best opportunity to
+find <strong>upstream bugs</strong>. The port's policy is deliberate and may be surprising: when the C++
+reference diverges from expected-correct behavior, the Rust port <strong>reproduces the C++ behavior</strong>
+rather than fixing it locally.</p>
+<h2 id="why-reproduce-not-fix"><a class="header" href="#why-reproduce-not-fix">Why reproduce, not fix</a></h2>
+<p>The differential test against C++ is the oracle (see <a href="port/verification.html">Verification</a>). If the Rust
+port silently "corrected" a C++ bug, the differential test would go red and we would lose the
+ability to prove equivalence. So the correct fix belongs <strong>upstream</strong> (in pcl / Autoware), and the
+port keeps the C++ behavior verbatim until that upstream fix lands.</p>
+<h2 id="the-process-for-a-discovered-divergence"><a class="header" href="#the-process-for-a-discovered-divergence">The process for a discovered divergence</a></h2>
+<ol>
+<li><strong>Notify the user immediately</strong> — what / where / evidence / impact. Never silently absorb it.</li>
+<li><strong>Record it</strong> in this chapter's divergence list — one entry per finding: location · type ·
+evidence · correct value · impact · decision · revisit trigger · upstream link · verification.</li>
+<li><strong>Reproduce, don't fix locally.</strong> Mark the site in code (<code>PORT-QUIRK</code>) and pin it with a test,
+so an accidental "fix" fails loudly.</li>
+<li><strong>Fix upstream.</strong> File/draft an upstream issue and link it.</li>
+</ol>
+<h2 id="follow-the-fix-when-upstream-lands"><a class="header" href="#follow-the-fix-when-upstream-lands">Follow the fix when upstream lands</a></h2>
+<p>Reproduce-not-fix is temporary per finding. Once the upstream fix lands, the port <strong>follows it</strong>:
+update the Rust to match the corrected C++, widen or re-point the pinning test to the corrected
+value, and move the entry to <em>Resolved</em> below. Following the fix restores <code>ON == OFF</code> (both now
+compute the corrected value).</p>
+<h2 id="resolved"><a class="header" href="#resolved">Resolved</a></h2>
+<ul>
+<li><strong>NDT <code>h_ang</code> "d1" sign bug — fixed upstream (PR #1217), port followed.</strong>
+<code>computeAngleDerivatives()</code> built the angular Hessian table <code>h_ang</code> with the pitch² x-coefficient
+as <code>+sy</code>, where the exact second derivative is <code>-sy</code> (row 6, "d1"). It affected only the Newton
+search direction, not the optimum. The port originally reproduced <code>+sy</code> to stay bit-identical with
+the then-buggy C++; when the upstream fix landed the port followed it (<code>src/derivatives.rs</code>, now
+<code>-sy</code>). With the sign corrected the pcl NDT Hessian is the <strong>exact</strong> analytic Hessian, so the full
+6×6 Hessian now finite-difference-validates — the FD tests
+(<code>update_derivatives_gradient_and_hessian_match_finite_difference</code> in <code>src/derivatives.rs</code>,
+<code>compute_derivatives_matches_finite_difference</code> in <code>src/ndt.rs</code>) cover all six rows and pin the
+corrected sign directly (they fail on <code>+sy</code>).</li>
+</ul>
+<h2 id="intentional-differences"><a class="header" href="#intentional-differences">Intentional differences</a></h2>
+<p>The align-service TPE uses a deterministic Rust-owned sampler instead of libstdc++'s
+implementation-defined <code>std::normal_distribution</code> sequence, because that sequence is not portable
+(this is why exact candidate-trace equivalence for the TPE search is out of scope; see
+<a href="port/verification.html">Verification</a>).</p>
+<blockquote>
+<p>Source: <code>src/derivatives.rs</code> (the <code>h_ang</code> table + FD tests); upstream issue/PR links.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="c-to-rust-map"><a class="header" href="#c-to-rust-map">C++ to Rust map</a></h1>
+<p>A cross-reference from C++ symbols to their Rust counterparts, for reviewers tracing a change across
+the boundary.</p>
+<h2 id="engine--algorithm"><a class="header" href="#engine--algorithm">Engine / algorithm</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>C++</th><th>Rust</th></tr></thead><tbody>
+<tr><td><code>pclomp::MultiGridNormalDistributionsTransform</code> (<code>ndt_omp/</code>)</td><td><code>engine::NdtEngine</code> + <code>ndt::align</code></td></tr>
+<tr><td><code>MultiVoxelGridCovariance</code></td><td><code>voxel_grid::VoxelGridMap</code> (+ <code>voxel_grid::Leaf</code>, <code>kdtree::KdTree</code>)</td></tr>
+<tr><td><code>computeAngleDerivatives</code> / <code>computeDerivatives</code></td><td><code>derivatives::compute_angle_derivatives</code>, <code>ndt::compute_derivatives[_parallel]</code></td></tr>
+<tr><td><code>estimate_covariance</code> (multi-NDT / score / Laplace)</td><td><code>cov_estimate::*</code>, <code>covariance::*</code></td></tr>
+<tr><td><code>TreeStructuredParzenEstimator</code> (<code>localization_util</code>)</td><td><code>tpe::TreeStructuredParzenEstimator</code></td></tr>
+<tr><td><code>SmartPoseBuffer</code> (<code>localization_util</code>)</td><td><code>pose_buffer::PoseBuffer</code></td></tr>
+<tr><td><code>count_oscillation</code>, covariance rotate helpers</td><td><code>helper::*</code></td></tr>
+</tbody></table>
+</div>
+<h2 id="node-shell"><a class="header" href="#node-shell">Node shell</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>C++</th><th>Rust</th></tr></thead><tbody>
+<tr><td><code>NDTScanMatcher</code> (<code>ndt_scan_matcher_core.cpp</code>)</td><td>thin <code>rclcpp</code> shell → <code>node_handle::NdtScanMatcherRs</code> (opaque handle)</td></tr>
+<tr><td><code>callback_sensor_points_main</code></td><td><code>sensor_points::*</code> (prologue) + <code>node</code>/<code>engine</code> <code>run_align</code> + <code>on_sensor_points</code></td></tr>
+<tr><td><code>callback_initial_pose</code> / <code>callback_regularization_pose</code> / <code>service_trigger_node</code></td><td><code>node::on_*</code> + the handle's pose buffers / activation</td></tr>
+<tr><td><code>MapUpdateModule</code> (<code>map_update_module*.cpp</code>)</td><td><code>node_handle::MapUpdateState</code> + <code>scan_matcher::apply_map_update</code> + <code>node_map_update</code></td></tr>
+<tr><td><code>service_ndt_align</code> / <code>align_pose</code></td><td><code>node_align_service::*</code> (decision + <code>run_align_service_search_impl</code>)</td></tr>
+<tr><td>convergence gate in the sensor callback</td><td><code>convergence::evaluate_convergence</code></td></tr>
+<tr><td>ROS side effects (publish, TF, log, map-load)</td><td>the <code>AwHost</code> vtable → <code>host::Host</code> trait</td></tr>
+</tbody></table>
+</div>
+<h2 id="boundary"><a class="header" href="#boundary">Boundary</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>C++</th><th>Rust</th></tr></thead><tbody>
+<tr><td><code>NDTScanMatcherRS</code> RAII wrapper + <code>make_aw_ndt_params</code></td><td><code>autoware_ndt_scan_matcher_rs_new/_free</code>, <code>node_handle::{Params, AwNdtParams}</code></td></tr>
+<tr><td><code>AwHost</code> / <code>AwPointCloud2View</code> / <code>AwPose</code> trampolines</td><td><code>ffi_host</code>, <code>sensor_points</code>; derefs via <code>ffi_ptr</code>; panic containment in <code>ffi</code></td></tr>
+</tbody></table>
+</div>
+<blockquote>
+<p>Source: cross-reference of the C++ package <code>src/</code> (and <code>ndt_omp/</code>) against the Rust crate <code>src/</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="the-wcet-contract"><a class="header" href="#the-wcet-contract">The WCET contract</a></h1>
+<p><code>ndt::align</code> is the one RT-critical function whose worst-case execution time is contracted. The
+contract is stated in its doc comment and is the crate's real-time centerpiece.</p>
+<h2 id="the-bound"><a class="header" href="#the-bound">The bound</a></h2>
+<ul>
+<li>The outer loop runs <strong>at most <code>params.max_iterations</code></strong> times (a static cap).</li>
+<li>Each iteration does exactly: one f32 cloud transform (<code>O(P)</code>, <code>P</code> = source points), one
+<code>compute_derivatives</code> pass (<code>O(P · K)</code>, <code>K</code> = neighbors per point), and one fixed-size 6×6 SVD
+solve.</li>
+<li><code>K ≤ MAX_NEIGHBORS</code> (the <code>radius_search</code> cap); <code>P</code> must be bounded by the caller (downsample).</li>
+</ul>
+<p>So the align frame is bounded by <code>max_iterations · (O(P·K) + O(1))</code>.</p>
+<h2 id="the-accepted-residual"><a class="header" href="#the-accepted-residual">The accepted residual</a></h2>
+<p>The kd-tree traversal is worst-case <code>O(N_leaves)</code> for adversarial point distributions — an
+<strong>accepted residual</strong>, benign for physical, roughly-uniform voxel maps (see
+<a href="rt/../arch/voxel-grid.html">Voxel grid and kd-tree</a>).</p>
+<h2 id="what-the-path-must-not-do"><a class="header" href="#what-the-path-must-not-do">What the path must not do</a></h2>
+<p>No panic (the crate's deny-<code>unwrap</code>/<code>expect</code>/<code>panic</code>/<code>indexing</code> lints — see
+<a href="rt/panic-free.html">Panic-free, bounded execution</a>), no blocking, no logging/formatting, no user
+callbacks, and — after warmup — no allocation (<a href="rt/zero-alloc.html">Zero-allocation guarantees</a>). Only
+fixed-width float math. The <strong>serial</strong> backend is the predictable baseline; the parallel backend is a
+throughput option, not the WCET reference.</p>
+<h2 id="measured"><a class="header" href="#measured">Measured</a></h2>
+<p>The per-frame WCET micro-benchmark <code>examples/wcet_frame.rs</code> measures the tail directly; current
+numbers are in <a href="rt/../quality/benchmarks.html#l2--per-frame-wcet-exampleswcet_framers">Benchmarking</a>. A
+<code>rust-realtime-review</code> accompanies each engine/align patch.</p>
+<blockquote>
+<p>Source: <code>src/ndt.rs</code> (the <code>align</code> WCET contract, ≈ lines 317 / 617), <code>examples/wcet_frame.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="zero-allocation-guarantees"><a class="header" href="#zero-allocation-guarantees">Zero-allocation guarantees</a></h1>
+<p>After warmup the align frame allocates <strong>nothing</strong> — a load-bearing property for the real-time story
+and a hard test.</p>
+<h2 id="reused-buffers"><a class="header" href="#reused-buffers">Reused buffers</a></h2>
+<p>All per-frame buffers are pre-reserved and reused, held in the <a href="rt/../arch/scratch.html"><code>MatchScratch</code></a>
+(its <code>AlignWorkspace</code> + last <code>AlignResult</code>):</p>
+<ul>
+<li>the result <code>Vec</code>s (<code>transformation_array</code>, the TP/NVTL trace arrays) — cleared, not reallocated;</li>
+<li><code>trans_cloud</code> (the transformed source) — reused via a <code>mem::take</code>/put-back, no realloc;</li>
+<li><code>neighbor_idx</code> — bounded by <code>MAX_NEIGHBORS</code>;</li>
+<li>the 6×6 SVD is fixed-size and <strong>stack-only</strong>.</li>
+</ul>
+<h2 id="warmup-model"><a class="header" href="#warmup-model">Warmup model</a></h2>
+<p>The buffers grow to their steady-state size on the first align(s); from then on each frame reuses
+them, so no heap traffic occurs on the hot path. Reusing one <code>MatchScratch</code> per task/thread across
+frames is what preserves this — a fresh scratch re-warms.</p>
+<h2 id="the-test"><a class="header" href="#the-test">The test</a></h2>
+<p><code>tests/zero_alloc.rs</code> asserts zero allocations per frame after warmup (an allocator hook counts
+allocations across a steady-state align). It runs on the serial backend — the parallel backend
+allocates its per-worker contribution buffers, so it is explicitly <strong>not</strong> the WCET baseline (see
+<a href="rt/wcet.html">The WCET contract</a>).</p>
+<blockquote>
+<p>Source: <code>tests/zero_alloc.rs</code>; <code>src/ndt.rs</code> (<code>AlignWorkspace</code>), <code>src/engine.rs</code> (<code>MatchScratch</code>).</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="the-mt-multi-core-engine"><a class="header" href="#the-mt-multi-core-engine">The <code>mt</code> multi-core engine</a></h1>
+<p>The <code>mt</code> feature is the multi-core <code>no_std</code> (kernel) configuration: the engine stays <code>Sync</code> and
+shareable across cores without <code>std</code> or an external mutex.</p>
+<h2 id="interrupt-safe-cells"><a class="header" href="#interrupt-safe-cells">Interrupt-safe cells</a></h2>
+<p>The interior-mutability cells become <code>awkernel_sync::Mutex&lt;Arc&lt;…&gt;&gt;</code>, whose guards <strong>disable
+interrupts</strong> while held. So every critical section is a few instructions — an <code>Arc</code> refcount bump
+(load) or a pointer swap (store) — <strong>never</strong> an align, a deep clone, or the drop of an old map.</p>
+<h2 id="rcu-without-a-long-lock"><a class="header" href="#rcu-without-a-long-lock">rcu without a long lock</a></h2>
+<p><code>swap_rcu</code> under <code>mt</code> runs the update closure <strong>outside</strong> the lock (it may deep-clone a whole map,
+which must never happen with interrupts disabled) and publishes with an optimistic <code>Arc::ptr_eq</code>
+retry; old snapshots also drop outside the lock. Writers (params setup, map commit) are rare, so it
+converges immediately. See <a href="rt/../arch/concurrency.html">Concurrency</a>.</p>
+<h2 id="caller-owned-scratch"><a class="header" href="#caller-owned-scratch">Caller-owned scratch</a></h2>
+<p>There is no engine-owned or thread-local scratch under <code>mt</code>: each task/thread owns a
+<a href="rt/../arch/scratch.html"><code>MatchScratch</code></a> and uses the <code>_with</code> align methods. The implicit-scratch API is
+<code>#[cfg]</code>-compiled out, so a cross-call scratch dependency cannot even compile.</p>
+<h2 id="building-it"><a class="header" href="#building-it">Building it</a></h2>
+<p><code>--no-default-features --features mt</code>. <code>awkernel_sync</code> is a pinned git revision (recorded in
+<code>Cargo.lock</code>) with <code>default-features = false</code>, so the <strong>final binary</strong> must enable exactly one
+backend feature (<code>x86</code>/<code>aarch64</code>/<code>rv64</code>/<code>rv32</code> on bare metal, or <code>awkernel_sync/std</code> on a host) —
+otherwise <code>awkernel_sync</code> does not compile. <code>examples/threads_ndt.rs</code> exercises shared-engine usage;
+the host-testable lint gate is <code>--features mt,awkernel_sync/std</code> (see
+<a href="rt/../start/build-and-test.html">Build and test</a>).</p>
+<blockquote>
+<p>Source: <code>src/engine.rs</code> (<code>mt</code> cfg paths), <code>Cargo.toml</code> (<code>mt</code> feature), <code>examples/threads_ndt.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="panic-free-bounded-execution"><a class="header" href="#panic-free-bounded-execution">Panic-free, bounded execution</a></h1>
+<p>The crate's lint hardening, seen through a real-time lens: the align path has no hidden abort, no
+unbounded work, and no allocation.</p>
+<h2 id="no-panic-source"><a class="header" href="#no-panic-source">No panic source</a></h2>
+<p>Non-test code bans <code>unwrap</code> / <code>expect</code> / <code>panic</code> / <code>unreachable</code> / <code>todo</code> / <code>unimplemented</code> and
+<code>indexing_slicing</code> / <code>string_slice</code> — so there is no implicit panic (which would abort or unwind) on
+the RT path. Fallible operations return <code>Result</code>/<code>Option</code> and are handled; genuinely-dynamic
+indexing uses <code>.get()</code>/iterators.</p>
+<h2 id="no-silent-overflow"><a class="header" href="#no-silent-overflow">No silent overflow</a></h2>
+<p><code>[profile.release] overflow-checks = true</code> makes an integer overflow a <strong>panic</strong>, so integer
+arithmetic must be explicit <code>checked_*</code> / <code>saturating_*</code> / <code>wrapping_*</code> — never bare <code>+</code>/<code>-</code>/<code>*</code>.
+Float math (which does not panic) uses a scoped, documented allowance in the numeric kernels only.
+Lossy <code>as</code> casts are banned in favor of <code>TryFrom</code>; a <code>Result</code> is never discarded with <code>let _</code>.</p>
+<h2 id="bounded-and-non-blocking"><a class="header" href="#bounded-and-non-blocking">Bounded and non-blocking</a></h2>
+<p>On the align path: loops are statically bounded (<code>max_iterations</code>, <code>MAX_NEIGHBORS</code>), buffers are
+pre-sized and reused (<a href="rt/zero-alloc.html">zero-alloc</a>), and there is no blocking, no logging/formatting,
+and no user callback. Together these give the <a href="rt/wcet.html">WCET contract</a> its teeth.</p>
+<h2 id="review"><a class="header" href="#review">Review</a></h2>
+<p>A <code>rust-realtime-review</code> accompanies each engine/align patch to keep these properties from
+regressing; the lints themselves are enforced in CI (see
+<a href="rt/../quality/hardening.html">Lint gates and suppression policy</a>).</p>
+<blockquote>
+<p>Source: <code>Cargo.toml</code> <code>[lints]</code> / <code>[profile.release]</code>; <code>src/ndt.rs</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="lint-gates-and-suppression-policy"><a class="header" href="#lint-gates-and-suppression-policy">Lint gates and suppression policy</a></h1>
+<p>The crate holds itself to a zero-warning, zero-clippy-finding build, enforced by its <code>Cargo.toml</code>
+<code>[lints]</code> table. Everything below is <code>-D warnings</code> in CI.</p>
+<h2 id="the-gates-lints"><a class="header" href="#the-gates-lints">The gates (<code>[lints]</code>)</a></h2>
+<ul>
+<li><strong><code>[lints.rust]</code></strong>: <code>warnings = "deny"</code>, <code>unsafe_code = "deny"</code>, <code>unsafe_op_in_unsafe_fn = "deny"</code>.</li>
+<li><strong><code>[lints.clippy]</code> — denied</strong>: <code>unwrap_used</code>, <code>expect_used</code>, <code>panic</code>, <code>unreachable</code>, <code>todo</code>,
+<code>unimplemented</code>, <code>indexing_slicing</code>, <code>string_slice</code>, <code>unwrap_in_result</code>, <code>arithmetic_side_effects</code>,
+<code>let_underscore_must_use</code>, <code>as_conversions</code>, <code>cast_possible_truncation</code>, <code>cast_possible_wrap</code>,
+<code>cast_sign_loss</code>, <code>float_cmp</code>, <code>lossy_float_literal</code>.</li>
+<li><strong>warn</strong> (still errors under <code>-D warnings</code>): <code>cast_lossless</code>, <code>allow_attributes</code>,
+<code>pedantic</code> (priority <code>-1</code>); <strong><code>allow_attributes_without_reason = "deny"</code></strong> (every suppression needs
+a <code>reason</code>).</li>
+<li><strong><code>[profile.release] overflow-checks = true</code></strong> — integer overflow panics, so integer arithmetic
+must be explicit <code>checked_*</code>/<code>saturating_*</code>/<code>wrapping_*</code> (see <a href="quality/../rt/panic-free.html">Panic-free</a>).</li>
+</ul>
+<h2 id="suppression-policy"><a class="header" href="#suppression-policy">Suppression policy</a></h2>
+<p>Suppression is the rare, self-cleaning exception: prefer <code>#[expect(…, reason = "…")]</code> over
+<code>#[allow]</code>, at the <strong>narrowest</strong> scope (the function/expression that trips the lint), and only for a
+lint on the project allowlist. <strong>No module-wide <code>#![allow]</code> in production</strong> — not even for numeric
+kernels. Generated code (<code>ros_msgs</code>) and <code>#[cfg(test)]</code> modules may relax with one block <code>#[allow(…, clippy::allow_attributes, reason = "…")]</code>.</p>
+<p>Allowlist (production, per function, each with its condition):</p>
+<div class="table-wrapper"><table><thead><tr><th>Lint(s)</th><th>Allowed only for</th></tr></thead><tbody>
+<tr><td><code>arithmetic_side_effects</code></td><td>f64/f32 <strong>float</strong> math (integer arithmetic must use checked/saturating)</td></tr>
+<tr><td><code>indexing_slicing</code></td><td>fixed-size nalgebra <code>Vector</code>/<code>Matrix</code> indexing, or a provably-bounded index (e.g. <code>axis = depth % 3</code>)</td></tr>
+<tr><td><code>as_conversions</code>, <code>cast_*</code></td><td>a deliberate, documented conversion (the f32 <code>Matrix4f</code> parity pipeline)</td></tr>
+<tr><td>readability <code>pedantic</code>/style lints</td><td>readability/parity in math kernels — never a safety lint</td></tr>
+</tbody></table>
+</div>
+<p><strong>Absolute-never in production:</strong> <code>unwrap_used</code>, <code>expect_used</code>, <code>panic</code>, <code>unreachable</code>, <code>todo</code>,
+<code>unimplemented</code>, <code>string_slice</code> — suppressing these would defeat the gates.</p>
+<h2 id="running"><a class="header" href="#running">Running</a></h2>
+<p><code>cargo clippy --all-targets -- -D warnings</code> (std/default) and
+<code>cargo clippy --no-default-features --features mt,awkernel_sync/std -- -D warnings</code> (multi-core
+<code>no_std</code>); the single-core <code>no_std</code> compile is checked with the <code>cargo rustc … --target …-unknown-none</code>
+gate. See <a href="quality/../start/build-and-test.html">Build and test</a>.</p>
+<blockquote>
+<p>Source: <code>Cargo.toml</code> <code>[lints]</code> / <code>[profile.release]</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="test-taxonomy"><a class="header" href="#test-taxonomy">Test taxonomy</a></h1>
+<p>The kinds of tests and what each one guarantees. <a href="quality/../start/build-and-test.html">Build and test</a> is
+the single source for the exact commands; this table maps each kind to its runner.</p>
+<div class="table-wrapper"><table><thead><tr><th>Kind</th><th>What it guards</th><th>How to run</th></tr></thead><tbody>
+<tr><td><strong>Unit</strong></td><td>kernels, pose buffers, convergence, covariance, FFI shims (Rust direct calls)</td><td><code>cargo test --lib</code></td></tr>
+<tr><td><strong>Doctests</strong></td><td>the public-API examples in this book</td><td><code>cargo test --doc</code></td></tr>
+<tr><td><strong>Integration (crate)</strong></td><td>zero-allocation-per-frame (<code>tests/zero_alloc.rs</code>), concurrency (<code>tests/concurrency.rs</code>)</td><td><code>cargo test</code></td></tr>
+<tr><td><strong>Property</strong></td><td><code>voxel_grid</code>/<code>kdtree</code> vs brute force; covariance symmetry/PSD</td><td><code>cargo test --lib</code> + gtests</td></tr>
+<tr><td><strong>Differential (ON vs OFF)</strong></td><td>the authoritative oracle — Rust vs C++ (see <a href="quality/../port/differential.html">Differential testing</a>)</td><td><code>colcon test</code> after <code>-DNDT_USE_RUST=ON</code> (registers <code>cargo test --features ros</code> + the ~17 Rust gtests)</td></tr>
+<tr><td><strong>Integration/launch</strong></td><td><code>standard_sequence_*</code> etc. — slow, need PCD maps</td><td><code>colcon test --ctest-args -R standard_sequence</code></td></tr>
+<tr><td><strong>WCET / bench</strong></td><td>worst-case frame time (<code>examples/wcet_frame.rs</code>); C++ vs Rust replay</td><td>see <a href="quality/benchmarks.html">Benchmarking</a></td></tr>
+<tr><td><strong><code>no_std</code> gate</strong></td><td>the portable core compiles without <code>std</code></td><td><code>cargo rustc --no-default-features --lib --target x86_64-unknown-none --crate-type rlib</code></td></tr>
+<tr><td><strong>Miri</strong></td><td>unsafe FFI (<code>ffi_ptr</code>) soundness</td><td><code>cargo +nightly miri test</code></td></tr>
+<tr><td><strong>Coverage</strong></td><td>diagnostic map (not a target)</td><td><code>cargo llvm-cov</code></td></tr>
+</tbody></table>
+</div>
+<h2 id="current-results-snapshot--as-of-2026-07-08"><a class="header" href="#current-results-snapshot--as-of-2026-07-08">Current results (snapshot — as of 2026-07-08)</a></h2>
+<p>Numbers drift as tests are added; regenerate with the commands below.</p>
+<p><strong>Crate (<code>cargo</code>, run from <code>autoware_ndt_scan_matcher_rs/</code>):</strong></p>
+<div class="table-wrapper"><table><thead><tr><th>Suite</th><th style="text-align: right">Tests</th><th>Command</th></tr></thead><tbody>
+<tr><td>Unit</td><td style="text-align: right">192</td><td><code>cargo test --lib</code></td></tr>
+<tr><td>Doctests</td><td style="text-align: right">9</td><td><code>cargo test --doc</code></td></tr>
+<tr><td><code>tests/concurrency.rs</code></td><td style="text-align: right">1</td><td><code>cargo test --test concurrency</code></td></tr>
+<tr><td><code>tests/zero_alloc.rs</code></td><td style="text-align: right">1</td><td><code>cargo test --test zero_alloc</code></td></tr>
+<tr><td><strong>Total</strong></td><td style="text-align: right"><strong>203</strong></td><td><code>cargo test</code></td></tr>
+</tbody></table>
+</div>
+<p>All passing (0 failed). Regenerate: <code>cargo test</code>.</p>
+<p><strong>Package (colcon, <code>-DNDT_USE_RUST=ON</code>):</strong> the differential/FFI suite is registered only under the
+Rust backend — <code>autoware_ndt_scan_matcher_rs_cargo_test</code> (the crate's own <code>cargo test --features ros</code> via CTest) plus the Rust gtests <code>test_voxel_grid</code>, <code>test_align</code>, <code>test_ndt_engine</code>,
+<code>test_estimate_covariance_multi</code>, <code>test_tpe_ffi</code>, <code>test_convergence_verdict</code>,
+<code>test_node_pose_callbacks</code>, <code>test_map_update_verdict</code>, <code>test_node_run_align</code>,
+<code>test_estimate_pose_covariance</code>, <code>test_ndt_align_service_decision</code>,
+<code>test_ndt_scan_matcher_rs_handle</code>, <code>test_regularization_buffer</code>, <code>test_initial_pose_buffer</code>,
+<code>test_map_update_state</code>, <code>test_sensor_points_prepare</code>, <code>test_sensor_points_match</code>. The always-on
+C++/integration suites (<code>standard_sequence_*</code>, <code>once_initialize_*</code>, <code>particles_num_*</code>,
+<code>missing_sensor_*</code>, <code>align_service_tpe_baseline</code>, <code>test_estimate_covariance</code>,
+<code>test_ndt_scan_matcher_helper</code>, launch test) run in both backends. Case counts are not snapshotted
+here (the integration tests need PCD maps). Regenerate: <code>colcon test --packages-select autoware_ndt_scan_matcher</code> after a <code>-DNDT_USE_RUST=ON</code> build.</p>
+<h2 id="coverage-snapshot--as-of-2026-07-08"><a class="header" href="#coverage-snapshot--as-of-2026-07-08">Coverage (snapshot — as of 2026-07-08)</a></h2>
+<p><code>cargo llvm-cov --lib --summary-only</code> (tool: <code>cargo-llvm-cov</code>, installed in the dev image):</p>
+<p><strong>Total: 88.2% region / 87.7% line / 89.6% function</strong> (14,064 regions, 9,142 lines).</p>
+<div class="table-wrapper"><table><thead><tr><th>Module</th><th style="text-align: right">Line cover</th></tr></thead><tbody>
+<tr><td><code>convergence</code> / <code>transform</code> / <code>ffi_ptr</code></td><td style="text-align: right">100%</td></tr>
+<tr><td><code>voxel_grid</code> / <code>kdtree</code> / <code>helper</code> / <code>covariance</code> / <code>cov_estimate</code> / <code>ndt</code></td><td style="text-align: right">97–99%</td></tr>
+<tr><td><code>engine</code> / <code>derivatives</code></td><td style="text-align: right">95–98%</td></tr>
+<tr><td><code>tpe</code> / <code>pose_buffer</code> / <code>ffi</code> / <code>node</code> / <code>node_align_service</code></td><td style="text-align: right">92–96%</td></tr>
+<tr><td><code>node_handle</code></td><td style="text-align: right">86%</td></tr>
+<tr><td><code>sensor_points</code></td><td style="text-align: right">24%</td></tr>
+<tr><td><code>ffi_host</code> / <code>node_map_update</code> / <code>scan_matcher</code></td><td style="text-align: right">0%</td></tr>
+</tbody></table>
+</div>
+<blockquote>
+<p><strong>The <code>cargo llvm-cov</code> number observes only Rust <code>cargo test</code>.</strong> The low/0% modules
+(<code>ffi_host</code>, <code>node_map_update</code>, <code>scan_matcher</code>, and most of <code>sensor_points</code>) are the FFI-host
+vtable, the ROS map-update glue, and the async orchestration — exercised through the C++ gtests
+(the <code>-DNDT_USE_RUST=ON</code> differential suite) or the <code>examples/tokio_ndt.rs</code> reference host, which
+<code>cargo llvm-cov</code> does not instrument. They are <strong>not</strong> real coverage holes. Coverage here is a
+diagnostic map, not a target (see <a href="quality/../port/verification.html">Behavior equivalence and verification</a>).</p>
+</blockquote>
+<p>Regenerate: <code>cargo llvm-cov --lib --summary-only</code> (HTML report: <code>cargo llvm-cov --lib --html</code> →
+<code>target/llvm-cov/html/index.html</code>).</p>
+<blockquote>
+<p>Source: crate <code>tests/</code>, <code>examples/</code>; the package <code>CMakeLists.txt</code> gtest registrations and launch
+test; <code>cargo llvm-cov</code> output.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="benchmarking"><a class="header" href="#benchmarking">Benchmarking</a></h1>
+<p>How the Rust port's performance is measured against the legacy C++ engine, and the current numbers.</p>
+<p>The guiding principle is <strong>capture-once, replay-everywhere</strong>: capture representative inputs once,
+then replay them deterministically through both engines so a comparison is apples-to-apples and free
+of live-system jitter. The predictable <strong>serial</strong> backend (<code>num_threads = 1</code>) is the fair baseline —
+it is the WCET reference, and it isolates the kernel from thread-pool scheduling noise (see
+<a href="quality/../start/features.html#parallelism-and-worker-threads">Parallelism and worker threads</a>).</p>
+<h2 id="tiers"><a class="header" href="#tiers">Tiers</a></h2>
+<ul>
+<li><strong>L1 — node / end-to-end.</strong> The full ROS node on a recorded sequence (rosbag / PCD map).
+Highest fidelity, lowest control; methodology only for now (not yet automated here).</li>
+<li><strong>L2 — kernel micro-benchmark.</strong> A tight per-frame <code>align</code> loop on a small synthetic cloud, to
+locate where time goes and bound per-frame WCET. Crate example <code>examples/wcet_frame.rs</code>.</li>
+<li><strong>L3 — offline differential replay.</strong> One executable drives <strong>both</strong> engines on identical inputs
+(<code>bench/ndt_bench_replay.cpp</code>); realistic point density, zero live jitter. This is the tier with
+measured results below.</li>
+</ul>
+<h2 id="what-l3-measures"><a class="header" href="#what-l3-measures">What L3 measures</a></h2>
+<p><code>bench/ndt_bench_replay.cpp</code> builds the target map <strong>and kd-tree once per engine</strong>, then times only
+the repeated <code>align</code> loop with <code>steady_clock</code> — so it measures the align kernel, not map
+construction. Both engines read the <strong>same</strong> synthetic geometry (three orthogonal planes at
+<code>interval</code> spacing) from the same buffers, so the comparison is apples-to-apples by construction. It
+emits per-align latency samples as JSON, which <code>bench/gen_report.py</code> renders into a self-contained
+HTML report.</p>
+<p>Fidelity controls: identical inputs and identical convergence (<code>iteration_num</code> must match, else the
+engines did different work), a warmup phase, align-loop-only timing, and optional core pinning for a
+stable tail (<code>TASKSET="taskset -c 2"</code>).</p>
+<h2 id="running-1"><a class="header" href="#running-1">Running</a></h2>
+<pre><code class="language-sh"># L3 offline replay (both engines) — needs the Rust backend + the opt-in bench target.
+colcon build --packages-select autoware_ndt_scan_matcher \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DNDT_USE_RUST=ON -DNDT_BUILD_BENCH=ON
+bench/run.sh [ITERS] [WARMUP] [INTERVAL]   # -&gt; bench/ndt_bench.json + bench/report.html
+#   env: TASKSET="taskset -c 2" (pin a core), OUT_DIR=/path
+
+# L2 per-frame WCET micro-benchmark (crate only, no colcon).
+cargo run --release --example wcet_frame
+</code></pre>
+<h2 id="measured-results"><a class="header" href="#measured-results">Measured results</a></h2>
+<blockquote>
+<p>Snapshot — regenerate with the commands above; numbers are hardware- and input-dependent.</p>
+</blockquote>
+<h3 id="l3--align-loop-latency-as-of-2026-07-07"><a class="header" href="#l3--align-loop-latency-as-of-2026-07-07">L3 — align-loop latency (as of 2026-07-07)</a></h3>
+<p>Synthetic 3-plane cloud, <strong>30,603 points</strong>, <code>resolution = 2.0</code>, <code>max_iterations = 30</code>,
+<strong><code>num_threads = 1</code> (serial)</strong>, 200 iterations after 20 warmup, <code>steady_clock</code>. <strong>Both engines
+converge in <code>iteration_num = 4</code></strong> (equal work). Latency per <code>align</code> call, milliseconds:</p>
+<div class="table-wrapper"><table><thead><tr><th>Engine</th><th style="text-align: right">min</th><th style="text-align: right">median</th><th style="text-align: right">mean</th><th style="text-align: right">p95</th><th style="text-align: right">max</th></tr></thead><tbody>
+<tr><td>C++ (<code>multigrid_ndt_omp</code>)</td><td style="text-align: right">360.61</td><td style="text-align: right">366.64</td><td style="text-align: right">366.44</td><td style="text-align: right">370.68</td><td style="text-align: right">372.33</td></tr>
+<tr><td>Rust (<code>autoware_ndt_scan_matcher_rs</code>)</td><td style="text-align: right">118.19</td><td style="text-align: right">118.67</td><td style="text-align: right">118.71</td><td style="text-align: right">119.06</td><td style="text-align: right">120.50</td></tr>
+</tbody></table>
+</div>
+<p><strong>Rust is ≈ 3.1× faster</strong> at the median (366.64 / 118.67 = 3.09×; ≈ 3.1× at p95 too) on this
+workload.</p>
+<p><em>Environment:</em> AMD Ryzen 9 5900HX (16 logical cores), governor <code>powersave</code>, no CPU pinning,
+<code>rustc 1.96.0</code>, <code>g++ 11.4.0</code>.</p>
+<h3 id="l2--per-frame-wcet-exampleswcet_framers"><a class="header" href="#l2--per-frame-wcet-exampleswcet_framers">L2 — per-frame WCET (<code>examples/wcet_frame.rs</code>)</a></h3>
+<p>Rust serial <code>align</code>, small 288-point cloud, 5 iterations, 20,000 frames (µs per frame):</p>
+<div class="table-wrapper"><table><thead><tr><th style="text-align: right">p50</th><th style="text-align: right">p99</th><th style="text-align: right">p99.9</th><th style="text-align: right">max</th></tr></thead><tbody>
+<tr><td style="text-align: right">524</td><td style="text-align: right">647</td><td style="text-align: right">859</td><td style="text-align: right">1090</td></tr>
+</tbody></table>
+</div>
+<p>(min 513 µs, mean 529 µs.) The bounded, low-spread tail reflects the allocation-free, panic-free
+align path (see <a href="quality/../rt/wcet.html">The WCET contract</a>).</p>
+<h3 id="caveats"><a class="header" href="#caveats">Caveats</a></h3>
+<p>These are a point-in-time snapshot under specific conditions — synthetic plane geometry, the
+<strong>serial</strong> backend, <strong>align-loop only</strong> (map construction excluded), and one CPU. The L2 and L3 rows
+use different cloud sizes (288 vs 30,603 points), so their absolute times are not comparable. Real
+sequences, the parallel backend, or the full node pipeline will shift the ratios; treat the ≈3× as
+indicative for this align workload, not a universal figure.</p>
+<blockquote>
+<p>Source: <code>bench/</code> (<code>ndt_bench_replay.cpp</code>, <code>run.sh</code>, <code>gen_report.py</code>, <code>ndt_bench.json</code>,
+<code>report.html</code>); <code>examples/wcet_frame.rs</code>; <code>CMakeLists.txt</code> (<code>NDT_BUILD_BENCH</code>).</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="glossary"><a class="header" href="#glossary">Glossary</a></h1>
+<ul>
+<li><strong>NDT</strong> — Normal Distributions Transform: registration by matching a scan to per-voxel Gaussians
+of the target map.</li>
+<li><strong>TP</strong> — transform probability: the NDT score averaged over the cloud.</li>
+<li><strong>NVTL</strong> — nearest-voxel transformation likelihood: the score against each point's nearest voxel,
+averaged.</li>
+<li><strong>Voxel / leaf</strong> — a grid cell of the target and its fitted Gaussian (centroid + inverse
+covariance).</li>
+<li><strong>kd-tree</strong> — spatial index over voxel centroids used for radius search.</li>
+<li><strong>Regularization</strong> — optional longitudinal pull of the solution toward a reference (GNSS) pose.</li>
+<li><strong><code>MatchScratch</code></strong> — the reused per-align workspace + last result; kept per task/thread.</li>
+<li><strong><code>ArcSwap</code> / rcu</strong> — the lock-free engine-state double-buffer; read-copy-update publishes a new
+state atomically.</li>
+<li><strong>WCET</strong> — worst-case execution time; the bounded contract on the align path.</li>
+<li><strong>Host ports</strong> — the <code>MapSource</code> / <code>OutputSink</code> / <code>Clock</code> traits the core is generic over.</li>
+<li><strong><code>AwHost</code></strong> — the C-ABI vtable adapter of the Host ports (ROS side effects).</li>
+<li><strong>TPE</strong> — Tree-Structured Parzen Estimator; the align-service pose-search sampler.</li>
+<li><strong>Oscillation</strong> — consecutive direction inversions over the iteration trajectory; a local-minimum
+stop still counts as converged past a threshold.</li>
+<li><strong>No-ground</strong> — scores/clouds computed with ground points filtered (a diagnostic variant).</li>
+<li><strong>Track A / Track B</strong> — the std/ROS build vs the <code>no_std</code> kernel build.</li>
+<li><strong><code>NDT_USE_RUST</code></strong> — the CMake option selecting the Rust backend over the legacy C++ engine.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="parameter-reference"><a class="header" href="#parameter-reference">Parameter reference</a></h1>
+<p>The node's ROS parameters, from <code>config/ndt_scan_matcher.param.yaml</code> (defaults shown). The package
+<code>README.md</code> and <code>schema/</code> are the authoritative, exhaustive reference — this table is the working
+subset most relevant to the port.</p>
+<h2 id="frame"><a class="header" href="#frame"><code>frame</code></a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Parameter</th><th>Default</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>base_frame</code></td><td><code>base_link</code></td><td>vehicle reference frame</td></tr>
+<tr><td><code>ndt_base_frame</code></td><td><code>ndt_base_link</code></td><td>NDT reference frame</td></tr>
+<tr><td><code>map_frame</code></td><td><code>map</code></td><td>map frame</td></tr>
+</tbody></table>
+</div>
+<h2 id="sensor_points"><a class="header" href="#sensor_points"><code>sensor_points</code></a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Parameter</th><th>Default</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>timeout_sec</code></td><td>1.0</td><td>max stamp difference between now and the sensor cloud [s]</td></tr>
+<tr><td><code>required_distance</code></td><td>10.0</td><td>min max-range of the input cloud, else skip matching [m]</td></tr>
+</tbody></table>
+</div>
+<h2 id="ndt"><a class="header" href="#ndt"><code>ndt</code></a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Parameter</th><th>Default</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>trans_epsilon</code></td><td>0.01</td><td>convergence tolerance between consecutive transforms</td></tr>
+<tr><td><code>step_size</code></td><td>0.1</td><td>More-Thuente line-search max step</td></tr>
+<tr><td><code>resolution</code></td><td>2.0</td><td>voxel-grid resolution [m]</td></tr>
+<tr><td><code>max_iterations</code></td><td>30</td><td>optimizer iteration cap</td></tr>
+<tr><td><code>num_threads</code></td><td>4</td><td>derivative-reduction worker count (<code>&gt;1</code> ⇒ parallel; sizes the global pool — see <a href="appendix/../start/features.html#parallelism-and-worker-threads">features</a>)</td></tr>
+<tr><td><code>regularization.enable</code></td><td>false</td><td>enable longitudinal regularization</td></tr>
+<tr><td><code>regularization.scale_factor</code></td><td>0.01</td><td>regularization strength</td></tr>
+</tbody></table>
+</div>
+<h2 id="initial_pose_estimation-align-service"><a class="header" href="#initial_pose_estimation-align-service"><code>initial_pose_estimation</code> (align service)</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Parameter</th><th>Default</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>particles_num</code></td><td>200</td><td>TPE particles for the initial-pose search</td></tr>
+<tr><td><code>n_startup_trials</code></td><td>100</td><td>TPE random startup trials (≤ <code>particles_num</code>)</td></tr>
+</tbody></table>
+</div>
+<h2 id="validation"><a class="header" href="#validation"><code>validation</code></a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Parameter</th><th>Default</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>initial_pose_timeout_sec</code></td><td>1.0</td><td>max stamp diff between initial pose and cloud [s]</td></tr>
+<tr><td><code>initial_pose_distance_tolerance_m</code></td><td>10.0</td><td>max distance between the two interpolation poses [m]</td></tr>
+<tr><td><code>initial_to_result_distance_tolerance_m</code></td><td>3.0</td><td>max initial→result distance [m]</td></tr>
+<tr><td><code>critical_upper_bound_exe_time_ms</code></td><td>100.0</td><td>exec time above which matching is deemed failing [ms]</td></tr>
+<tr><td><code>skipping_publish_num</code></td><td>5</td><td>consecutive rejects tolerated</td></tr>
+</tbody></table>
+</div>
+<h2 id="score_estimation"><a class="header" href="#score_estimation"><code>score_estimation</code></a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Parameter</th><th>Default</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>converged_param_type</code></td><td>1</td><td>gate: 0 = TP, 1 = NVTL</td></tr>
+<tr><td><code>converged_param_transform_probability</code></td><td>3.0</td><td>TP threshold (type 0)</td></tr>
+<tr><td><code>converged_param_nearest_voxel_transformation_likelihood</code></td><td>2.3</td><td>NVTL threshold (type 1)</td></tr>
+<tr><td><code>no_ground_points.enable</code></td><td>false</td><td>also score on the no-ground cloud</td></tr>
+</tbody></table>
+</div>
+<p>The <code>covariance.*</code> group (estimation mode, scale, softmax temperature, configured 6×6, XY search
+offsets) drives <a href="appendix/../arch/covariance.html">covariance estimation</a>; see the README/schema for its full
+list. Each of these maps to a Rust engine setter (see <a href="appendix/../arch/engine-state.html">Engine state</a>).</p>
+<blockquote>
+<p>Source: <code>config/ndt_scan_matcher.param.yaml</code>, <code>config/ndt_scan_matcher.schema.json</code>, the package
+<code>README.md</code>.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="module-index"><a class="header" href="#module-index">Module index</a></h1>
+<p>One line per Rust source module (<code>autoware_ndt_scan_matcher_rs/src/</code>).</p>
+<h2 id="core-algorithm-portable-no_std"><a class="header" href="#core-algorithm-portable-no_std">Core algorithm (portable, <code>no_std</code>)</a></h2>
+<ul>
+<li><code>lib.rs</code> — crate root, feature gating, <code>nalgebra</code> re-export, C-ABI smoke/thread-pool shims.</li>
+<li><code>engine.rs</code> — persistent <code>NdtEngine</code> handle, <code>MatchScratch</code>, config/map/align API + object-level FFI.</li>
+<li><code>ndt.rs</code> — <code>align</code>, derivative assembly, <code>NdtParams</code> / <code>AlignResult</code> / <code>AlignWorkspace</code>.</li>
+<li><code>derivatives.rs</code> — angular + per-point score/gradient/Hessian kernels.</li>
+<li><code>voxel_grid.rs</code> / <code>kdtree.rs</code> — target voxel map + spatial index.</li>
+<li><code>convergence.rs</code> — the pure convergence verdict.</li>
+<li><code>covariance.rs</code> / <code>cov_estimate.rs</code> — pose-covariance math + the four estimation modes.</li>
+<li><code>transform.rs</code> — SE3 transforms, Gauss constants, euler↔matrix.</li>
+<li><code>tpe.rs</code> — Tree-Structured Parzen Estimator.</li>
+<li><code>pose_buffer.rs</code> — time-ordered pose interpolation buffer (<code>SmartPoseBuffer</code> port).</li>
+<li><code>helper.rs</code> — pure C++ helper ports (<code>rotate_covariance</code>, <code>count_oscillation</code>).</li>
+</ul>
+<h2 id="ports--orchestration-portable"><a class="header" href="#ports--orchestration-portable">Ports &amp; orchestration (portable)</a></h2>
+<ul>
+<li><code>host.rs</code> — the <code>MapSource</code> / <code>OutputSink</code> / <code>Clock</code> / <code>Host</code> traits + result types.</li>
+<li><code>scan_matcher.rs</code> — <code>ScanMatcher</code> over the Host ports (+ <code>apply_map_update</code>).</li>
+</ul>
+<h2 id="ffi-boundary"><a class="header" href="#ffi-boundary">FFI boundary</a></h2>
+<ul>
+<li><code>ffi_ptr.rs</code> — audited raw-pointer helpers + guard macros (core + alloc).</li>
+<li><code>ffi.rs</code> — panic-containment boundary + <code>AwStatus</code>/<code>Error</code> (std).</li>
+<li><code>ffi_host.rs</code> — the <code>AwHost</code> ROS side-effects vtable + <code>AwStr</code>/<code>AwPose</code> (std).</li>
+</ul>
+<h2 id="std-ros-node-shell"><a class="header" href="#std-ros-node-shell"><code>std</code> ROS node shell</a></h2>
+<ul>
+<li><code>node.rs</code> — thin pose/trigger callbacks + convergence FFI.</li>
+<li><code>node_handle.rs</code> — the opaque <code>NdtScanMatcherRs</code> handle, <code>Params</code> / <code>AwNdtParams</code>, node state.</li>
+<li><code>node_map_update.rs</code> — the map-source vtable + <code>apply_map_update</code> glue.</li>
+<li><code>node_align_service.rs</code> — the align-service decisions + Rust-owned TPE search + trace ABI.</li>
+<li><code>sensor_points.rs</code> — the sensor-callback prologue (decode / TF / transform / validation).</li>
+</ul>
+<h2 id="generated"><a class="header" href="#generated">Generated</a></h2>
+<ul>
+<li><code>ros_msgs</code> — bindgen <code>geometry_msgs</code> C structs (<code>ros</code> feature; allow-listed).</li>
+</ul>
+<blockquote>
+<p>Source: the crate <code>src/</code> module docs.</p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="references"><a class="header" href="#references">References</a></h1>
+<h2 id="project"><a class="header" href="#project">Project</a></h2>
+<ul>
+<li>Autoware Core: <a href="https://github.com/autowarefoundation/autoware">https://github.com/autowarefoundation/autoware</a></li>
+<li>The package <code>README.md</code> — node I/O, parameters, and the regularization derivation.</li>
+<li>The crate rustdoc (<code>cargo doc --no-deps</code>) and the per-module docs in <code>src/</code>.</li>
+<li>Upstream fix: <code>autoware_core</code> PR #1217 — the NDT <code>h_ang</code> "d1" pitch² sign correction (see
+<a href="appendix/../port/divergences.html">Divergences from upstream</a>).</li>
+</ul>
+<h2 id="ndt-algorithm"><a class="header" href="#ndt-algorithm">NDT algorithm</a></h2>
+<ul>
+<li>P. Biber and W. Straßer, "The Normal Distributions Transform: a new approach to laser scan
+matching," IROS 2003.</li>
+<li>M. Magnusson, "The Three-Dimensional Normal-Distributions Transform — an Efficient Representation
+for Registration, Surface Analysis, and Loop Detection," PhD thesis, Örebro University, 2009.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="mermaid.min.js"></script>
+        <script src="mermaid-init.js"></script>
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>
