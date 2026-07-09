@@ -35,8 +35,8 @@
 
 use std::time::Instant;
 
-use autoware_ndt_scan_matcher_rs::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
-use autoware_ndt_scan_matcher_rs::voxel_grid::VoxelGridMap;
+use autoware_ndt_rs::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
+use autoware_ndt_rs::voxel_grid::VoxelGridMap;
 use nalgebra::Matrix4;
 
 const FRAMES: usize = 20_000;

@@ -33,10 +33,8 @@
     reason = "example code: synthetic data construction + nalgebra fixed-index reads + prints"
 )]
 
-use autoware_ndt_scan_matcher_rs::host::{
-    Clock, MapDelta, MapSource, MapTile, MatchResult, OutputSink,
-};
-use autoware_ndt_scan_matcher_rs::scan_matcher::{MatchScratch, ScanMatcher};
+use autoware_ndt_rs::host::{Clock, MapDelta, MapSource, MapTile, MatchResult, OutputSink};
+use autoware_ndt_rs::scan_matcher::{MatchScratch, ScanMatcher};
 use nalgebra::Matrix4;
 
 /// A deterministic dense cluster around `(cx, cy, cz)` (>min_points, non-degenerate covariance, all

@@ -36,11 +36,11 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use autoware_ndt_scan_matcher_rs::ndt::{
+use autoware_ndt_rs::ndt::{
     AlignResult, AlignWorkspace, NdtParams, ScoreConfig, align, compute_derivatives,
 };
-use autoware_ndt_scan_matcher_rs::transform::{gauss_constants, transform_point};
-use autoware_ndt_scan_matcher_rs::voxel_grid::VoxelGridMap;
+use autoware_ndt_rs::transform::{gauss_constants, transform_point};
+use autoware_ndt_rs::voxel_grid::VoxelGridMap;
 use nalgebra::{Matrix4, Vector3, Vector6};
 
 /// A pass-through allocator that counts allocations while `ENABLED` is set. The default

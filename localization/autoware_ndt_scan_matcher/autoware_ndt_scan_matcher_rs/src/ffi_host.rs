@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! The ROS **side-effects host vtable** (`AwHost`) — the C-ABI adapter that realizes the portable
-//! [`crate::host`] `Host` seam for the rclcpp node. A callback body drives ROS side effects
+//! [`autoware_ndt_rs::host`] `Host` seam for the rclcpp node. A callback body drives ROS side effects
 //! (clock, logging, TF lookup, and publishing) through this vtable
 //! of C function pointers over an opaque `ctx` (the `NDTScanMatcher *`), instead of touching rclcpp
 //! directly. Side-effects only; no node state (that lives Rust-side on the handle). Field order must

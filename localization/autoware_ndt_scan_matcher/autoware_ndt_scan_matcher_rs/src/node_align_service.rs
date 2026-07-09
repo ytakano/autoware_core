@@ -17,18 +17,13 @@
 //! Align-service decision, response, trace, and Rust-owned search-loop support for the ROS node
 //! shell. C++ still owns service-specific ROS side effects for the current migration slice.
 
-#[cfg(feature = "std")]
 use nalgebra::{Matrix3, Matrix4, Quaternion, Rotation3, UnitQuaternion, Vector6};
 
-#[cfg(feature = "std")]
-use crate::engine::{NdtEngine, run_align};
-#[cfg(feature = "std")]
 use crate::ffi_host::AwPose;
 use crate::ffi_ptr::{ffi_mut, ffi_mut_slice, ffi_ref, ffi_slice};
-#[cfg(feature = "std")]
 use crate::node_handle::NdtScanMatcherRs;
-#[cfg(feature = "std")]
-use crate::tpe::{Direction, TreeStructuredParzenEstimator, Trial};
+use autoware_ndt_rs::engine::{NdtEngine, run_align};
+use autoware_ndt_rs::tpe::{Direction, TreeStructuredParzenEstimator, Trial};
 
 /// Initial pose TF lookup failed.
 pub const NDT_ALIGN_SERVICE_STATUS_TRANSFORM_UNAVAILABLE: i32 = 0;
@@ -215,7 +210,6 @@ pub struct AwNdtAlignServiceSearchSummaryInput {
 /// `position` and `orientation` are the transformed initial pose in map frame. `covariance` is the
 /// request covariance in row-major 6x6 order. `source_points` addresses `source_points_len` base-link
 /// XYZ points as `3 * len` f32 values.
-#[cfg(feature = "std")]
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct AwNdtAlignServiceSearchInput {
@@ -234,7 +228,6 @@ pub struct AwNdtAlignServiceSearchInput {
 /// The caller owns the particle arrays. Rust writes `particles_len` entries into each array on
 /// success. Particle poses are used C++-side to preserve existing service-specific marker/cloud
 /// publishing while Rust owns the search algorithm and best-particle selection.
-#[cfg(feature = "std")]
 #[repr(C)]
 pub struct AwNdtAlignServiceSearchOutput {
     pub status: i32,
@@ -636,12 +629,9 @@ pub fn append_response_trace(
     write_trace_event(trace, &make_response_trace_event(input));
 }
 
-#[cfg(feature = "std")]
 const ALIGN_SERVICE_SEARCH_TPE_SEED: u64 = 0;
-#[cfg(feature = "std")]
 const ALIGN_SERVICE_MARKER_PUBLISH_NUM: i64 = 20;
 
-#[cfg(feature = "std")]
 fn matrix4_to_aw_pose(m: &Matrix4<f32>) -> AwPose {
     let rot = Matrix3::new(
         f64::from(m[(0, 0)]),
@@ -666,7 +656,6 @@ fn matrix4_to_aw_pose(m: &Matrix4<f32>) -> AwPose {
     }
 }
 
-#[cfg(feature = "std")]
 fn matrix4f_to_matrix4d(m: &Matrix4<f32>) -> Matrix4<f64> {
     Matrix4::new(
         f64::from(m[(0, 0)]),
@@ -688,7 +677,6 @@ fn matrix4f_to_matrix4d(m: &Matrix4<f32>) -> Matrix4<f64> {
     )
 }
 
-#[cfg(feature = "std")]
 fn initial_rpy(input: &AwNdtAlignServiceSearchInput) -> Option<(f64, f64)> {
     let q = Quaternion::new(
         input.orientation[3],
@@ -701,7 +689,6 @@ fn initial_rpy(input: &AwNdtAlignServiceSearchInput) -> Option<(f64, f64)> {
     Some((roll, pitch))
 }
 
-#[cfg(feature = "std")]
 fn search_input_is_finite(input: &AwNdtAlignServiceSearchInput) -> bool {
     input.position.iter().all(|v| v.is_finite())
         && input.orientation.iter().all(|v| v.is_finite())
@@ -709,7 +696,6 @@ fn search_input_is_finite(input: &AwNdtAlignServiceSearchInput) -> bool {
         && input.reliable_score_threshold.is_finite()
 }
 
-#[cfg(feature = "std")]
 fn marker_publish_count(particles_num: i64) -> i64 {
     let publish_interval = (particles_num / ALIGN_SERVICE_MARKER_PUBLISH_NUM).max(1);
     let mut count = 0_i64;
@@ -724,7 +710,6 @@ fn marker_publish_count(particles_num: i64) -> i64 {
     count
 }
 
-#[cfg(feature = "std")]
 fn set_search_invalid(out: &mut AwNdtAlignServiceSearchOutput) {
     out.status = NDT_ALIGN_SERVICE_STATUS_INVALID_INPUT;
     out.valid = 0;
@@ -738,7 +723,6 @@ fn set_search_invalid(out: &mut AwNdtAlignServiceSearchOutput) {
     out.cloud_publish_count = 0;
 }
 
-#[cfg(feature = "std")]
 #[expect(
     clippy::indexing_slicing,
     reason = "fixed ABI covariance diagonals and caller-sized output buffers are validated before use"
@@ -790,7 +774,7 @@ fn run_align_service_search_impl(
     )
     .ok()?;
 
-    let conv = crate::engine::ConvergenceParams {
+    let conv = autoware_ndt_rs::engine::ConvergenceParams {
         converged_param_type: 1,
         converged_param_transform_probability: 0.0,
         converged_param_nearest_voxel_transformation_likelihood: input.reliable_score_threshold,
@@ -806,7 +790,7 @@ fn run_align_service_search_impl(
     for i in 0..particles_num {
         let tpe_input = tpe.get_next_input().ok()?;
         let tpe_vec = Vector6::from(tpe_input);
-        let guess = crate::transform::se3_matrix_f32(&tpe_vec);
+        let guess = autoware_ndt_rs::transform::se3_matrix_f32(&tpe_vec);
         let outcome = run_align(engine, &guess, source, &conv);
         let initial_pose = matrix4_to_aw_pose(&guess);
         let result_pose = matrix4_to_aw_pose(&outcome.pose);
@@ -820,7 +804,8 @@ fn run_align_service_search_impl(
             best_iteration = outcome.iteration_num;
             best_pose = result_pose;
         }
-        let result_euler = crate::transform::matrix_to_euler(&matrix4f_to_matrix4d(&outcome.pose));
+        let result_euler =
+            autoware_ndt_rs::transform::matrix_to_euler(&matrix4f_to_matrix4d(&outcome.pose));
         tpe.add_trial(Trial {
             input: result_euler.into(),
             score: f64::from(outcome.transform_probability),
@@ -860,7 +845,6 @@ fn run_align_service_search_impl(
 /// `engine`, `input`, and `out` must be valid live pointers. `input.source_points` must address
 /// `3 * source_points_len` readable `f32` values. Output arrays inside `out` must each address
 /// `out.particles_capacity` writable elements and must not overlap mutably.
-#[cfg(feature = "std")]
 #[expect(
     unsafe_code,
     reason = "C ABI boundary; reads source cloud and writes caller-owned particle buffers"
@@ -914,7 +898,6 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_run_align_service_sea
     NDT_ALIGN_SERVICE_STATUS_ALIGNED
 }
 
-#[cfg(feature = "std")]
 #[expect(
     clippy::indexing_slicing,
     reason = "chunks_exact_mut(3) yields fixed three-element chunks for xyz writes"
@@ -953,7 +936,6 @@ fn copy_source_points_to_output(
 /// must each address `out.particles_capacity` writable elements and must not overlap mutably. If
 /// `out.source_points_capacity > 0`, `out.source_points` must address `3 * capacity` writable `f32`
 /// values for the optional caller-owned source snapshot copy.
-#[cfg(feature = "std")]
 #[expect(
     unsafe_code,
     reason = "C ABI boundary; snapshots Rust node state and writes caller-owned buffers"
@@ -2083,7 +2065,11 @@ mod search_loop_tests {
         assert_eq!(out.marker_publish_count, marker_publish_count(5));
         // best_score is the max over the per-particle scores (the impl selects by `>`, so it is
         // bit-identical to one of them).
-        let max_bits = sc.iter().copied().fold(f64::NEG_INFINITY, f64::max).to_bits();
+        let max_bits = sc
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max)
+            .to_bits();
         assert_eq!(out.best_score.to_bits(), max_bits);
         // Fixed TPE seed + deterministic engine => identical result across runs.
         let (out2, _) = run();
@@ -2117,13 +2103,18 @@ mod search_loop_tests {
 
         // particles_num <= 0
         assert!(
-            call(&search_input(source.len(), 0), &source, &mut ip, &mut rp, &mut sc, &mut it)
-                .is_none()
+            call(
+                &search_input(source.len(), 0),
+                &source,
+                &mut ip,
+                &mut rp,
+                &mut sc,
+                &mut it
+            )
+            .is_none()
         );
         // empty source
-        assert!(
-            call(&search_input(0, 5), &[], &mut ip, &mut rp, &mut sc, &mut it).is_none()
-        );
+        assert!(call(&search_input(0, 5), &[], &mut ip, &mut rp, &mut sc, &mut it).is_none());
         // non-finite position
         let mut bad_pos = search_input(source.len(), 5);
         bad_pos.position[0] = f64::NAN;

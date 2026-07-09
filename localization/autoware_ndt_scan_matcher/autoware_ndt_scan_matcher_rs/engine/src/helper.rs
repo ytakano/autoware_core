@@ -164,20 +164,6 @@ pub fn count_oscillation(positions: &[[f64; 3]]) -> i32 {
     }))
 }
 
-/// Zero-copy ROS path: iterate `geometry_msgs::Pose` in place (no flattening / allocation),
-/// reading only `position.{x,y,z}`. `windows(3)` over `&[Pose]` is a view, not a copy.
-#[cfg(feature = "ros")]
-#[must_use]
-pub fn count_oscillation_poses(poses: &[crate::ros_msgs::geometry_msgs__msg__Pose]) -> i32 {
-    fn position(pose: &crate::ros_msgs::geometry_msgs__msg__Pose) -> [f64; 3] {
-        [pose.position.x, pose.position.y, pose.position.z]
-    }
-    run_oscillation(poses.windows(3).filter_map(|w| match w {
-        [a, b, c] => Some(classify_step(position(a), position(b), position(c))),
-        _ => None,
-    }))
-}
-
 #[cfg(test)]
 #[allow(
     clippy::indexing_slicing,
@@ -269,28 +255,5 @@ mod tests {
     fn count_oscillation_resets_on_zero_length_step() {
         let poses: Vec<[f64; 3]> = [0.0, 1.0, 0.0, 0.0, 1.0].iter().map(|&x| xyz(x)).collect();
         assert_eq!(count_oscillation(&poses), 1);
-    }
-
-    // The zero-copy Pose path must agree with the pure path on the same positions.
-    #[cfg(feature = "ros")]
-    #[test]
-    fn count_oscillation_poses_matches_pure_path() {
-        let pose = |x: f64| {
-            let mut p = crate::ros_msgs::geometry_msgs__msg__Pose::default();
-            p.position.x = x;
-            p
-        };
-        for xs in [
-            vec![0.0, 1.0, 0.0, 1.0, 0.0],
-            vec![0.0, 1.0, 2.0, 3.0, 4.0],
-            vec![0.0, 1.0, 0.0, 1.0, 2.0, 1.0],
-        ] {
-            let positions: Vec<[f64; 3]> = xs.iter().map(|&x| xyz(x)).collect();
-            let poses: Vec<_> = xs.iter().map(|&x| pose(x)).collect();
-            assert_eq!(
-                count_oscillation_poses(&poses),
-                count_oscillation(&positions)
-            );
-        }
     }
 }

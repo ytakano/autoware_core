@@ -23,9 +23,6 @@ use nalgebra::{
     Isometry3, Matrix3, Matrix4, Matrix6, Quaternion, Rotation3, Translation3, UnitQuaternion,
 };
 
-use crate::engine::{
-    ConvergenceParams, CovEstimationParams, NdtEngine, estimate_pose_covariance, run_align,
-};
 use crate::ffi_host::{
     AwFloat32Topic, AwHost, AwInt32Topic, AwPointCloudTopic, AwPose, AwPoseArrayTopic, AwPoseTopic,
     LOG_ERROR, LOG_WARN,
@@ -33,6 +30,9 @@ use crate::ffi_host::{
 use crate::ffi_ptr::{self, ffi_mut, ffi_mut_slice, ffi_ref, ffi_slice};
 use crate::node::{DIAGNOSTIC_ERROR, DIAGNOSTIC_WARN, Diagnostics};
 use crate::node_handle::NdtScanMatcherRs;
+use autoware_ndt_rs::engine::{
+    ConvergenceParams, CovEstimationParams, NdtEngine, estimate_pose_covariance, run_align,
+};
 
 /// `sensor_msgs::msg::PointField::FLOAT32` — the only xyz datatype the fast path decodes.
 const POINT_FIELD_FLOAT32: u8 = 7;

@@ -39,10 +39,8 @@
 
 use std::sync::Arc;
 
-use autoware_ndt_scan_matcher_rs::host::{
-    Clock, MapDelta, MapSource, MapTile, MatchResult, OutputSink,
-};
-use autoware_ndt_scan_matcher_rs::scan_matcher::{MatchScratch, ScanMatcher};
+use autoware_ndt_rs::host::{Clock, MapDelta, MapSource, MapTile, MatchResult, OutputSink};
+use autoware_ndt_rs::scan_matcher::{MatchScratch, ScanMatcher};
 use nalgebra::Matrix4;
 
 /// Poll a future to completion with a no-op waker — the minimal executor a no_std scheduler provides.

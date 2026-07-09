@@ -41,7 +41,7 @@
 use std::sync::Arc;
 use std::thread;
 
-use autoware_ndt_scan_matcher_rs::engine::{MatchScratch, NdtEngine};
+use autoware_ndt_rs::engine::{MatchScratch, NdtEngine};
 use nalgebra::Matrix4;
 
 fn dense_cluster(cx: f32, cy: f32, cz: f32) -> Vec<[f32; 3]> {

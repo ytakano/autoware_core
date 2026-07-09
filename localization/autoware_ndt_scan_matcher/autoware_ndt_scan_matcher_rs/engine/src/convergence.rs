@@ -14,10 +14,10 @@
 
 //! The NDT convergence decision — pure, `no_std`, allocation-free.
 //!
-//! Ported verbatim from `callback_sensor_points_main`. Lives here (not in the std-gated
-//! [`crate::node`] FFI module) so the portable [`crate::scan_matcher::ScanMatcher`] can produce the
-//! same verdict on bare-metal. The ROS side reuses it via the `Aw*` `#[repr(C)]` mirrors + the
-//! `extern "C"` shim in [`crate::node`].
+//! Ported verbatim from `callback_sensor_points_main`. Lives here (not in the node crate's FFI
+//! layer) so the portable [`crate::scan_matcher::ScanMatcher`] can produce the same verdict on
+//! bare-metal. The ROS side reuses it via the `Aw*` `#[repr(C)]` mirrors + the `extern "C"` shim in
+//! the node crate.
 
 /// Inputs to the NDT convergence decision: one alignment result's relevant scalars plus the
 /// `score_estimation` params. `oscillation_num` is precomputed by the caller (it is already the
@@ -81,7 +81,7 @@ const OSCILLATION_NUM_THRESHOLD: i32 = 10;
 /// # Examples
 ///
 /// ```
-/// use autoware_ndt_scan_matcher_rs::convergence::{evaluate_convergence, ConvergenceInput};
+/// use autoware_ndt_rs::convergence::{evaluate_convergence, ConvergenceInput};
 ///
 /// let verdict = evaluate_convergence(&ConvergenceInput {
 ///     iteration_num: 5,
