@@ -40,10 +40,14 @@ parallel = ["std", "dep:rayon"]
 # shipping hot path is untouched. No extra dependencies.
 wcet-count = []
 
-# The worst-input search needs the cost counters as its fitness; without the feature the example
-# has no meaningful fitness, so it is not built at all.
+# The worst-input searches need the cost counters as their fitness; without the feature the
+# examples have no meaningful fitness, so they are not built at all.
 [[example]]
 name = "wcet_search"
+required-features = ["wcet-count"]
+
+[[example]]
+name = "wcet_search_legal"
 required-features = ["wcet-count"]
 
 [dependencies]
