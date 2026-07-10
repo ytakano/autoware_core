@@ -799,7 +799,13 @@ fn run_align_service_search_impl(
         result_poses[i] = result_pose;
         scores[i] = score;
         iterations[i] = outcome.iteration_num;
-        if score > best_score {
+        // Rust-only degenerate guard (documented divergence): a particle whose result pose is
+        // non-finite must never become `best_pose` (the returned/published service pose), even if
+        // its score is finite. On the valid domain every candidate pose is finite, so the winner
+        // selection is unchanged; the NaN-score case was already excluded by `score > best_score`.
+        let pose_finite = result_pose.position.iter().all(|v| v.is_finite())
+            && result_pose.orientation.iter().all(|v| v.is_finite());
+        if pose_finite && score > best_score {
             best_score = score;
             best_iteration = outcome.iteration_num;
             best_pose = result_pose;

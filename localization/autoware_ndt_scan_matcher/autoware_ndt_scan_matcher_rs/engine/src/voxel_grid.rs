@@ -124,7 +124,7 @@ impl VoxelGrid {
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
         clippy::allow_attributes,
-        reason = "control-plane map build: nalgebra f64 math; i64 voxel-index arithmetic bounded by the int32 voxel-count guard; deliberate count casts; d ∈ 0..3 indexing of fixed [_; 3]"
+        reason = "control-plane map build: nalgebra f64 matrix math only (all i64 voxel-index arithmetic is explicit checked_*); deliberate count casts; d ∈ 0..3 indexing of fixed [_; 3]"
     )]
     pub fn build(points: &[[f32; 3]], leaf_size: [f64; 3], min_points: i32, eig_mult: f64) -> Self {
         let inverse_leaf_size = [1.0 / leaf_size[0], 1.0 / leaf_size[1], 1.0 / leaf_size[2]];
@@ -160,13 +160,17 @@ impl VoxelGrid {
             return empty;
         }
 
-        // Reject if the voxel count would overflow int32 (matches the C++ guard).
+        // Reject if the voxel count would overflow int32 (matches the C++ guard). All i64 span
+        // math is checked_* (integer arithmetic must never rely on a lint suppression): an
+        // overflowing span degrades to the same `empty` grid the voxel-count guard produces.
         let mut div_b = [0_i64; 3];
         let mut voxel_count: i64 = 1;
         for d in 0..3 {
-            let span = floor_i64(max_p[d] * inverse_leaf_size[d])
-                - floor_i64(min_p[d] * inverse_leaf_size[d])
-                + 1;
+            let hi = floor_i64(max_p[d] * inverse_leaf_size[d]);
+            let lo = floor_i64(min_p[d] * inverse_leaf_size[d]);
+            let Some(span) = hi.checked_sub(lo).and_then(|s| s.checked_add(1)) else {
+                return empty;
+            };
             div_b[d] = span;
             match voxel_count.checked_mul(span) {
                 Some(v) if v <= i64::from(i32::MAX) => voxel_count = v,
@@ -179,7 +183,10 @@ impl VoxelGrid {
             floor_i64(min_p[1] * inverse_leaf_size[1]),
             floor_i64(min_p[2] * inverse_leaf_size[2]),
         ];
-        let div_mul = [1, div_b[0], div_b[0] * div_b[1]];
+        let Some(div_mul_2) = div_b[0].checked_mul(div_b[1]) else {
+            return empty;
+        };
+        let div_mul = [1, div_b[0], div_mul_2];
 
         let mut grid = Self {
             leaves: Vec::new(),

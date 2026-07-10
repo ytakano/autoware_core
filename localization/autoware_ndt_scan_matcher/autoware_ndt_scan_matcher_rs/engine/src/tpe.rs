@@ -100,11 +100,8 @@ impl SplitMix64 {
         Self { state: seed }
     }
 
-    #[allow(
-        clippy::arithmetic_side_effects,
-        clippy::allow_attributes,
-        reason = "SplitMix64 is defined by explicit wrapping integer arithmetic and shifts"
-    )]
+    // SplitMix64 is defined by explicit wrapping integer arithmetic and shifts; no suppression
+    // needed — `wrapping_*`, `>>`, and `^` never trip `arithmetic_side_effects`.
     fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
@@ -113,11 +110,8 @@ impl SplitMix64 {
         z ^ (z >> 31)
     }
 
-    #[allow(
-        clippy::arithmetic_side_effects,
-        clippy::allow_attributes,
-        reason = "floating-point scaling from u32 to [0, 1) cannot integer-overflow"
-    )]
+    // Shift + checked try_from + primitive-f64 division; none of these trip
+    // `arithmetic_side_effects`, so no suppression is needed.
     fn next_unit_f64(&mut self) -> Result<f64, Error> {
         let upper = u32::try_from(self.next_u64() >> 32).map_err(|_| Error::ConversionFailed)?;
         Ok(f64::from(upper) / UNIT_U32_SCALE)

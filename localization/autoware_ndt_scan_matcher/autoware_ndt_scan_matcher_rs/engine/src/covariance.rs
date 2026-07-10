@@ -36,7 +36,27 @@ fn to_row_major(m: &Matrix2<f64>) -> [f64; 4] {
 }
 
 /// Temperature-scaled softmax of `scores` written into `out` (must be the same length).
+///
+/// A non-positive or non-finite `temperature` falls back to **uniform weights** (`1/n`) instead of
+/// dividing by zero — the C++ (`estimate_covariance.cpp` `calc_weight_vec`) divides unguarded and
+/// would poison the weights with NaN/Inf. Documented divergence (degenerate config only); see
+/// `doc/book/src/port/divergences.md`. Valid temperatures are bit-identical to C++.
 pub fn calc_weight_vec(scores: &[f64], temperature: f64, out: &mut [f64]) {
+    if !(temperature > 0.0 && temperature.is_finite()) {
+        let n = scores.len().min(out.len());
+        if n > 0 {
+            #[expect(
+                clippy::cast_precision_loss,
+                clippy::as_conversions,
+                reason = "n is a small pose-candidate count, exactly representable in f64"
+            )]
+            let w = 1.0 / (n as f64);
+            for slot in out.iter_mut() {
+                *slot = w;
+            }
+        }
+        return;
+    }
     let max_score = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let mut sum = 0.0;
     for (slot, &s) in out.iter_mut().zip(scores.iter()) {
@@ -151,6 +171,30 @@ pub fn adjust_diagonal_covariance(
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn calc_weight_vec_degenerate_temperature_is_uniform() {
+        // Degenerate temperature (C++-unguarded /temperature): uniform 1/n fallback, no NaN/Inf.
+        let scores = [1.0, 2.0, 3.0, 4.0];
+        for t in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let mut out = [-1.0_f64; 4];
+            calc_weight_vec(&scores, t, &mut out);
+            for &w in &out {
+                assert_eq!(w, 0.25, "temperature {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn calc_weight_vec_valid_temperature_unchanged() {
+        // The guard must not perturb the valid domain: softmax normalized, best score dominant.
+        let scores = [1.0, 2.0, 3.0, 4.0];
+        let mut out = [0.0_f64; 4];
+        calc_weight_vec(&scores, 0.1, &mut out);
+        let sum: f64 = out.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-12);
+        assert!(out[3] > out[0]);
+    }
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9

@@ -738,7 +738,13 @@ pub fn align(
             dir = -dir;
         }
         let step_min = params.trans_epsilon / 2.0;
-        let a_t = delta_norm.clamp(step_min, params.step_size);
+        // C++ parity: computeStepLengthMT applies `std::min(a_t, step_max)` THEN
+        // `std::max(a_t, step_min)` (multigrid_ndt_omp_impl.hpp:953-955) — min-then-max, never
+        // panicking. `f64::clamp` would panic when a misconfigured `trans_epsilon / 2 > step_size`
+        // (or a NaN bound) makes min > max; min/max yields `step_min` there, exactly like C++
+        // (PORT-QUIRK, resolved: see doc/book/src/port/divergences.md). Rust `f64::min`/`f64::max`
+        // also match std::min/std::max on single-NaN operands (both return the non-NaN side).
+        let a_t = delta_norm.min(params.step_size).max(step_min);
 
         let x_t = p + dir * a_t;
         d = derivatives_at(map, source, &x_t, &cfg, ws, parallel);
@@ -1148,6 +1154,31 @@ mod tests {
             outlier_ratio: 0.55,
             regularization: None,
             num_threads: 1,
+        }
+    }
+
+    #[test]
+    fn align_degenerate_step_bounds_do_not_panic() {
+        // trans_epsilon / 2 > step_size makes f64::clamp's min > max (a panic); the C++-parity
+        // min-then-max (multigrid_ndt_omp_impl.hpp:953-955) instead yields step_min. The align
+        // must complete without panicking and produce a finite pose.
+        let (map, source) = spread_target();
+        let mut params = tight_params();
+        params.step_size = 0.01;
+        params.trans_epsilon = 1.0; // step_min = 0.5 > step_size
+        params.max_iterations = 5;
+        let mut ws = AlignWorkspace::new();
+        let mut result = AlignResult::default();
+        align(
+            &map,
+            &source,
+            &Matrix4::identity(),
+            &params,
+            &mut ws,
+            &mut result,
+        );
+        for v in result.pose.iter() {
+            assert!(v.is_finite());
         }
     }
 

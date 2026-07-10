@@ -39,8 +39,26 @@ pub struct GaussConstants {
 
 /// Compute the Gaussian fitting constants. `outlier_ratio` defaults to 0.55 in Autoware;
 /// `resolution` is the voxel size (also the neighbor search radius).
+///
+/// Degenerate configs (`resolution <= 0`, `outlier_ratio` outside `(0, 1)`, or non-finite inputs)
+/// are clamped into the open valid domain before the C++-mirrored math runs, so `d1`/`d2`/`d3` are
+/// always finite (they feed every per-point score `exp`). The C++ (`computeTransformation` lines
+/// 229-233) is unguarded there: `resolution == 0` → `inf`, `outlier_ratio ∈ {0, 1}` → `log(0)`/NaN.
+/// Documented divergence — see `doc/book/src/port/divergences.md`; valid configs are untouched.
 #[must_use]
 pub fn gauss_constants(outlier_ratio: f64, resolution: f64) -> GaussConstants {
+    // Branch-only degenerate-config clamps (no effect on the valid domain; RT-safe).
+    const RATIO_EPS: f64 = 1e-6;
+    let outlier_ratio = if outlier_ratio.is_finite() {
+        outlier_ratio.clamp(RATIO_EPS, 1.0 - RATIO_EPS)
+    } else {
+        0.55 // Autoware default when the config is NaN/Inf.
+    };
+    let resolution = if resolution.is_finite() && resolution > 0.0 {
+        resolution
+    } else {
+        1.0 // safe positive fallback for a zero/negative/non-finite voxel size
+    };
     let gauss_c1 = 10.0 * (1.0 - outlier_ratio);
     let gauss_c2 = outlier_ratio / (resolution * resolution * resolution);
     let d3 = -libm::log(gauss_c2);
@@ -99,7 +117,10 @@ pub fn euler_to_matrix(p: &Vector6<f64>) -> Matrix4<f64> {
 pub fn matrix_to_euler(m: &Matrix4<f64>) -> Vector6<f64> {
     // For R = Rx(a)*Ry(b)*Rz(c): R[0][2] = sin(b); R[1][2] = -sin(a)cos(b); R[2][2] = cos(a)cos(b);
     // R[0][1] = -cos(b)sin(c); R[0][0] = cos(b)cos(c).
-    let pitch = libm::asin(m[(0, 2)]);
+    // Guard: FP error can push |m02| of a near-gimbal rotation just past 1, where asin returns NaN
+    // (C++ uses the atan2-based Eigen eulerAngles, which cannot NaN). Clamping to the asin domain
+    // only fires there — a documented divergence (doc/book/src/port/divergences.md).
+    let pitch = libm::asin(m[(0, 2)].clamp(-1.0, 1.0));
     let roll = libm::atan2(-m[(1, 2)], m[(2, 2)]);
     let yaw = libm::atan2(-m[(0, 1)], m[(0, 0)]);
     Vector6::new(m[(0, 3)], m[(1, 3)], m[(2, 3)], roll, pitch, yaw)
@@ -188,6 +209,52 @@ mod tests {
 
     fn close(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() <= tol
+    }
+
+    #[test]
+    fn gauss_constants_degenerate_configs_stay_finite() {
+        // Degenerate configs (C++-unguarded): each must yield finite d1/d2/d3.
+        for (outlier_ratio, resolution) in [
+            (0.0, 2.0),
+            (1.0, 2.0),
+            (0.55, 0.0),
+            (0.55, -1.0),
+            (f64::NAN, 2.0),
+            (0.55, f64::INFINITY),
+        ] {
+            let g = gauss_constants(outlier_ratio, resolution);
+            assert!(
+                g.d1.is_finite() && g.d2.is_finite() && g.d3.is_finite(),
+                "({outlier_ratio}, {resolution}) -> {g:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gauss_constants_valid_config_matches_raw_formula() {
+        // The guard must not perturb the valid domain: bit-identical to the raw C++ math.
+        let g = gauss_constants(0.55, 2.0);
+        let c1 = 10.0 * (1.0 - 0.55);
+        let c2 = 0.55 / (2.0 * 2.0 * 2.0);
+        let d3 = -libm::log(c2);
+        let d1 = -libm::log(c1 + c2) - d3;
+        let d2 = -2.0 * libm::log((-libm::log(c1 * libm::exp(-0.5) + c2) - d3) / d1);
+        assert_eq!(g.d1, d1);
+        assert_eq!(g.d2, d2);
+        assert_eq!(g.d3, d3);
+    }
+
+    #[test]
+    fn matrix_to_euler_clamps_asin_overshoot() {
+        // FP error can push |m02| past 1; the clamp keeps pitch finite (±π/2 at the boundary).
+        let mut m = Matrix4::<f64>::identity();
+        m[(0, 2)] = 1.0 + 1e-9;
+        let p = matrix_to_euler(&m);
+        assert!(p[4].is_finite());
+        assert_eq!(p[4], core::f64::consts::FRAC_PI_2);
+        m[(0, 2)] = -1.0 - 1e-9;
+        let p = matrix_to_euler(&m);
+        assert_eq!(p[4], -core::f64::consts::FRAC_PI_2);
     }
 
     // Oracle: an independent recomputation of eq. 6.8 using std transcendentals (the impl uses

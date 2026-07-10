@@ -275,20 +275,28 @@ pub struct AwSensorPointsMatchOutput {
 
 /// Build a 4x4 `f32` transform from a position + `[x, y, z, w]` quaternion (mirrors the C++
 /// `pose_to_matrix4f`: Affine3d from the pose, `cast<float>`).
+///
+/// Returns `None` for a zero-norm / non-finite quaternion — `from_quaternion` would normalize it
+/// into NaN (Rust-only degenerate guard, documented divergence: the caller treats it like a failed
+/// interpolation; see `doc/book/src/port/divergences.md`). Same `try_new` pattern as the
+/// align-service's `initial_rpy`.
 #[expect(
     clippy::as_conversions,
     clippy::cast_possible_truncation,
     reason = "deliberate f64->f32 of the interpolated guess pose, mirroring pose_to_matrix4f's cast<float>"
 )]
-fn pose_to_matrix4(position: &[f64; 3], orientation: &[f64; 4]) -> Matrix4<f32> {
-    let q = UnitQuaternion::from_quaternion(Quaternion::new(
-        orientation[3],
-        orientation[0],
-        orientation[1],
-        orientation[2],
-    ));
+fn pose_to_matrix4(position: &[f64; 3], orientation: &[f64; 4]) -> Option<Matrix4<f32>> {
+    let q = UnitQuaternion::try_new(
+        Quaternion::new(
+            orientation[3],
+            orientation[0],
+            orientation[1],
+            orientation[2],
+        ),
+        1e-12,
+    )?;
     let iso = Isometry3::from_parts(Translation3::new(position[0], position[1], position[2]), q);
-    iso.to_homogeneous().map(|v| v as f32)
+    Some(iso.to_homogeneous().map(|v| v as f32))
 }
 
 /// Row-major flatten of a 4x4 (nalgebra is column-major, so the transpose's column-major storage IS
@@ -459,7 +467,7 @@ fn aw_poses(poses: &[Matrix4<f32>]) -> alloc::vec::Vec<AwPose> {
     clippy::as_conversions,
     clippy::cast_possible_truncation,
     clippy::allow_attributes,
-    reason = "f64 geometry math + fixed-size nalgebra/array indexing + the documented f64->f32 regularization/pose casts of the ported middle"
+    reason = "float-only coverage: f64 geometry math + fixed-size nalgebra/array indexing + the documented f64->f32 regularization/pose casts of the ported middle (integer counters use saturating_*)"
 )]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_match(
@@ -505,8 +513,19 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_matc
         );
         return SM_INTERPOLATE_FAILED;
     };
+    // Rust-only degenerate guard (documented divergence): a zero-norm/non-finite interpolated
+    // quaternion cannot form a rotation, so treat it exactly like a failed interpolation. On the
+    // valid domain this branch never fires and the diagnostic order is unchanged.
+    let Some(initial_pose_matrix) = pose_to_matrix4(&interp.position, &interp.orientation) else {
+        d.add_bool("is_succeed_interpolate_initial_pose", false);
+        d.update_level(
+            DIAGNOSTIC_WARN,
+            "Interpolated initial pose has a degenerate (zero-norm or non-finite) orientation \
+             quaternion; skipping this scan.",
+        );
+        return SM_INTERPOLATE_FAILED;
+    };
     d.add_bool("is_succeed_interpolate_initial_pose", true);
-    let initial_pose_matrix = pose_to_matrix4(&interp.position, &interp.orientation);
 
     // regularization: interpolate the Rust-owned buffer and set it on the engine (else disable).
     if h.params.regularization_enable {
@@ -849,6 +868,7 @@ fn ns_to_sec(ns: i64) -> f64 {
     clippy::arithmetic_side_effects,
     clippy::as_conversions,
     clippy::cast_precision_loss,
+    clippy::unwrap_used,
     clippy::allow_attributes,
     reason = "test code: exact-equal asserts on deterministic math + fixed-size index reads"
 )]
@@ -894,7 +914,8 @@ mod tests {
         assert!((p0.position[0]).abs() < 1e-9);
         assert!((p0.orientation[3] - 1.0).abs() < 1e-9);
         // Round-trip a translation + 90° yaw through pose_to_matrix4 → matrix4_to_aw_pose.
-        let m = pose_to_matrix4(&[1.0, 2.0, 3.0], &[0.0, 0.0, 0.707_106_77, 0.707_106_77]);
+        let m =
+            pose_to_matrix4(&[1.0, 2.0, 3.0], &[0.0, 0.0, 0.707_106_77, 0.707_106_77]).unwrap();
         let p = matrix4_to_aw_pose(&m);
         assert!((p.position[0] - 1.0).abs() < 1e-5);
         assert!((p.position[1] - 2.0).abs() < 1e-5);
@@ -907,9 +928,18 @@ mod tests {
     }
 
     #[test]
+    fn pose_to_matrix4_degenerate_quaternion_is_none() {
+        // Rust-only degenerate guard: zero-norm / NaN quaternions cannot form a rotation.
+        assert!(pose_to_matrix4(&[1.0, 2.0, 3.0], &[0.0, 0.0, 0.0, 0.0]).is_none());
+        assert!(pose_to_matrix4(&[1.0, 2.0, 3.0], &[0.0, 0.0, 0.0, f64::NAN]).is_none());
+        // Valid quaternions are unaffected.
+        assert!(pose_to_matrix4(&[1.0, 2.0, 3.0], &[0.0, 0.0, 0.0, 1.0]).is_some());
+    }
+
+    #[test]
     fn pose_to_matrix4_identity_rotation_places_translation() {
         // Identity quaternion [x,y,z,w] = [0,0,0,1] + translation (1,2,3).
-        let m = pose_to_matrix4(&[1.0, 2.0, 3.0], &[0.0, 0.0, 0.0, 1.0]);
+        let m = pose_to_matrix4(&[1.0, 2.0, 3.0], &[0.0, 0.0, 0.0, 1.0]).unwrap();
         assert!((m[(0, 3)] - 1.0).abs() < 1e-6);
         assert!((m[(1, 3)] - 2.0).abs() < 1e-6);
         assert!((m[(2, 3)] - 3.0).abs() < 1e-6);

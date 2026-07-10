@@ -906,7 +906,7 @@ pub fn run_align_with(
         })
         .collect();
     let oscillation_num = crate::helper::count_oscillation(&positions);
-    let verdict = crate::convergence::evaluate_convergence(&crate::convergence::ConvergenceInput {
+    let mut verdict = crate::convergence::evaluate_convergence(&crate::convergence::ConvergenceInput {
         iteration_num: result.iteration_num,
         max_iterations,
         oscillation_num,
@@ -917,6 +917,13 @@ pub fn run_align_with(
         converged_param_nearest_voxel_transformation_likelihood: conv
             .converged_param_nearest_voxel_transformation_likelihood,
     });
+    // Rust-only degenerate guard (documented divergence, doc/book/src/port/divergences.md): a
+    // non-finite result pose is forced to non-converged so no consumer publishes NaN/Inf downstream
+    // (the node gates every pose/TF publish on `is_converged`). C++ has no such gate; on the valid
+    // domain the align pose is always finite, so this branch never fires there.
+    if !result.pose.iter().all(|v| v.is_finite()) {
+        verdict.is_converged = false;
+    }
     AlignOutcome {
         pose: result.pose,
         transform_probability: result.transform_probability,
@@ -1190,6 +1197,36 @@ mod tests {
         converged_param_transform_probability: 0.0,
         converged_param_nearest_voxel_transformation_likelihood: 0.0,
     };
+
+    // The verdict gate: a non-finite result pose must never report converged, even when every
+    // score/iteration criterion passes. A NaN guess propagates into the result pose (the
+    // derivatives treat NaN points as no-ops, so iteration/oscillation/score all "pass").
+    #[test]
+    fn run_align_gates_non_finite_pose_to_not_converged() {
+        let (engine, source) = two_tile_engine();
+        let conv = ConvergenceParams {
+            converged_param_type: 1, // NVTL
+            converged_param_transform_probability: 0.0,
+            // Negative threshold: score 0.0 clears it, so only the pose gate can veto.
+            converged_param_nearest_voxel_transformation_likelihood: -1.0,
+        };
+        let mut nan_guess = Matrix4::<f32>::identity();
+        nan_guess[(0, 3)] = f32::NAN;
+        let bad = run_align(&engine, &nan_guess, &source, &conv);
+        assert!(
+            !bad.pose.iter().all(|v| v.is_finite()),
+            "NaN guess must reach the result pose for this test to exercise the gate"
+        );
+        assert!(bad.verdict.is_ok_score, "score criterion passes by design");
+        assert!(
+            !bad.verdict.is_converged,
+            "non-finite pose must be gated to non-converged"
+        );
+        // Valid domain unchanged: the same conv params with a finite guess converge.
+        let ok = run_align(&engine, &Matrix4::identity(), &source, &conv);
+        assert!(ok.pose.iter().all(|v| v.is_finite()));
+        assert!(ok.verdict.is_converged);
+    }
 
     // run_align == composing engine.align + result + helper::count_oscillation + evaluate_convergence
     // by hand (the orchestrator adds no new math, just folds the existing ports).

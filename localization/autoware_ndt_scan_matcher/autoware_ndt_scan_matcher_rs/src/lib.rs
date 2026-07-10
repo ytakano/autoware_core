@@ -41,6 +41,8 @@ extern crate alloc;
 mod ffi_cov_estimate;
 mod ffi_covariance;
 mod ffi_engine;
+// Shared row-major matrix marshaling (chunked-slice based — no index arithmetic) for the shims.
+mod ffi_matrix;
 mod ffi_ndt;
 mod ffi_tpe;
 mod ffi_voxel_grid;

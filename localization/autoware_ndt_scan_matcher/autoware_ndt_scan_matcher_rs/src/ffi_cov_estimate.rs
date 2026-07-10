@@ -20,10 +20,10 @@ use autoware_ndt_rs::cov_estimate::{
     estimate_xy_covariance_by_multi_ndt, estimate_xy_covariance_by_multi_ndt_score,
     propose_poses_to_search,
 };
-use autoware_ndt_rs::nalgebra::Matrix4;
 use autoware_ndt_rs::ndt::{AlignResult, AlignWorkspace, NdtParams};
 use autoware_ndt_rs::voxel_grid::VoxelGridMap;
 
+use crate::ffi_matrix::{matrix4_from_row_major, write_matrix4_seq};
 use crate::ffi_ptr::{ffi_mut_slice, ffi_ref, ffi_slice};
 
 // ---- C ABI shims (pointers validated per rust-c-ffi-safety) ----
@@ -48,23 +48,6 @@ pub struct AwMultiNdtCovInput {
     pub outlier_ratio: f64,
     pub main_nvtl: f64,
     pub temperature: f64,
-}
-
-/// Read a 16-float row-major buffer into a `Matrix4<f32>`.
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    clippy::allow_attributes,
-    reason = "r/c in 0..4 index a fixed 16-element slice and a fixed-size Matrix4"
-)]
-fn matrix4_from_row_major(buf: &[f32]) -> Matrix4<f32> {
-    let mut m = Matrix4::<f32>::zeros();
-    for r in 0..4 {
-        for c in 0..4 {
-            m[(r, c)] = buf[(r * 4) + c];
-        }
-    }
-    m
 }
 
 /// Narrow an f64 to f32 — the main result's nearest-voxel likelihood is f32 by contract.
@@ -188,12 +171,6 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_estimate_cov_multi_ndt_sco
     unsafe_code,
     reason = "C ABI boundary; pointers validated per rust-c-ffi-safety"
 )]
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    clippy::allow_attributes,
-    reason = "r/c in 0..4 index a fixed-size Matrix4; the i*16 stride is bounded by the documented out length"
-)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_propose_poses_to_search(
     main_pose: *const f32,
@@ -207,13 +184,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_propose_poses_to_search(
     let oy = ffi_slice!(offset_y, n, else return);
     let out = ffi_mut_slice!(out_poses, n.saturating_mul(16), else return);
     let poses = propose_poses_to_search(&matrix4_from_row_major(main_buf), ox, oy);
-    for (i, pose) in poses.iter().enumerate() {
-        for r in 0..4 {
-            for c in 0..4 {
-                out[(i * 16) + (r * 4) + c] = pose[(r, c)];
-            }
-        }
-    }
+    write_matrix4_seq(out, &poses);
 }
 
 #[cfg(test)]
@@ -231,6 +202,8 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_propose_poses_to_search(
     reason = "test code"
 )]
 mod tests {
+    use autoware_ndt_rs::nalgebra::Matrix4;
+
     use super::*;
 
     fn flatten(pts: &[[f32; 3]]) -> Vec<f32> {

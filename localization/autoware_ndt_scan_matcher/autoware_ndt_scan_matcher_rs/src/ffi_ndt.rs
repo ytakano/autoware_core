@@ -16,10 +16,12 @@
 //! target [`VoxelGridMap`] from flat inputs and marshals the result matrices row-major; the numeric
 //! kernel lives in the engine crate.
 
-use autoware_ndt_rs::nalgebra::Matrix4;
 use autoware_ndt_rs::ndt::{AlignResult, AlignWorkspace, NdtParams, Regularization, align};
 use autoware_ndt_rs::voxel_grid::VoxelGridMap;
 
+use crate::ffi_matrix::{
+    matrix4_from_row_major, write_matrix4_row_major, write_matrix4_seq, write_matrix6_row_major,
+};
 use crate::ffi_ptr::{self, ffi_ref, ffi_slice};
 
 /// Inputs to the align FFI. Point clouds are `len + *const f32` (xyz triples); `guess` is 16 `f32`
@@ -69,12 +71,10 @@ pub struct AwNdtAlignOutput {
     reason = "C ABI boundary; pointers validated per rust-c-ffi-safety"
 )]
 #[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
     clippy::as_conversions,
     clippy::cast_possible_truncation,
     clippy::allow_attributes,
-    reason = "marshaling fixed-size pose/hessian/transform arrays across the C ABI: nalgebra matrix indexing, bounded counts"
+    reason = "caps/counts cross the C ABI as u32; matrix marshaling is arithmetic-free (ffi_matrix)"
 )]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_align(
@@ -87,12 +87,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_align(
     let source = ffi_slice!(inp.source_xyz, inp.n_source, [f32; 3], else return);
     let guess_arr = ffi_slice!(inp.guess, 16, else return);
 
-    let mut guess = Matrix4::<f32>::zeros();
-    for r in 0..4 {
-        for c in 0..4 {
-            guess[(r, c)] = guess_arr[(r * 4) + c];
-        }
-    }
+    let guess = matrix4_from_row_major(guess_arr);
 
     let mut map = VoxelGridMap::new([inp.resolution; 3], 6, 0.01);
     map.add_target(target, 0);
@@ -126,11 +121,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_align(
     // the derefs are audited in ffi_ptr (null → `opt_slice_mut` None / `write_out` false, i.e. skip).
     unsafe {
         if let Some(pose) = ffi_ptr::opt_slice_mut(outp.pose, 16) {
-            for r in 0..4 {
-                for c in 0..4 {
-                    pose[(r * 4) + c] = result.pose[(r, c)];
-                }
-            }
+            write_matrix4_row_major(pose, &result.pose);
         }
         ffi_ptr::write_out(outp.iteration_num, result.iteration_num);
         ffi_ptr::write_out(outp.transform_probability, result.transform_probability);
@@ -139,22 +130,12 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_align(
             result.nearest_voxel_likelihood,
         );
         if let Some(h) = ffi_ptr::opt_slice_mut(outp.hessian, 36) {
-            for r in 0..6 {
-                for c in 0..6 {
-                    h[(r * 6) + c] = result.hessian[(r, c)];
-                }
-            }
+            write_matrix6_row_major(h, &result.hessian);
         }
         if !outp.transformation_array.is_null() && !outp.transforms_count.is_null() {
             let cap = outp.transforms_cap as usize;
-            if let Some(buf) = ffi_ptr::opt_slice_mut(outp.transformation_array, cap * 16) {
-                for (k, m) in result.transformation_array.iter().take(cap).enumerate() {
-                    for r in 0..4 {
-                        for c in 0..4 {
-                            buf[(k * 16) + (r * 4) + c] = m[(r, c)];
-                        }
-                    }
-                }
+            if let Some(buf) = ffi_ptr::opt_slice_mut(outp.transformation_array, cap.saturating_mul(16)) {
+                write_matrix4_seq(buf, &result.transformation_array);
             }
             ffi_ptr::write_out(
                 outp.transforms_count,
@@ -181,6 +162,8 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_align(
     reason = "test code"
 )]
 mod tests {
+    use autoware_ndt_rs::nalgebra::Matrix4;
+
     use super::*;
 
     // 8 points packed inside one voxel around (cx,cy,cz) for leaf_size 1.0.

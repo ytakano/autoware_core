@@ -25,25 +25,12 @@ use autoware_ndt_rs::engine::{
 };
 use autoware_ndt_rs::nalgebra::Matrix4;
 
+use crate::ffi_matrix::{
+    matrix4_from_row_major, write_matrix4_row_major, write_matrix4_seq, write_matrix6_row_major,
+};
 use crate::ffi_ndt::AwNdtAlignOutput;
 use crate::ffi_ptr::{self, ffi_mut, ffi_mut_slice, ffi_ref, ffi_slice};
 use crate::node::AwConvergenceVerdict;
-
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    clippy::allow_attributes,
-    reason = "r/c in 0..4 index a fixed 16-element slice and a fixed-size Matrix4"
-)]
-fn matrix4_from_row_major(buf: &[f32]) -> Matrix4<f32> {
-    let mut m = Matrix4::<f32>::zeros();
-    for r in 0..4 {
-        for c in 0..4 {
-            m[(r, c)] = buf[(r * 4) + c];
-        }
-    }
-    m
-}
 
 /// Create a new engine handle (empty map). Free with `..._ndt_engine_free`.
 #[expect(unsafe_code, reason = "C ABI boundary; returns an owned handle")]
@@ -203,12 +190,10 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_remove_target_s
     reason = "C ABI boundary; writes caller-owned bounded buffers"
 )]
 #[allow(
-    clippy::arithmetic_side_effects,
     clippy::as_conversions,
     clippy::cast_possible_truncation,
-    clippy::indexing_slicing,
     clippy::allow_attributes,
-    reason = "bounded id-buffer marshaling: offsets sum to total_len, writes capped"
+    reason = "id counts/lengths cross the C ABI as u32 (bounded by the verified caps)"
 )]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_current_map_ids(
@@ -235,14 +220,19 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_current_map
     if !fill_lengths || !fill_bytes {
         return;
     }
-    // Caps verified ≥ the required sizes above; both buffers non-null.
+    // Caps verified ≥ the required sizes above; both buffers non-null. The byte cursor advances by
+    // splitting the remaining slice (no offset arithmetic, no panicking slice indexing);
+    // `split_at_mut_checked` cannot fail because `bytes.len() == total == Σ id.len()`.
     let lens = ffi_mut_slice!(out_lengths, ids.len(), else return);
     let bytes = ffi_mut_slice!(out_bytes, total, else return);
-    let mut off = 0usize;
-    for (k, id) in ids.iter().enumerate() {
-        lens[k] = id.len() as u32;
-        bytes[off..off + id.len()].copy_from_slice(id);
-        off += id.len();
+    let mut rest: &mut [u8] = bytes;
+    for (len_slot, id) in lens.iter_mut().zip(ids.iter()) {
+        *len_slot = id.len() as u32;
+        let Some((head, tail)) = rest.split_at_mut_checked(id.len()) else {
+            return;
+        };
+        head.copy_from_slice(id);
+        rest = tail;
     }
 }
 
@@ -354,12 +344,10 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_calc_nearest_vo
     reason = "C ABI boundary; writes caller-owned output buffers"
 )]
 #[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
     clippy::as_conversions,
     clippy::cast_possible_truncation,
     clippy::allow_attributes,
-    reason = "fixed-size matrix marshaling (r/c in 0..4 / 0..6); bounded transform-array copy"
+    reason = "caps/counts cross the C ABI as u32; matrix marshaling is arithmetic-free (ffi_matrix)"
 )]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_result(
@@ -373,11 +361,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_result(
     // in ffi_ptr (null → skipped: `opt_slice_mut` → None, `write_out` → false without writing).
     unsafe {
         if let Some(pose) = ffi_ptr::opt_slice_mut(out.pose, 16) {
-            for r in 0..4 {
-                for c in 0..4 {
-                    pose[(r * 4) + c] = result.pose[(r, c)];
-                }
-            }
+            write_matrix4_row_major(pose, &result.pose);
         }
         ffi_ptr::write_out(out.iteration_num, result.iteration_num);
         ffi_ptr::write_out(out.transform_probability, result.transform_probability);
@@ -386,22 +370,12 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_result(
             result.nearest_voxel_likelihood,
         );
         if let Some(h) = ffi_ptr::opt_slice_mut(out.hessian, 36) {
-            for r in 0..6 {
-                for c in 0..6 {
-                    h[(r * 6) + c] = result.hessian[(r, c)];
-                }
-            }
+            write_matrix6_row_major(h, &result.hessian);
         }
         if !out.transformation_array.is_null() && !out.transforms_count.is_null() {
             let cap = out.transforms_cap as usize;
-            if let Some(buf) = ffi_ptr::opt_slice_mut(out.transformation_array, cap * 16) {
-                for (k, m) in result.transformation_array.iter().take(cap).enumerate() {
-                    for r in 0..4 {
-                        for c in 0..4 {
-                            buf[(k * 16) + (r * 4) + c] = m[(r, c)];
-                        }
-                    }
-                }
+            if let Some(buf) = ffi_ptr::opt_slice_mut(out.transformation_array, cap.saturating_mul(16)) {
+                write_matrix4_seq(buf, &result.transformation_array);
             }
             ffi_ptr::write_out(
                 out.transforms_count,
@@ -642,12 +616,9 @@ pub struct AwCovEstimationOutput {
     reason = "C ABI boundary; reads caller-owned cloud/offsets, writes caller-owned buffers"
 )]
 #[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
     clippy::as_conversions,
-    clippy::cast_possible_truncation,
     clippy::allow_attributes,
-    reason = "fixed-size 4x4 pose marshaling into the caller's bounded pose buffers"
+    reason = "pose_cap crosses the C ABI as u32 -> usize; matrix marshaling is arithmetic-free (ffi_matrix)"
 )]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_estimate_pose_covariance(
@@ -717,25 +688,17 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_estimate_pose_covaria
     reason = "C ABI boundary; writes a caller-owned bounded f32 buffer"
 )]
 #[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
     clippy::as_conversions,
     clippy::cast_possible_truncation,
     clippy::allow_attributes,
-    reason = "fixed-size 4x4 pose marshaling into a bounded buffer"
+    reason = "the pose count crosses the C ABI as u32; matrix marshaling is arithmetic-free (ffi_matrix)"
 )]
 pub(crate) unsafe fn fill_pose_buffer(buf: *mut f32, cap: usize, poses: &[Matrix4<f32>]) -> u32 {
     let count = poses.len() as u32;
     if !buf.is_null() && cap > 0 {
         // SAFETY: per the contract, `buf` addresses `cap * 16` writable f32.
-        let slice = unsafe { core::slice::from_raw_parts_mut(buf, cap * 16) };
-        for (k, m) in poses.iter().take(cap).enumerate() {
-            for r in 0..4 {
-                for c in 0..4 {
-                    slice[(k * 16) + (r * 4) + c] = m[(r, c)];
-                }
-            }
-        }
+        let slice = unsafe { core::slice::from_raw_parts_mut(buf, cap.saturating_mul(16)) };
+        write_matrix4_seq(slice, poses);
     }
     count
 }
