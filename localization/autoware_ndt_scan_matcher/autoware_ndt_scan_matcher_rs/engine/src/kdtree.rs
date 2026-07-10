@@ -72,7 +72,7 @@ impl KdTree {
         // The visited counter is threaded unconditionally (a borrowed stack u64) but only ever
         // written under `wcet-count`, so the shipping build carries no instrumentation cost.
         let mut visited = 0_u64;
-        self.search_rec(self.root, query, r2, max_nn, out, &mut visited);
+        self.search_iter(query, r2, max_nn, out, &mut visited);
     }
 
     /// [`Self::radius_search`] that also returns the number of tree nodes visited — the
@@ -87,22 +87,92 @@ impl KdTree {
     ) -> u64 {
         let r2 = radius * radius;
         let mut visited = 0_u64;
-        self.search_rec(self.root, query, r2, max_nn, out, &mut visited);
+        self.search_iter(query, r2, max_nn, out, &mut visited);
         visited
     }
 
+    /// Depth cap for the explicit search stack. Only deferred *far* children are stacked — at most
+    /// one per descent level — so the stack need is the tree depth, ≤ ⌈log₂N⌉ + 1 by the median
+    /// build. A `Node` occupies ≥ 48 bytes, so any in-memory tree has N < 2^59 ⇒ depth < 60 < 64;
+    /// the guard below is therefore unreachable by construction (kept panic-free regardless).
+    const MAX_STACK: usize = 64;
+
+    /// Iterative radius search — an explicit fixed-size stack instead of recursion, so the
+    /// RT-critical path uses O(1) stack independent of tree size (WCET audit item; see
+    /// `porting_notes/ndt_wcet_audit.md`). Visits nodes in **exactly** the recursive near-then-far
+    /// order (far children are deferred LIFO), so the neighbor order — and thus every downstream
+    /// float summation — is bit-identical to the recursive implementation (oracle-tested below).
     #[allow(
         clippy::indexing_slicing,
         clippy::allow_attributes,
-        reason = "axis is depth % 3 ∈ 0..3; indexes a fixed-size [f32; 3]"
+        reason = "axis is depth % 3 ∈ 0..3 indexing a fixed-size [f32; 3]; the stack index is \
+                  guarded < MAX_STACK"
     )]
-    #[cfg_attr(
-        not(feature = "wcet-count"),
-        expect(
-            clippy::only_used_in_recursion,
-            reason = "the visited counter is only written under wcet-count; threading it \
-                      unconditionally keeps one recursion body with zero shipping cost"
-        )
+    fn search_iter(
+        &self,
+        query: &[f32; 3],
+        r2: f64,
+        max_nn: usize,
+        out: &mut Vec<usize>,
+        visited: &mut u64,
+    ) {
+        #[cfg(not(feature = "wcet-count"))]
+        let _ = &visited;
+        let mut stack = [0_usize; Self::MAX_STACK];
+        let mut sp = 0_usize; // stack length
+        let mut cur = self.root;
+        loop {
+            while let Some(ni) = cur {
+                // Cap reached: the recursive version enters remaining nodes and returns
+                // immediately (before counting), so stopping outright is observationally identical.
+                if max_nn != 0 && out.len() >= max_nn {
+                    return;
+                }
+                let Some(n) = self.nodes.get(ni) else { break };
+                let Some(p) = self.points.get(n.point_idx) else {
+                    break;
+                };
+                #[cfg(feature = "wcet-count")]
+                {
+                    *visited = visited.saturating_add(1);
+                }
+
+                if dist_sq(p, query) <= r2 {
+                    out.push(n.point_idx);
+                }
+
+                let diff = f64::from(query[n.axis]) - f64::from(p[n.axis]);
+                let (near, far) = if diff < 0.0 {
+                    (n.left, n.right)
+                } else {
+                    (n.right, n.left)
+                };
+
+                // Defer the far side (visited after the whole near subtree) if the splitting plane
+                // is within the radius. The depth bound makes overflow unreachable (see MAX_STACK).
+                if (diff * diff) <= r2
+                    && let (Some(fi), true) = (far, sp < Self::MAX_STACK)
+                {
+                    stack[sp] = fi;
+                    sp = sp.saturating_add(1);
+                }
+                cur = near;
+            }
+            if sp == 0 {
+                return;
+            }
+            sp = sp.saturating_sub(1);
+            cur = Some(stack[sp]);
+        }
+    }
+
+    /// Reference recursive search — kept as the test oracle for [`Self::search_iter`]'s exact
+    /// visit-order equivalence (the neighbor order feeds float summation order = bit-exactness).
+    #[cfg(test)]
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::allow_attributes,
+        reason = "test-only oracle; axis is depth % 3 ∈ 0..3 indexing a fixed-size [f32; 3]"
     )]
     fn search_rec(
         &self,
@@ -111,7 +181,6 @@ impl KdTree {
         r2: f64,
         max_nn: usize,
         out: &mut Vec<usize>,
-        visited: &mut u64,
     ) {
         let Some(ni) = node else { return };
         if max_nn != 0 && out.len() >= max_nn {
@@ -121,10 +190,6 @@ impl KdTree {
         let Some(p) = self.points.get(n.point_idx) else {
             return;
         };
-        #[cfg(feature = "wcet-count")]
-        {
-            *visited = visited.saturating_add(1);
-        }
 
         if dist_sq(p, query) <= r2 {
             out.push(n.point_idx);
@@ -137,10 +202,9 @@ impl KdTree {
             (n.right, n.left)
         };
 
-        self.search_rec(near, query, r2, max_nn, out, visited);
-        // Only descend the far side if the splitting plane is within the radius.
+        self.search_rec(near, query, r2, max_nn, out);
         if (diff * diff) <= r2 {
-            self.search_rec(far, query, r2, max_nn, out, visited);
+            self.search_rec(far, query, r2, max_nn, out);
         }
     }
 }
@@ -252,5 +316,34 @@ mod tests {
         let mut out = Vec::new();
         tree.radius_search(&[0.05, 0.0, 0.0], 1.0, 3, &mut out);
         assert_eq!(out.len(), 3);
+    }
+
+    // The iterative search must reproduce the recursive oracle's output in EXACT order (the
+    // neighbor order feeds downstream float summation order = bit-exactness), for both unlimited
+    // and capped searches, over many random trees/queries/radii.
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn iterative_matches_recursive_oracle_exact_order() {
+        let mut rng = Lcg(0xBEEF_CAFE);
+        for n in [0usize, 1, 2, 3, 7, 64, 257, 800] {
+            let pts: Vec<[f32; 3]> = (0..n)
+                .map(|_| [rng.next_f32(), rng.next_f32(), rng.next_f32()])
+                .collect();
+            let tree = KdTree::build(&pts);
+            for _ in 0..24 {
+                let q = [rng.next_f32(), rng.next_f32(), rng.next_f32()];
+                let radius = f64::from(0.4 + (rng.next_f32() + 5.0) * 0.3); // ~[0.4, 3.4]
+                for max_nn in [0usize, 1, 3, 64] {
+                    let mut iterative = Vec::new();
+                    tree.radius_search(&q, radius, max_nn, &mut iterative);
+                    let mut recursive = Vec::new();
+                    tree.search_rec(tree.root, &q, radius * radius, max_nn, &mut recursive);
+                    assert_eq!(
+                        iterative, recursive,
+                        "order mismatch: n={n} max_nn={max_nn} q={q:?} r={radius}"
+                    );
+                }
+            }
+        }
     }
 }

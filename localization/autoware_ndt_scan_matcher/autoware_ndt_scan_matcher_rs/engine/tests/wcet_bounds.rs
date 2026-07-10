@@ -36,7 +36,7 @@
 )]
 
 use autoware_ndt_rs::nalgebra::Matrix4;
-use autoware_ndt_rs::ndt::{align, AlignResult, AlignWorkspace, NdtParams, MAX_NEIGHBORS};
+use autoware_ndt_rs::ndt::{AlignResult, AlignWorkspace, MAX_NEIGHBORS, NdtParams, align};
 use autoware_ndt_rs::voxel_grid::VoxelGridMap;
 use proptest::prelude::*;
 

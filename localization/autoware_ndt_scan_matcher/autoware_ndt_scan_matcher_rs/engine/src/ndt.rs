@@ -82,6 +82,21 @@ impl AlignWorkspace {
             counters: crate::wcet::WcetCounters::new(),
         }
     }
+
+    /// A workspace pre-reserved for clouds of up to `max_points` — the WCET "hard zero" variant
+    /// (`plan/ndt_wcet.md`): with it, **no** frame allocates, including the very first (a growth
+    /// event is a WCET spike, so the amortized [`Self::new`] warmup is not enough for a bound).
+    #[must_use]
+    pub fn with_capacity(max_points: usize) -> Self {
+        Self {
+            neighbor_idx: Vec::with_capacity(MAX_NEIGHBORS),
+            trans_cloud: Vec::with_capacity(max_points),
+            #[cfg(feature = "parallel")]
+            contribs: Vec::with_capacity(max_points),
+            #[cfg(feature = "wcet-count")]
+            counters: crate::wcet::WcetCounters::new(),
+        }
+    }
 }
 
 /// Optional longitudinal-distance regularization toward a reference pose
@@ -413,10 +428,15 @@ pub fn compute_derivatives_parallel(
     #[cfg(feature = "wcet-count")]
     {
         ws.counters.derivative_passes = ws.counters.derivative_passes.saturating_add(1);
-        ws.counters.points_processed = ws.counters.points_processed.saturating_add(pass.points_processed);
+        ws.counters.points_processed = ws
+            .counters
+            .points_processed
+            .saturating_add(pass.points_processed);
         ws.counters.sum_neighbors = ws.counters.sum_neighbors.saturating_add(pass.sum_neighbors);
-        ws.counters.kd_nodes_visited =
-            ws.counters.kd_nodes_visited.saturating_add(pass.kd_nodes_visited);
+        ws.counters.kd_nodes_visited = ws
+            .counters
+            .kd_nodes_visited
+            .saturating_add(pass.kd_nodes_visited);
     }
     finalize(red, p, cfg, source.len())
 }

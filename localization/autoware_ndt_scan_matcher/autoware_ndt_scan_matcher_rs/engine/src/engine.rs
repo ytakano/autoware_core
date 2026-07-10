@@ -255,6 +255,24 @@ impl MatchScratch {
         }
     }
 
+    /// Scratch pre-reserved for clouds of up to `max_points` and up to `max_iterations` Newton
+    /// iterations — the WCET "hard zero" variant (`plan/ndt_wcet.md`): with it, **no** frame
+    /// allocates, including the very first (a growth event is a WCET spike). Reserves the
+    /// workspace buffers and the per-iteration result arrays (`max_iterations + 1` entries: the
+    /// initial pose plus one per iteration).
+    #[must_use]
+    pub fn with_capacity(max_points: usize, max_iterations: usize) -> Self {
+        let cap = max_iterations.saturating_add(1);
+        let mut last = AlignResult::default();
+        last.transformation_array.reserve(cap);
+        last.transform_probability_array.reserve(cap);
+        last.nearest_voxel_likelihood_array.reserve(cap);
+        Self {
+            workspace: AlignWorkspace::with_capacity(max_points),
+            last,
+        }
+    }
+
     /// Owned copy of the last align result run through this scratch (the C++ `getResult`).
     #[must_use]
     pub fn result(&self) -> AlignResult {
@@ -906,17 +924,18 @@ pub fn run_align_with(
         })
         .collect();
     let oscillation_num = crate::helper::count_oscillation(&positions);
-    let mut verdict = crate::convergence::evaluate_convergence(&crate::convergence::ConvergenceInput {
-        iteration_num: result.iteration_num,
-        max_iterations,
-        oscillation_num,
-        transform_probability: f64::from(result.transform_probability),
-        nearest_voxel_transformation_likelihood: f64::from(result.nearest_voxel_likelihood),
-        converged_param_type: conv.converged_param_type,
-        converged_param_transform_probability: conv.converged_param_transform_probability,
-        converged_param_nearest_voxel_transformation_likelihood: conv
-            .converged_param_nearest_voxel_transformation_likelihood,
-    });
+    let mut verdict =
+        crate::convergence::evaluate_convergence(&crate::convergence::ConvergenceInput {
+            iteration_num: result.iteration_num,
+            max_iterations,
+            oscillation_num,
+            transform_probability: f64::from(result.transform_probability),
+            nearest_voxel_transformation_likelihood: f64::from(result.nearest_voxel_likelihood),
+            converged_param_type: conv.converged_param_type,
+            converged_param_transform_probability: conv.converged_param_transform_probability,
+            converged_param_nearest_voxel_transformation_likelihood: conv
+                .converged_param_nearest_voxel_transformation_likelihood,
+        });
     // Rust-only degenerate guard (documented divergence, doc/book/src/port/divergences.md): a
     // non-finite result pose is forced to non-converged so no consumer publishes NaN/Inf downstream
     // (the node gates every pose/TF publish on `is_converged`). C++ has no such gate; on the valid

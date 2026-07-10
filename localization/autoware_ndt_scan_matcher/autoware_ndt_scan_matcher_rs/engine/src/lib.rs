@@ -97,6 +97,9 @@ pub mod scan_matcher;
 pub mod tpe;
 pub mod transform;
 pub mod voxel_grid;
+// Frozen WCET benchmark fixtures (capture-once, replay-everywhere); std-only file IO.
+#[cfg(feature = "std")]
+pub mod fixture;
 // Deterministic algorithmic-cost counters for the WCET analysis (plan/ndt_wcet.md); opt-in.
 #[cfg(feature = "wcet-count")]
 pub mod wcet;

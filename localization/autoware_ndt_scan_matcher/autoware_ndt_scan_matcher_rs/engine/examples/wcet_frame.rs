@@ -13,11 +13,18 @@
 // limitations under the License.
 
 //! Frame-time (WCET) benchmark for `align` — a manual diagnostic, NOT a CI gate (timing is
-//! environment-dependent). Reports min / mean / p50 / p99 / p99.9 / max over many frames on a fixed
-//! synthetic fixture; for WCET, the **max + tail** matter (not the mean). Run with:
-//!   `cargo run --release --example wcet_frame`
-//! Record the baseline in `porting_notes/ndt_wcet_audit.md`. (Synthetic, single core, warm cache —
-//! a relative regression watch, not a hardware WCET proof.)
+//! environment-dependent). Reports min / mean / p50 / p99 / p99.9 / max over many frames; for
+//! WCET, the **max + tail** matter (not the mean).
+//!
+//! Two modes:
+//! - `cargo run --release --example wcet_frame` — fixed synthetic fixture (regression watch).
+//! - `cargo run --release --example wcet_frame -- FIXTURE.ndtfix [...]` — replay frozen fixtures
+//!   (`bench/fixtures/*.ndtfix` from `wcet_fixtures` / `wcet_search`), one HWM row each. With
+//!   `--features wcet-count` each row also reports the deterministic cost counters.
+//!
+//! `WCET_FRAMES` overrides the per-fixture frame count (default 20000 synthetic / 2000 fixture).
+//! Record baselines in `porting_notes/ndt_wcet_audit.md`. (Single core, warm cache — a relative
+//! regression watch, not a hardware WCET proof.)
 
 #![allow(
     clippy::unwrap_used,
@@ -35,11 +42,10 @@
 
 use std::time::Instant;
 
+use autoware_ndt_rs::fixture::Fixture;
 use autoware_ndt_rs::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
 use autoware_ndt_rs::voxel_grid::VoxelGridMap;
 use nalgebra::Matrix4;
-
-const FRAMES: usize = 20_000;
 
 fn dense_cluster(cx: f32, cy: f32, cz: f32) -> Vec<[f32; 3]> {
     (0..8)
@@ -50,8 +56,59 @@ fn dense_cluster(cx: f32, cy: f32, cz: f32) -> Vec<[f32; 3]> {
         .collect()
 }
 
-fn main() {
-    // A 6x6 grid of clusters (≈ 288 map points) and a source = a copy translated by a small offset.
+struct Stats {
+    nanos: Vec<u128>,
+}
+
+impl Stats {
+    fn measure(
+        frames: usize,
+        map: &VoxelGridMap,
+        source: &[[f32; 3]],
+        guess: &Matrix4<f32>,
+        params: &NdtParams,
+        ws: &mut AlignWorkspace,
+        out: &mut AlignResult,
+    ) -> Self {
+        // Warmup (JIT-free, but page/cache/branch warmup + buffer growth).
+        for _ in 0..(frames / 20).clamp(10, 100) {
+            align(map, source, guess, params, ws, out);
+        }
+        let mut nanos: Vec<u128> = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            let t = Instant::now();
+            align(map, source, guess, params, ws, out);
+            nanos.push(t.elapsed().as_nanos());
+        }
+        nanos.sort_unstable();
+        Self { nanos }
+    }
+
+    fn pct(&self, p: f64) -> u128 {
+        let n = self.nanos.len();
+        self.nanos[((p * (n as f64 - 1.0)) as usize).min(n - 1)]
+    }
+
+    fn mean(&self) -> u128 {
+        self.nanos.iter().sum::<u128>() / (self.nanos.len() as u128)
+    }
+}
+
+fn us(n: u128) -> f64 {
+    (n as f64) / 1000.0
+}
+
+fn frames_from_env(default: usize) -> usize {
+    std::env::var("WCET_FRAMES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(default)
+}
+
+/// Synthetic default fixture (the original regression-watch numbers).
+fn run_synthetic() {
+    let frames = frames_from_env(20_000);
     let mut map_points: Vec<[f32; 3]> = Vec::new();
     for i in 0..6 {
         for j in 0..6 {
@@ -77,35 +134,82 @@ fn main() {
         num_threads: 1,
     };
     let guess = Matrix4::identity();
-    let mut ws = AlignWorkspace::new();
+    let mut ws = AlignWorkspace::with_capacity(source.len());
     let mut out = AlignResult::default();
 
-    // Warmup.
-    for _ in 0..100 {
-        align(&map, &source, &guess, &params, &mut ws, &mut out);
-    }
-
-    let mut nanos: Vec<u128> = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
-        let t = Instant::now();
-        align(&map, &source, &guess, &params, &mut ws, &mut out);
-        nanos.push(t.elapsed().as_nanos());
-    }
-    nanos.sort_unstable();
-
-    let pct = |p: f64| nanos[((p * (FRAMES as f64 - 1.0)) as usize).min(FRAMES - 1)];
-    let mean = nanos.iter().sum::<u128>() / (FRAMES as u128);
-    let us = |n: u128| (n as f64) / 1000.0;
-
+    let s = Stats::measure(frames, &map, &source, &guess, &params, &mut ws, &mut out);
+    let n = s.nanos.len();
     println!(
-        "align frame time over {FRAMES} frames ({} src pts, {} iters):",
+        "align frame time over {frames} frames ({} src pts, {} iters):",
         source.len(),
         out.iteration_num
     );
-    println!("  min  {:.2} us", us(nanos[0]));
-    println!("  mean {:.2} us", us(mean));
-    println!("  p50  {:.2} us", us(pct(0.50)));
-    println!("  p99  {:.2} us", us(pct(0.99)));
-    println!("  p99.9 {:.2} us", us(pct(0.999)));
-    println!("  max  {:.2} us", us(nanos[FRAMES - 1]));
+    println!("  min  {:.2} us", us(s.nanos[0]));
+    println!("  mean {:.2} us", us(s.mean()));
+    println!("  p50  {:.2} us", us(s.pct(0.50)));
+    println!("  p99  {:.2} us", us(s.pct(0.99)));
+    println!("  p99.9 {:.2} us", us(s.pct(0.999)));
+    println!("  max  {:.2} us", us(s.nanos[n - 1]));
+}
+
+/// Replay frozen fixtures: one HWM row per file (+ cost counters under `wcet-count`).
+fn run_fixtures(paths: &[String]) {
+    let frames = frames_from_env(2_000);
+    println!("align frame time over {frames} frames/fixture (serial, pre-reserved workspace):");
+    println!(
+        "  {:16} {:>6} {:>6} {:>5} | {:>9} {:>9} {:>9} {:>9} | extra",
+        "fixture", "map", "src", "iter", "p50 us", "p99 us", "p99.9 us", "max us"
+    );
+    for path in paths {
+        let fx = Fixture::read(std::path::Path::new(path)).expect("read fixture");
+        let mut map = VoxelGridMap::new([fx.params.resolution; 3], 6, 0.01);
+        for (id, tile) in fx.tiles.iter().enumerate() {
+            map.add_target(tile, id as u64);
+        }
+        map.create_kdtree();
+        let mut ws = AlignWorkspace::with_capacity(fx.source.len());
+        let mut out = AlignResult::default();
+        let s = Stats::measure(
+            frames, &map, &fx.source, &fx.guess, &fx.params, &mut ws, &mut out,
+        );
+        let name = std::path::Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(path);
+        let n = s.nanos.len();
+        print!(
+            "  {name:16} {:>6} {:>6} {:>5} | {:>9.1} {:>9.1} {:>9.1} {:>9.1} |",
+            fx.map_len(),
+            fx.source.len(),
+            out.iteration_num,
+            us(s.pct(0.50)),
+            us(s.pct(0.99)),
+            us(s.pct(0.999)),
+            us(s.nanos[n - 1]),
+        );
+        #[cfg(feature = "wcet-count")]
+        {
+            let c = out.counters;
+            let kbar = if c.points_processed == 0 {
+                0.0
+            } else {
+                c.sum_neighbors as f64 / c.points_processed as f64
+            };
+            print!(
+                " passes={} K̄={kbar:.1} kd/pt={:.1}",
+                c.derivative_passes,
+                c.kd_nodes_visited as f64 / c.points_processed.max(1) as f64
+            );
+        }
+        println!();
+    }
+}
+
+fn main() {
+    let paths: Vec<String> = std::env::args().skip(1).collect();
+    if paths.is_empty() {
+        run_synthetic();
+    } else {
+        run_fixtures(&paths);
+    }
 }

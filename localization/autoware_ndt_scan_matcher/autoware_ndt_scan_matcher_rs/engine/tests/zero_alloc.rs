@@ -29,6 +29,7 @@
     clippy::cast_precision_loss,
     clippy::indexing_slicing,
     clippy::float_cmp,
+    clippy::too_many_lines,
     clippy::allow_attributes,
     reason = "test code"
 )]
@@ -222,4 +223,46 @@ fn engine_allocations_after_warmup() {
         source.len(),
         out.iteration_num
     );
+
+    // --- pre-reserved workspace: zero allocations INCLUDING the first frame (WCET "hard zero") ---
+    // A growth event is a WCET spike, so the amortized warmup above is not enough for a bound:
+    // AlignWorkspace::with_capacity + a pre-reserved result must make even the first align
+    // allocation-free (plan/ndt_wcet.md, M2).
+    let mut ws2 = AlignWorkspace::with_capacity(source.len());
+    let mut out2 = AlignResult::default();
+    let iter_cap = usize::try_from(params.max_iterations).unwrap() + 1;
+    out2.transformation_array.reserve(iter_cap);
+    out2.transform_probability_array.reserve(iter_cap);
+    out2.nearest_voxel_likelihood_array.reserve(iter_cap);
+
+    let first_frame_allocs =
+        count_allocs(|| align(&map, &source, &guess, &params, &mut ws2, &mut out2));
+    assert_eq!(
+        first_frame_allocs, 0,
+        "pre-reserved align allocated {first_frame_allocs} time(s) on the FIRST frame — \
+         with_capacity must make every frame allocation-free"
+    );
+    assert_eq!(
+        out2.iteration_num, out.iteration_num,
+        "same work as the warm run"
+    );
+
+    // --- engine path: MatchScratch::with_capacity makes the FIRST engine align allocation-free ---
+    // (Same process-global counter, so this stays in the single sequential test.)
+    {
+        use autoware_ndt_rs::engine::{MatchScratch, NdtEngine};
+        let engine = NdtEngine::new(2.0, 6, 0.01);
+        for (id, &(cx, cy, cz)) in centers.iter().enumerate() {
+            engine.add_target(&dense_cluster(cx, cy, cz), id as u64);
+        }
+        engine.create_kdtree();
+        let max_iter = usize::try_from(engine.max_iterations()).unwrap();
+        let mut scratch = MatchScratch::with_capacity(source.len(), max_iter);
+        let engine_first_allocs = count_allocs(|| engine.align_with(&guess, &source, &mut scratch));
+        assert_eq!(
+            engine_first_allocs, 0,
+            "engine.align_with allocated {engine_first_allocs} time(s) on the first frame with a \
+             pre-reserved MatchScratch"
+        );
+    }
 }
