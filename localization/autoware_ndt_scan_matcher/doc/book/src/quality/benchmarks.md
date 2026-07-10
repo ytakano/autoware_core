@@ -13,9 +13,13 @@ it is the WCET reference, and it isolates the kernel from thread-pool scheduling
 - **L1 — node / end-to-end.** The full ROS node timed by its built-in `exe_time_ms` publisher (present
   identically on both engines), `NDT_USE_RUST` OFF vs ON. **L1a** (automated, `bench/run_l1a.sh`) replays
   the in-repo `standard_sequence` cloud through the node frame-by-frame — deterministic, download-free,
-  the CI regression baseline. **L1b** (opt-in scaffold, `bench/run_l1b.sh`) replays the Autoware
-  `sample-rosbag` against `sample-map-rosbag` for the headline number, downloading the sample data only
-  if absent; a converged run additionally needs TF + an EKF initial-pose stream, so it is best-effort.
+  the CI regression baseline. **L1b** (opt-in, `bench/run_l1b.sh`) replays the Autoware `sample-rosbag`
+  against `sample-map-rosbag` for the headline number, downloading the sample data only if absent. That
+  bag is raw sensor data (Velodyne packets, ublox GNSS, no PointCloud2, no TF), so `run_l1b.sh` brings
+  up the full Autoware sensing + localization graph (`launch/ndt_l1b_bench.launch.xml`: Nebula decode +
+  map + EKF/pose-initializer loop); it therefore needs the sensing stack built and a clean DDS state,
+  and reproduces the headline on a fresh full-Autoware container. Rely on the deterministic **L1a** for
+  regression tracking.
 - **L2 — kernel micro-benchmark.** A tight per-frame `align` loop on a small synthetic cloud, to
   locate where time goes and bound per-frame WCET. Crate example `examples/wcet_frame.rs`.
 - **L3 — offline differential replay.** One executable drives **both** engines on identical inputs

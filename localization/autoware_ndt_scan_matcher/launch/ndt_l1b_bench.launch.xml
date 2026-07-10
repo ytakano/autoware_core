@@ -1,50 +1,74 @@
 <?xml version="1.0"?>
 <!--
-  L1b benchmark launch (see plan/ndt_bench.md, bench/run_l1b.sh) — SCAFFOLD / best-effort.
+  L1b benchmark launch (see plan/ndt_bench.md, bench/run_l1b.sh).
 
-  Composes the minimal graph needed to time the NDT node end-to-end on the Autoware `sample-rosbag`:
-  the pointcloud map loader (serving the map tile the node fetches over `pcd_loader_service`), an
-  optional voxel downsample feeding `points_raw`, and the NDT node itself (serial `num_threads:=1` for
-  a fair engine A/B). The engine (C++/Rust) is chosen at BUILD time via `NDT_USE_RUST`, not here.
+  Brings up the full NDT localization graph for replaying the Autoware `sample-rosbag` (raw Velodyne
+  packets + ublox GNSS, no PointCloud2, no TF), reusing the installed launches:
+    * tier4_vehicle_launch/vehicle.launch.xml  -> robot_state_publisher TF from the sample
+      vehicle+sensor-kit URDF (base_link <-> velodyne_top/left/right, gnss, ...),
+    * sample_sensor_kit_launch/sensing.launch.xml (launch_driver:=false) -> Nebula decoders turn the
+      bag's velodyne_packets into per-lidar clouds, the pointcloud_preprocessor concatenates them to
+      /sensing/lidar/concatenated/pointcloud, and ublox GNSS -> /sensing/gnss/pose_with_covariance,
+    * autoware_core_map.launch.xml -> pointcloud map loader (single-PCD map; the differential service
+      NDT calls is served from the lone pointcloud_map.pcd),
+    * autoware_core_localization.launch.xml -> voxel downsample -> NDT -> EKF -> pose_initializer loop.
 
-  NOTE — a fully converged run additionally needs, from the bag or an added node:
-    * TF `map -> base_link` (and `base_link -> <sensor_frame>`),
-    * an initial-pose stream on `ekf_pose_with_covariance` (normally autoware_ekf_localizer, primed by
-      autoware_pose_initializer) — the NDT node interpolates this per frame,
-    * the sensor cloud on whatever topic the bag publishes (set `input_pointcloud`/`bag_lidar_topic`).
-  Those are deployment-specific; wire them here or alongside `ros2 bag play`. The exe_time_ms number is
-  still produced per successful frame regardless of how the pose/TF are supplied.
+  The engine (C++/Rust) is selected at BUILD time via NDT_USE_RUST; bench/run_l1b.sh does the OFF/ON
+  two-pass. Replay the bag with clock publishing enabled and initialize via `/localization/initialize`
+  (GNSS AUTO) or a fixed `initial_pose:=[x,y,z,qx,qy,qz,qw]`.
 -->
 <launch>
-  <!-- Map (from bench/fetch_sample_data.sh -> sample-map-rosbag). -->
-  <arg name="pointcloud_map_path"/>
-  <arg name="pointcloud_map_metadata_path"/>
-  <arg name="map_loader_param_path"
-       default="$(find-pkg-share autoware_map_loader)/config/pointcloud_map_loader.param.yaml"/>
+  <arg name="map_path" description="sample-map-rosbag directory (pointcloud_map.pcd, lanelet2_map.osm, map_projector_info.yaml)"/>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="vehicle_model" default="sample_vehicle"/>
+  <arg name="sensor_model" default="sample_sensor_kit"/>
+  <arg name="vehicle_mirror_param_file" default="$(find-pkg-share autoware_sample_vehicle_description)/config/mirror.param.yaml"/>
+  <!-- Feed NDT from the top LiDAR's cropped cloud (Nebula decode + self/mirror crop, sensor frame;
+       NDT transforms it to base_link via TF). Bypasses the 3-lidar concatenator (which would need a
+       shared pointcloud_container) — a single VLS128 is plenty for a per-frame *timing* benchmark. -->
+  <arg name="lidar_input_topic" default="/sensing/lidar/top/pointcloud_before_sync"/>
+  <arg name="initial_pose" default="[]" description="fixed init pose [x,y,z,qx,qy,qz,qw]; empty -> GNSS auto-init via /localization/initialize"/>
 
-  <!-- NDT wiring. `bag_lidar_topic` is the LiDAR topic the sample-rosbag publishes (discover with
-       `ros2 bag info`); it is remapped onto the node's `points_raw`. `num_threads:=1` = fair baseline. -->
-  <arg name="bag_lidar_topic" default="/points_raw"/>
-  <arg name="input_initial_pose_topic" default="/ekf_pose_with_covariance"/>
-  <arg name="ndt_param_path"
-       default="$(find-pkg-share autoware_ndt_scan_matcher)/config/ndt_scan_matcher.param.yaml"/>
+  <!-- Apply use_sim_time to every node launched below (bag replay publishes /clock). -->
+  <set_parameter name="use_sim_time" value="$(var use_sim_time)"/>
 
-  <node pkg="autoware_map_loader" exec="autoware_pointcloud_map_loader"
-        name="pointcloud_map_loader" output="both">
-    <!-- The NDT node's map client (`client_map_loader`, default `pcd_loader_service`) calls the
-         differential service; map the loader's differential service onto it. -->
-    <remap from="service/get_differential_pcd_map" to="/pcd_loader_service"/>
-    <param from="$(var map_loader_param_path)" allow_substs="true"/>
-    <param name="pcd_paths_or_directory" value="[$(var pointcloud_map_path)]"/>
-    <param name="pcd_metadata_path" value="$(var pointcloud_map_metadata_path)"/>
-  </node>
+  <!-- Vehicle dimensions (front_overhang, wheel_base, ...) onto the global param server; the sensing
+       preprocessor + crop read them. -->
+  <include file="$(find-pkg-share autoware_global_parameter_loader)/launch/global_params.launch.py">
+    <arg name="vehicle_model" value="$(var vehicle_model)"/>
+    <arg name="use_sim_time" value="$(var use_sim_time)"/>
+  </include>
 
-  <node pkg="autoware_ndt_scan_matcher" exec="autoware_ndt_scan_matcher_node"
-        name="ndt_scan_matcher" output="both">
-    <remap from="points_raw" to="$(var bag_lidar_topic)"/>
-    <remap from="ekf_pose_with_covariance" to="$(var input_initial_pose_topic)"/>
-    <remap from="client_map_loader" to="/pcd_loader_service"/>
-    <param from="$(var ndt_param_path)" allow_substs="true"/>
-    <param name="ndt.num_threads" value="1"/>
-  </node>
+  <!-- TF from the vehicle + sensor-kit URDF (robot_state_publisher). No vehicle interface. -->
+  <include file="$(find-pkg-share tier4_vehicle_launch)/launch/vehicle.launch.xml">
+    <arg name="vehicle_model" value="$(var vehicle_model)"/>
+    <arg name="sensor_model" value="$(var sensor_model)"/>
+    <arg name="launch_vehicle_interface" value="false"/>
+  </include>
+
+  <!-- Sensing: Nebula decoders (launch_driver:=false -> decode the bag's packets) + concat + GNSS.
+       Pushed under the `sensing` namespace so the decoders subscribe to the bag's
+       /sensing/lidar/*/velodyne_packets and the concat publishes /sensing/lidar/concatenated/pointcloud. -->
+  <group>
+    <push-ros-namespace namespace="sensing"/>
+    <include file="$(find-pkg-share sample_sensor_kit_launch)/launch/sensing.launch.xml">
+      <arg name="launch_driver" value="false"/>
+      <arg name="vehicle_id" value="default"/>
+      <arg name="vehicle_mirror_param_file" value="$(var vehicle_mirror_param_file)"/>
+    </include>
+  </group>
+
+  <!-- Pointcloud map loader (serves /map/get_differential_pointcloud_map from the single PCD). -->
+  <include file="$(find-pkg-share autoware_core_map)/launch/autoware_core_map.launch.xml">
+    <arg name="lanelet2_map_path" value="$(var map_path)/lanelet2_map.osm"/>
+    <arg name="map_projector_info_path" value="$(var map_path)/map_projector_info.yaml"/>
+    <arg name="pointcloud_map_path" value="$(var map_path)/pointcloud_map.pcd"/>
+    <arg name="pointcloud_map_metadata_path" value="$(var map_path)/pointcloud_map/metadata.yaml"/>
+  </include>
+
+  <!-- Localization loop: voxel downsample -> NDT -> EKF -> pose_initializer (+ twist2accel/stop). -->
+  <include file="$(find-pkg-share autoware_core_localization)/launch/autoware_core_localization.launch.xml">
+    <arg name="lidar_input_topic" value="$(var lidar_input_topic)"/>
+    <arg name="initial_pose" value="$(var initial_pose)"/>
+  </include>
 </launch>

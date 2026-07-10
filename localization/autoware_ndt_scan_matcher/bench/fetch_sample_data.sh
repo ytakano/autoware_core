@@ -81,7 +81,13 @@ ensure() {
       mv -f "$tmp" "$archive"  # atomic: only a fully-verified archive lands at the final path
     fi
     echo "[fetch] extracting $(basename "$archive") -> $dest_parent/" >&2
-    unzip -q -o "$archive" -d "$dest_parent"
+    if command -v unzip >/dev/null 2>&1; then
+      unzip -q -o "$archive" -d "$dest_parent"
+    else
+      # unzip may be absent in minimal images; python's zipfile is always available with ROS.
+      python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+        "$archive" "$dest_parent"
+    fi
   else
     echo "[fetch] cached extract OK: $extracted" >&2
   fi
