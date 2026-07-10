@@ -152,6 +152,66 @@ fn dense_neighbors() -> Fixture {
     dense_corner(6, 1500, 0.08, -0.06)
 }
 
+/// (e) **Deployment-legal worst case**: the hardest input that can still reach the engine
+/// through Autoware's production preprocessing pipeline (contract values from
+/// `autoware_launch/config/localization/ndt_scan_matcher/pointcloud_preprocessor/*.param.yaml`):
+///
+/// - crop box ±60 m (x/y); `voxel_grid_downsample` leaf **3.0 m** → one source point per 3 m
+///   cell, no duplicates; `random_downsample` `sample_num` = **1500** → `P ≤ 1500`;
+/// - map tiles are disjoint and voxel-aligned (pcd_divider) → leaf multiplicity 1 → `K ≤ 8`
+///   (the corner-sharing voxels; centroids at √3 ≈ 1.73 m < the 2.0 m radius);
+/// - map PCD survives a ≥ 0.2 m map downsample (per-voxel points spaced ≥ 0.7 m here).
+///
+/// Construction: single tile, 2 m voxels over ±62 m × 3 z-layers, 8 points per voxel on a
+/// 2×2×2 sub-grid (0.8 m pitch, ±0.05 m deterministic jitter). Source: `P = 1500` points on
+/// distinct interior voxel-lattice corners at 4 m x/y pitch (distinct 3 m cells) on the z = 2
+/// and z = 4 planes (distinct 3 m z-cells), all inside the crop; every corner collects exactly
+/// `K = 8`. eps = 1e-10 pins iter = 30. Expected counters: K̄ = 8.0, Σnbr = 1500·8·31 = 372000.
+fn legal_worst() -> Fixture {
+    let res = 2.0_f32;
+    let mut rng = Lcg(0x1E9A_1000);
+    let mut map = Vec::new();
+    // Voxels i,j ∈ [-31, 30] cover [-62, 62); z-layers k ∈ 0..3 cover [0, 6].
+    for i in -31_i32..31 {
+        for j in -31_i32..31 {
+            for k in 0..3_i32 {
+                for sx in 0..2_i32 {
+                    for sy in 0..2_i32 {
+                        for sz in 0..2_i32 {
+                            let jx = (rng.next_f32() - 0.5) * 0.1;
+                            let jy = (rng.next_f32() - 0.5) * 0.1;
+                            let jz = (rng.next_f32() - 0.5) * 0.1;
+                            map.push([
+                                i as f32 * res + 0.6 + sx as f32 * 0.8 + jx,
+                                j as f32 * res + 0.6 + sy as f32 * 0.8 + jy,
+                                k as f32 * res + 0.6 + sz as f32 * 0.8 + jz,
+                            ]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Source: interior lattice corners, 4 m x/y pitch, z ∈ {2, 4}; first 1500 in scan order.
+    let mut src = Vec::with_capacity(1500);
+    'outer: for z in [2.0_f32, 4.0] {
+        for a in -15_i32..=15 {
+            for b in -15_i32..=15 {
+                if src.len() == 1500 {
+                    break 'outer;
+                }
+                src.push([a as f32 * 4.0, b as f32 * 4.0, z]);
+            }
+        }
+    }
+    Fixture {
+        tiles: vec![map],
+        source: src,
+        guess: guess_xy(0.08, -0.06),
+        params: params(30, 1e-10),
+    }
+}
+
 /// (b) Rough random surface + tiny trans_epsilon → never converges → N_iter = max_iterations.
 fn max_iterations() -> Fixture {
     let mut rng = Lcg(0x57C3_7001);
@@ -320,11 +380,12 @@ fn main() {
     );
     std::fs::create_dir_all(&out_dir).expect("create fixture dir");
 
-    let fixtures: [(&str, Fixture); 4] = [
+    let fixtures: [(&str, Fixture); 5] = [
         ("dense_neighbors", dense_neighbors()),
         ("max_iterations", max_iterations()),
         ("cache_hostile", cache_hostile()),
         ("subnormal", subnormal()),
+        ("legal_worst", legal_worst()),
     ];
     println!("adversarial WCET fixtures -> {}", out_dir.display());
     for (name, fx) in &fixtures {
