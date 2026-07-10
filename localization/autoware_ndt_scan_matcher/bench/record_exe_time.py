@@ -30,6 +30,7 @@ import argparse
 import json
 import signal
 import sys
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -38,12 +39,13 @@ from autoware_internal_debug_msgs.msg import Float32Stamped, Int32Stamped
 
 
 class ExeTimeRecorder(Node):
-    def __init__(self) -> None:
+    def __init__(self, exe_topic: str = "/localization/pose_estimator/exe_time_ms",
+                 iter_topic: str = "/localization/pose_estimator/iteration_num") -> None:
         super().__init__("l1b_exe_time_recorder")
         self.samples_ms: list[float] = []
         self.last_iter: int = -1
-        self.create_subscription(Float32Stamped, "/exe_time_ms", self._on_exe, 50)
-        self.create_subscription(Int32Stamped, "/iteration_num", self._on_iter, 50)
+        self.create_subscription(Float32Stamped, exe_topic, self._on_exe, 50)
+        self.create_subscription(Int32Stamped, iter_topic, self._on_iter, 50)
 
     def _on_exe(self, msg: Float32Stamped) -> None:
         self.samples_ms.append(float(msg.data))
@@ -58,6 +60,9 @@ def main() -> int:
     parser.add_argument("--label", default=None, help="human-readable engine label")
     parser.add_argument("--out", required=True, help="output JSON path")
     parser.add_argument("--num-threads", type=int, default=1)
+    parser.add_argument("--duration", type=float, default=0.0, help="record for N wall seconds then exit (0 = until SIGINT)")
+    parser.add_argument("--exe-topic", default="/localization/pose_estimator/exe_time_ms")
+    parser.add_argument("--iter-topic", default="/localization/pose_estimator/iteration_num")
     args = parser.parse_args()
     label = args.label or (
         "Rust (node, autoware_ndt_scan_matcher_rs)"
@@ -66,7 +71,7 @@ def main() -> int:
     )
 
     rclpy.init()
-    node = ExeTimeRecorder()
+    node = ExeTimeRecorder(args.exe_topic, args.iter_topic)
 
     # Write the JSON and shut down cleanly on SIGINT/SIGTERM (sent by run_l1b.sh after the bag ends).
     def _stop(_signum, _frame):
@@ -76,7 +81,12 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _stop)
 
     try:
-        rclpy.spin(node)
+        if args.duration > 0:
+            deadline = time.monotonic() + args.duration
+            while rclpy.ok() and time.monotonic() < deadline:
+                rclpy.spin_once(node, timeout_sec=0.2)
+        else:
+            rclpy.spin(node)
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
 

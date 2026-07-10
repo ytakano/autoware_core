@@ -13,12 +13,11 @@ it is the WCET reference, and it isolates the kernel from thread-pool scheduling
 - **L1 — node / end-to-end.** The full ROS node timed by its built-in `exe_time_ms` publisher (present
   identically on both engines), `NDT_USE_RUST` OFF vs ON. **L1a** (automated, `bench/run_l1a.sh`) replays
   the in-repo `standard_sequence` cloud through the node frame-by-frame — deterministic, download-free,
-  the CI regression baseline. **L1b** (opt-in, `bench/run_l1b.sh`) replays the Autoware `sample-rosbag`
-  against `sample-map-rosbag` for the headline number, downloading the sample data only if absent. That
-  bag is raw sensor data (Velodyne packets, ublox GNSS, no PointCloud2, no TF), so `run_l1b.sh` brings
-  up the full Autoware sensing + localization graph (`launch/ndt_l1b_bench.launch.xml`: Nebula decode +
-  map + EKF/pose-initializer loop); it therefore needs the sensing stack built and a clean DDS state,
-  and reproduces the headline on a fresh full-Autoware container. Rely on the deterministic **L1a** for
+  the CI regression baseline. **L1b** (opt-in) replays a real recorded drive for the headline number —
+  **measured** on the Autoware urban-environment localization evaluation dataset (İstanbul), whose
+  localization-only bag feeds the preprocessed cloud + twist straight into the node graph
+  (`launch/ndt_l1b_loc.launch.xml`; replay shims + init in `bench/l1b_*.py`, method in
+  `plan/ndt_bench.md`). See the measured results below. Rely on the deterministic **L1a** for
   regression tracking.
 - **L2 — kernel micro-benchmark.** A tight per-frame `align` loop on a small synthetic cloud, to
   locate where time goes and bound per-frame WCET. Crate example `examples/wcet_frame.rs`.
@@ -80,6 +79,32 @@ workload.
 
 *Environment:* AMD Ryzen 9 5900HX (16 logical cores), governor `powersave`, no CPU pinning,
 `rustc 1.96.0`, `g++ 11.4.0`.
+
+### L1b — node end-to-end on real urban data (as of 2026-07-10)
+
+Autoware **urban-environment localization evaluation dataset** (İstanbul; Pandar XT32): the
+localization-only bag replays the preprocessed cloud (~1.2–1.5 k pts/frame) + GNSS/INS twist directly
+into the node graph (`launch/ndt_l1b_loc.launch.xml`: map loader + NDT + EKF loop, CycloneDDS,
+`num_threads = 1`). Same map crop, same `ndt_align`-seeded init, 120 s recorded per engine at 10 Hz;
+**both engines converge in `iteration_num = 3`** (equal work). Node `exe_time_ms` per frame,
+milliseconds:
+
+| Engine | n | p50 | p95 | p99 | max |
+|---|--:|--:|--:|--:|--:|
+| C++ (`multigrid_ndt_omp`) | 1199 | 4.20 | 6.45 | 7.63 | 11.97 |
+| Rust (`autoware_ndt_scan_matcher_rs`) | 1198 | 3.61 | 5.68 | 6.35 | 7.70 |
+
+**Rust is ≈ 1.16× faster at p50 and ≈ 1.56× at max** on this real-world workload. The ratio is
+smaller than L1a/L3 because real urban frames converge in only 3 iterations, so the align kernel is a
+smaller share of the end-to-end frame (ingest + covariance + publish overheads are largely shared);
+the tail improves the most — consistent with the Rust engine's bounded-WCET design.
+
+Replay shims (documented in `plan/ndt_bench.md`): the bag's header stamps lag its `/clock`, so a
+re-stamp relay aligns the cloud + twist stamps; the recorded `/clock` is excluded from replay (the
+player's own clock is the single time base); the single-file 15 km PCD overflows
+`MultiVoxelGridCovariance`'s int32 voxel index at 2 m resolution, so the map is cropped to ±3.5 km
+around the route (the production tile pipeline avoids this by construction); init = fresh GNSS seed →
+bag paused → `ndt_align_srv` (TPE) → refined pose + triggers → resume (`bench/l1b_ndt_align_init.py`).
 
 ### L2 — per-frame WCET (`examples/wcet_frame.rs`)
 

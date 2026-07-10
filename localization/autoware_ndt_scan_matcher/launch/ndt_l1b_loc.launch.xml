@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<!--
+  L1b (localization-only bag) benchmark launch — for the Autoware urban-environment localization
+  evaluation "localization test" rosbag, which already contains the preprocessed outputs:
+    /localization/util/downsample/pointcloud (sensor_msgs/PointCloud2) -> NDT input directly,
+    /localization/twist_estimator/twist_with_covariance -> EKF twist directly,
+    /sensing/gnss/pose_with_covariance (map frame, for init), /clock, /tf_static.
+  So NO sensing pipeline (Nebula/concat) and NO robot_state_publisher are needed. The graph is just
+  the pointcloud map loader + the NDT/EKF localization loop. The engine (C++/Rust) is chosen at BUILD
+  time via NDT_USE_RUST; init is driven by bench/l1b_init_bypass.py.
+-->
+<launch>
+  <arg name="pointcloud_map_path" description="path to the İSTA pointcloud_map.pcd"/>
+  <arg name="use_sim_time" default="true"/>
+
+  <set_parameter name="use_sim_time" value="$(var use_sim_time)"/>
+
+  <!-- Pointcloud map loader: serve the differential map service NDT calls, from the single PCD
+       (single-file map -> no metadata needed; params set directly to avoid the param-file substs). -->
+  <node pkg="autoware_map_loader" exec="autoware_pointcloud_map_loader" name="pointcloud_map_loader"
+        namespace="map" output="both">
+    <remap from="service/get_differential_pcd_map" to="/map/get_differential_pointcloud_map"/>
+    <param name="pcd_paths_or_directory" value="[$(var pointcloud_map_path)]"/>
+    <param name="pcd_metadata_path" value="$(var pointcloud_map_path).nonexistent.yaml"/>
+    <param name="enable_whole_load" value="true"/>
+    <param name="enable_partial_load" value="true"/>
+    <param name="enable_downsampled_whole_load" value="false"/>
+    <param name="enable_selected_load" value="false"/>
+    <param name="leaf_size" value="3.0"/>
+  </node>
+
+  <!-- The NDT/EKF localization loop. Its internal voxel downsample + twist relay idle here (their
+       inputs have no publisher in this bag); the bag publishes their outputs
+       (/localization/util/downsample/pointcloud, /localization/twist_estimator/twist_with_covariance)
+       directly, so NDT/EKF consume them. `lidar_input_topic` is pointed at an unused topic to keep the
+       downsample node idle. -->
+  <include file="$(find-pkg-share autoware_core_localization)/launch/autoware_core_localization.launch.xml">
+    <arg name="lidar_input_topic" value="/unused/lidar_input"/>
+  </include>
+</launch>
