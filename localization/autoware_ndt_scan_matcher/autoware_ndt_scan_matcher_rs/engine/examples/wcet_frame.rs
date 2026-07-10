@@ -23,6 +23,9 @@
 //!   `--features wcet-count` each row also reports the deterministic cost counters.
 //!
 //! `WCET_FRAMES` overrides the per-fixture frame count (default 20000 synthetic / 2000 fixture).
+//! `WCET_JSON=path` (fixture mode) additionally writes a machine-readable JSON — per fixture:
+//! sizes, `iteration_num`, timing samples (µs), and (under `wcet-count`) the cost counters —
+//! consumed by `bench/wcet_report.py` for the unit-cost regression.
 //! Record baselines in `porting_notes/ndt_wcet_audit.md`. (Single core, warm cache — a relative
 //! regression watch, not a hardware WCET proof.)
 
@@ -36,6 +39,7 @@
     clippy::indexing_slicing,
     clippy::print_stdout,
     clippy::arithmetic_side_effects,
+    clippy::let_underscore_must_use,
     clippy::allow_attributes,
     reason = "benchmark example (diagnostic, not a gate)"
 )]
@@ -155,6 +159,9 @@ fn run_synthetic() {
 /// Replay frozen fixtures: one HWM row per file (+ cost counters under `wcet-count`).
 fn run_fixtures(paths: &[String]) {
     let frames = frames_from_env(2_000);
+    let mut json = String::new();
+    json.push_str("{\n  \"fixtures\": {\n");
+    let mut first = true;
     println!("align frame time over {frames} frames/fixture (serial, pre-reserved workspace):");
     println!(
         "  {:16} {:>6} {:>6} {:>5} | {:>9} {:>9} {:>9} {:>9} | extra",
@@ -202,6 +209,44 @@ fn run_fixtures(paths: &[String]) {
             );
         }
         println!();
+
+        // Machine-readable entry for bench/wcet_report.py (WCET_JSON mode).
+        {
+            use std::fmt::Write as _;
+            if !first {
+                json.push_str(",\n");
+            }
+            first = false;
+            let _ = write!(
+                json,
+                "    \"{name}\": {{\n      \"n_map\": {},\n      \"n_tiles\": {},\n      \
+                 \"n_source\": {},\n      \"iteration_num\": {}",
+                fx.map_len(),
+                fx.tiles.len(),
+                fx.source.len(),
+                out.iteration_num
+            );
+            #[cfg(feature = "wcet-count")]
+            {
+                let c = out.counters;
+                let _ = write!(
+                    json,
+                    ",\n      \"counters\": {{ \"derivative_passes\": {}, \"points_processed\": \
+                     {}, \"sum_neighbors\": {}, \"kd_nodes_visited\": {} }}",
+                    c.derivative_passes, c.points_processed, c.sum_neighbors, c.kd_nodes_visited
+                );
+            }
+            json.push_str(",\n      \"samples_us\": [");
+            for (i, ns) in s.nanos.iter().enumerate() {
+                let _ = write!(json, "{}{:.3}", if i == 0 { "" } else { "," }, us(*ns));
+            }
+            json.push_str("]\n    }");
+        }
+    }
+    json.push_str("\n  }\n}\n");
+    if let Ok(path) = std::env::var("WCET_JSON") {
+        std::fs::write(&path, json).expect("write WCET_JSON");
+        eprintln!("wcet_frame: wrote {path}");
     }
 }
 
