@@ -84,6 +84,13 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_set_params(
     num_threads: i32,
 ) {
     let e = ffi_ref!(engine, else return);
+    crate::capture_hook::params(
+        trans_epsilon,
+        step_size,
+        resolution,
+        max_iterations,
+        outlier_ratio,
+    );
     e.set_params(
         trans_epsilon,
         step_size,
@@ -156,6 +163,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_add_target_str(
     let pts = ffi_slice!(points, n, [f32; 3], else return);
     // SAFETY: caller guarantees `id_len` readable bytes (or null/0 → empty), audited in ffi_ptr.
     let id_bytes = unsafe { ffi_ptr::slice_or_empty(id, id_len) };
+    crate::capture_hook::tile(id_bytes, pts);
     e.add_target_bytes(pts, id_bytes);
 }
 
@@ -301,7 +309,9 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_align(
     let e = ffi_ref!(engine, else return);
     let guess_buf = ffi_slice!(guess, 16, else return);
     let src = ffi_slice!(source, n, [f32; 3], else return);
-    e.align(&matrix4_from_row_major(guess_buf), src);
+    let guess_m = matrix4_from_row_major(guess_buf);
+    crate::capture_hook::align(e, &guess_m, src);
+    e.align(&guess_m, src);
 }
 
 /// Score `cloud` (`3 * n` `f32`) without aligning.
@@ -374,7 +384,9 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_result(
         }
         if !out.transformation_array.is_null() && !out.transforms_count.is_null() {
             let cap = out.transforms_cap as usize;
-            if let Some(buf) = ffi_ptr::opt_slice_mut(out.transformation_array, cap.saturating_mul(16)) {
+            if let Some(buf) =
+                ffi_ptr::opt_slice_mut(out.transformation_array, cap.saturating_mul(16))
+            {
                 write_matrix4_seq(buf, &result.transformation_array);
             }
             ffi_ptr::write_out(

@@ -97,6 +97,9 @@ pub mod scan_matcher;
 pub mod tpe;
 pub mod transform;
 pub mod voxel_grid;
+// Real-drive input capture (the NDT_CAPTURE_DIR sidecar format); std-only file IO.
+#[cfg(feature = "std")]
+pub mod capture;
 // Frozen WCET benchmark fixtures (capture-once, replay-everywhere); std-only file IO.
 #[cfg(feature = "std")]
 pub mod fixture;

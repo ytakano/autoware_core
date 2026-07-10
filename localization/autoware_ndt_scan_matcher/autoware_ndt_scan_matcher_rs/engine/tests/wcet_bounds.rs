@@ -111,6 +111,14 @@ proptest! {
         prop_assert!(c.sum_neighbors <= c.points_processed * k,
             "neighbors {} > points {} × K {}", c.sum_neighbors, c.points_processed, k);
 
+        // The per-point max witness: capped by MAX_NEIGHBORS, and the sum cannot exceed
+        // points × max (the max dominates the mean).
+        prop_assert!(c.max_neighbors <= k,
+            "max K {} > MAX_NEIGHBORS {}", c.max_neighbors, k);
+        prop_assert!(c.sum_neighbors <= c.points_processed * c.max_neighbors.max(1),
+            "neighbors {} > points {} × max K {}", c.sum_neighbors, c.points_processed,
+            c.max_neighbors);
+
         // Traversal ≤ tree nodes per query (nodes == searchable leaves).
         let nodes = u64::try_from(map.num_leaves()).unwrap();
         prop_assert!(c.kd_nodes_visited <= c.points_processed * nodes,

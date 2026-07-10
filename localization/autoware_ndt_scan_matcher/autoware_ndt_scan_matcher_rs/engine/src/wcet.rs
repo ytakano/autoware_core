@@ -39,6 +39,9 @@ pub struct WcetCounters {
     /// kd-tree nodes visited by the neighbor searches, summed over all points and passes
     /// (≤ `points_processed × tree node count`).
     pub kd_nodes_visited: u64,
+    /// Largest single-point neighbor count seen in this align (≤ `MAX_NEIGHBORS`). The per-point
+    /// witness for the `K` ceiling — `sum_neighbors` only exposes the mean.
+    pub max_neighbors: u64,
 }
 
 impl WcetCounters {
@@ -50,6 +53,7 @@ impl WcetCounters {
             points_processed: 0,
             sum_neighbors: 0,
             kd_nodes_visited: 0,
+            max_neighbors: 0,
         }
     }
 }

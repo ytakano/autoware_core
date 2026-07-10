@@ -70,7 +70,7 @@ pub struct Fixture {
     pub params: NdtParams,
 }
 
-fn write_points(w: &mut impl Write, pts: &[[f32; 3]]) -> io::Result<()> {
+pub(crate) fn write_points(w: &mut impl Write, pts: &[[f32; 3]]) -> io::Result<()> {
     for p in pts {
         for c in p {
             w.write_all(&c.to_le_bytes())?;
@@ -79,13 +79,13 @@ fn write_points(w: &mut impl Write, pts: &[[f32; 3]]) -> io::Result<()> {
     Ok(())
 }
 
-fn read_exact_array<const N: usize>(r: &mut impl Read) -> io::Result<[u8; N]> {
+pub(crate) fn read_exact_array<const N: usize>(r: &mut impl Read) -> io::Result<[u8; N]> {
     let mut buf = [0_u8; N];
     r.read_exact(&mut buf)?;
     Ok(buf)
 }
 
-fn read_points(r: &mut impl Read, n: u64) -> io::Result<Vec<[f32; 3]>> {
+pub(crate) fn read_points(r: &mut impl Read, n: u64) -> io::Result<Vec<[f32; 3]>> {
     if n > MAX_POINTS {
         return Err(io::ErrorKind::InvalidData.into());
     }

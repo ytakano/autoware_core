@@ -252,9 +252,102 @@ fn run_fixtures(paths: &[String]) {
 
 fn main() {
     let paths: Vec<String> = std::env::args().skip(1).collect();
-    if paths.is_empty() {
+    if paths.first().map(String::as_str) == Some("--capture") {
+        let dir = paths.get(1).expect("--capture needs a directory");
+        run_capture(std::path::Path::new(dir));
+    } else if paths.is_empty() {
         run_synthetic();
     } else {
         run_fixtures(&paths);
+    }
+}
+
+/// Replay a real-drive capture directory (`NDT_CAPTURE_DIR` sidecar format): frames grouped into
+/// epochs by their active tile-id set, one map build per epoch (tiles added in the captured
+/// sorted-id order → the same order the C++ replayer uses), each frame timed `WCET_FRAMES`
+/// times (default 5, median reported) + counters under `wcet-count`. `WCET_JSON` writes the
+/// per-frame records for `bench/wcet_realdata.py`.
+fn run_capture(dir: &std::path::Path) {
+    use std::fmt::Write as _;
+
+    use autoware_ndt_rs::capture;
+
+    let params = capture::read_params(dir).expect("read params.bin");
+    let frame_paths = capture::list_frames(dir).expect("list frames");
+    let repeats = frames_from_env(5);
+    println!(
+        "capture replay: {} frames, {} timing repeats/frame, eps={} max_iter={}",
+        frame_paths.len(),
+        repeats,
+        params.trans_epsilon,
+        params.max_iterations
+    );
+
+    let mut json = String::new();
+    json.push_str("{\n  \"frames\": [\n");
+    let mut first = true;
+
+    let mut cur_ids: Option<Vec<Vec<u8>>> = None;
+    let mut map = VoxelGridMap::new([params.resolution; 3], 6, 0.01);
+    let mut ws = AlignWorkspace::new();
+    let mut out = AlignResult::default();
+    let mut epochs = 0_u32;
+
+    for (fi, fp) in frame_paths.iter().enumerate() {
+        let fr = capture::read_frame(fp).expect("read frame");
+        if cur_ids.as_ref() != Some(&fr.ids) {
+            // New epoch: rebuild the map from the tile library in the captured (sorted) order.
+            map = VoxelGridMap::new([params.resolution; 3], 6, 0.01);
+            for (i, id) in fr.ids.iter().enumerate() {
+                let tile = capture::read_tile(dir, &capture::hex_id(id)).expect("read tile");
+                map.add_target(&tile, i as u64);
+            }
+            map.create_kdtree();
+            cur_ids = Some(fr.ids.clone());
+            epochs += 1;
+        }
+        // Timing: median of `repeats` runs (first run also yields the counters).
+        let mut times: Vec<u128> = Vec::with_capacity(repeats);
+        for _ in 0..repeats {
+            let t = Instant::now();
+            align(&map, &fr.source, &fr.guess, &params, &mut ws, &mut out);
+            times.push(t.elapsed().as_nanos());
+        }
+        times.sort_unstable();
+        let med_ms = us(times[times.len() / 2]) / 1000.0;
+
+        if !first {
+            json.push_str(",\n");
+        }
+        first = false;
+        let _ = write!(
+            json,
+            "    {{ \"seq\": {fi}, \"n_source\": {}, \"n_tiles\": {}, \"iteration_num\": {}, \
+             \"ms\": {med_ms:.4}",
+            fr.source.len(),
+            fr.ids.len(),
+            out.iteration_num
+        );
+        #[cfg(feature = "wcet-count")]
+        {
+            let c = out.counters;
+            let _ = write!(
+                json,
+                ", \"counters\": {{ \"derivative_passes\": {}, \"points_processed\": {}, \
+                 \"sum_neighbors\": {}, \"kd_nodes_visited\": {}, \"max_neighbors\": {} }}",
+                c.derivative_passes,
+                c.points_processed,
+                c.sum_neighbors,
+                c.kd_nodes_visited,
+                c.max_neighbors
+            );
+        }
+        json.push_str(" }");
+    }
+    json.push_str("\n  ]\n}\n");
+    println!("epochs: {epochs}");
+    if let Ok(path) = std::env::var("WCET_JSON") {
+        std::fs::write(&path, json).expect("write WCET_JSON");
+        eprintln!("wcet_frame: wrote {path}");
     }
 }

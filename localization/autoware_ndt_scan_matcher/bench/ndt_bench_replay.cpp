@@ -30,6 +30,16 @@
 // `wcet_fixtures` / `wcet_search` examples) through BOTH engines on identical buffers and asserts
 // `iteration_num` equality per fixture (bit-exactness ⇒ equal work ⇒ the timing comparison is
 // algorithm-fair). Env: WCET_ITERS (default 100), WCET_WARMUP (default 10).
+//
+// Real-drive capture mode (operational envelope):
+//   ndt_bench_replay --capture out.json <NDT_CAPTURE_DIR>
+// Replays a capture directory (params.bin + tiles/ + frames/, written by the node's
+// NDT_CAPTURE_DIR hook) through BOTH engines: frames are grouped into epochs by their active
+// tile-id set; per epoch both maps are rebuilt with tiles added in the captured (sorted) id
+// order — C++ uses zero-padded numeric names so its std::map string order matches the Rust
+// engine's numeric id order. Per frame: WCET_REPEATS timed aligns per engine (default 5, median
+// reported) + an iteration-equality check. Rust-side counters come from
+// `wcet_frame --capture` (separate pass); merge with bench/wcet_realdata.py.
 
 #include <autoware/ndt_scan_matcher/ndt_omp/multigrid_ndt_omp.h>
 
@@ -42,12 +52,16 @@
 
 #include <dlfcn.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -377,6 +391,236 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
   std::fprintf(stderr, "wcet: wrote %s\n", out_path.c_str());
   return rc;
 }
+
+// ---------------------------------------------------------------------------
+// Real-drive capture mode (NDT_CAPTURE_DIR sidecar format)
+// ---------------------------------------------------------------------------
+
+struct CaptureParams
+{
+  double trans_epsilon, step_size, resolution, outlier_ratio;
+  int32_t max_iterations;
+};
+
+bool read_capture_params(const std::string & dir, CaptureParams & p)
+{
+  FILE * f = std::fopen((dir + "/params.bin").c_str(), "rb");
+  if (f == nullptr) return false;
+  int32_t reserved = 0;
+  const bool ok = read_exact(f, &p.trans_epsilon, 8) && read_exact(f, &p.step_size, 8) &&
+                  read_exact(f, &p.resolution, 8) && read_exact(f, &p.outlier_ratio, 8) &&
+                  read_exact(f, &p.max_iterations, 4) && read_exact(f, &reserved, 4);
+  std::fclose(f);
+  return ok;
+}
+
+std::string hex_of(const std::string & id)
+{
+  static const char * kHex = "0123456789abcdef";
+  std::string s;
+  s.reserve(id.size() * 2);
+  for (unsigned char b : id) {
+    s.push_back(kHex[b >> 4]);
+    s.push_back(kHex[b & 0x0f]);
+  }
+  return s;
+}
+
+struct CaptureFrame
+{
+  std::array<float, 16> guess16;
+  std::vector<std::string> ids;
+  std::vector<float> source;  // flat xyz
+};
+
+bool read_capture_frame(const std::string & path, CaptureFrame & fr)
+{
+  FILE * f = std::fopen(path.c_str(), "rb");
+  if (f == nullptr) return false;
+  bool ok = false;
+  do {
+    if (!read_exact(f, fr.guess16.data(), 16 * sizeof(float))) break;
+    uint64_t n_ids = 0;
+    if (!read_exact(f, &n_ids, 8) || n_ids > 4096) break;
+    fr.ids.clear();
+    bool ids_ok = true;
+    for (uint64_t i = 0; i < n_ids; ++i) {
+      uint64_t len = 0;
+      if (!read_exact(f, &len, 8) || len > 4096) {
+        ids_ok = false;
+        break;
+      }
+      std::string id(static_cast<size_t>(len), '\0');
+      if (len > 0 && !read_exact(f, id.data(), static_cast<size_t>(len))) {
+        ids_ok = false;
+        break;
+      }
+      fr.ids.push_back(std::move(id));
+    }
+    if (!ids_ok) break;
+    uint64_t n_src = 0;
+    if (!read_exact(f, &n_src, 8) || n_src > 50'000'000ULL) break;
+    fr.source.resize(static_cast<size_t>(n_src) * 3);
+    if (!fr.source.empty() &&
+        !read_exact(f, fr.source.data(), fr.source.size() * sizeof(float)))
+      break;
+    ok = true;
+  } while (false);
+  std::fclose(f);
+  return ok;
+}
+
+// Replays a capture directory through BOTH engines (epoch-rebuilt maps, per-frame equal-work
+// check). Returns the process exit code.
+int run_capture_mode(const std::string & out_path, const std::string & dir)
+{
+  const int repeats = std::getenv("WCET_REPEATS") ? std::atoi(std::getenv("WCET_REPEATS")) : 5;
+  CaptureParams cp{};
+  if (!read_capture_params(dir, cp)) {
+    std::fprintf(stderr, "capture: cannot read %s/params.bin\n", dir.c_str());
+    return 1;
+  }
+  std::vector<std::string> frame_paths;
+  for (const auto & e : std::filesystem::directory_iterator(dir + "/frames")) {
+    if (e.path().extension() == ".bin") frame_paths.push_back(e.path().string());
+  }
+  std::sort(frame_paths.begin(), frame_paths.end());
+  std::fprintf(stderr, "capture: %zu frames, %d repeats/frame\n", frame_paths.size(), repeats);
+
+  // Tile cache: hex id -> (pcl cloud, flat xyz).
+  std::map<std::string, std::pair<pcl::PointCloud<pcl::PointXYZ>::Ptr, std::vector<float>>>
+    tile_cache;
+  const auto load_tile = [&](const std::string & id) -> bool {
+    const std::string hex = hex_of(id);
+    if (tile_cache.count(hex) != 0) return true;
+    FILE * f = std::fopen((dir + "/tiles/" + hex + ".bin").c_str(), "rb");
+    if (f == nullptr) return false;
+    uint64_t n = 0;
+    bool ok = read_exact(f, &n, 8) && n <= 50'000'000ULL;
+    std::vector<float> flat;
+    if (ok) {
+      flat.resize(static_cast<size_t>(n) * 3);
+      ok = flat.empty() || read_exact(f, flat.data(), flat.size() * sizeof(float));
+    }
+    std::fclose(f);
+    if (!ok) return false;
+    tile_cache.emplace(hex, std::make_pair(flat_to_cloud(flat), std::move(flat)));
+    return true;
+  };
+
+  pclomp::NdtParams params{};
+  params.trans_epsilon = cp.trans_epsilon;
+  params.step_size = cp.step_size;
+  params.resolution = static_cast<float>(cp.resolution);
+  params.max_iterations = cp.max_iterations;
+  params.search_method = pclomp::KDTREE;
+  params.num_threads = 1;
+  params.regularization_scale_factor = 0.0F;
+  params.use_line_search = false;
+
+  FILE * f = std::fopen(out_path.c_str(), "w");
+  if (f == nullptr) {
+    std::fprintf(stderr, "capture: cannot open %s\n", out_path.c_str());
+    return 1;
+  }
+  std::fprintf(f, "{\n  \"frames\": [\n");
+
+  int rc = 0;
+  bool first = true;
+  size_t epochs = 0;
+  size_t mismatches = 0;
+  std::vector<std::string> cur_ids;
+  std::unique_ptr<Ndt> ndt;
+  struct AwNdtEngine * eng = nullptr;
+  auto aligned = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+
+  for (size_t fi = 0; fi < frame_paths.size(); ++fi) {
+    CaptureFrame fr;
+    if (!read_capture_frame(frame_paths[fi], fr)) {
+      std::fprintf(stderr, "capture: malformed frame %s\n", frame_paths[fi].c_str());
+      rc = 1;
+      continue;
+    }
+    if (fr.ids != cur_ids) {
+      // New epoch: rebuild both maps, tiles added in the captured (sorted) id order with
+      // zero-padded numeric names (C++ std::map string order == Rust numeric id order).
+      ndt = std::make_unique<Ndt>();
+      ndt->setParams(params);
+      if (eng != nullptr) autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+      eng = autoware_ndt_scan_matcher_rs_ndt_engine_new(cp.resolution, 6, 0.01);
+      autoware_ndt_scan_matcher_rs_ndt_engine_set_params(
+        eng, cp.trans_epsilon, cp.step_size, cp.resolution, cp.max_iterations, cp.outlier_ratio,
+        1);
+      bool tiles_ok = true;
+      for (size_t i = 0; i < fr.ids.size(); ++i) {
+        if (!load_tile(fr.ids[i])) {
+          std::fprintf(stderr, "capture: missing tile for frame %zu\n", fi);
+          tiles_ok = false;
+          break;
+        }
+        const auto & entry = tile_cache.at(hex_of(fr.ids[i]));
+        char name[16];
+        std::snprintf(name, sizeof(name), "%06zu", i);
+        ndt->addTarget(entry.first, name);
+        autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
+          eng, entry.second.data(), entry.second.size() / 3, static_cast<uint64_t>(i));
+      }
+      if (!tiles_ok) {
+        rc = 1;
+        cur_ids.clear();
+        continue;
+      }
+      ndt->createVoxelKdtree();
+      autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng);
+      cur_ids = fr.ids;
+      ++epochs;
+    }
+
+    Eigen::Matrix4f guess = Eigen::Matrix4f::Identity();
+    for (int r = 0; r < 4; ++r)
+      for (int c = 0; c < 4; ++c) guess(r, c) = fr.guess16[(r * 4) + c];
+    auto source = flat_to_cloud(fr.source);
+    const size_t n_src = fr.source.size() / 3;
+
+    // Median-of-repeats per engine (interleaving avoided: all C++ then all Rust per frame).
+    std::vector<double> cpp_ms_v, rs_ms_v;
+    cpp_ms_v.reserve(static_cast<size_t>(repeats));
+    rs_ms_v.reserve(static_cast<size_t>(repeats));
+    for (int k = 0; k < repeats; ++k) {
+      const auto t0 = Clock::now();
+      ndt->align(*aligned, guess, source);
+      cpp_ms_v.push_back(ms_since(t0));
+    }
+    for (int k = 0; k < repeats; ++k) {
+      const auto t0 = Clock::now();
+      autoware_ndt_scan_matcher_rs_ndt_engine_align(eng, fr.guess16.data(), fr.source.data(),
+        n_src);
+      rs_ms_v.push_back(ms_since(t0));
+    }
+    std::sort(cpp_ms_v.begin(), cpp_ms_v.end());
+    std::sort(rs_ms_v.begin(), rs_ms_v.end());
+    const int cpp_iter = ndt->getResult().iteration_num;
+    int32_t rs_iter = 0;
+    AwNdtAlignOutput rout{};
+    rout.iteration_num = &rs_iter;
+    autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &rout);
+    const bool match = (cpp_iter == rs_iter);
+    if (!match) ++mismatches;
+
+    std::fprintf(f,
+      "%s    { \"seq\": %zu, \"n_source\": %zu, \"n_tiles\": %zu, \"cpp_ms\": %.4f, "
+      "\"rust_ms\": %.4f, \"iter_cpp\": %d, \"iter_rust\": %d, \"match\": %s }",
+      (first ? "" : ",\n"), fi, n_src, fr.ids.size(), cpp_ms_v[cpp_ms_v.size() / 2],
+      rs_ms_v[rs_ms_v.size() / 2], cpp_iter, rs_iter, match ? "true" : "false");
+    first = false;
+  }
+  if (eng != nullptr) autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+  std::fprintf(f, "\n  ]\n}\n");
+  std::fclose(f);
+  std::fprintf(stderr, "capture: %zu epochs, %zu iteration mismatches -> %s\n", epochs,
+    mismatches, out_path.c_str());
+  return (rc != 0 || mismatches > 0) ? 1 : 0;
+}
 }  // namespace
 
 int main(int argc, char ** argv)
@@ -385,6 +629,10 @@ int main(int argc, char ** argv)
   if (argc >= 4 && std::strcmp(argv[1], "--fixture") == 0) {
     std::vector<std::string> paths(argv + 3, argv + argc);
     return run_fixture_mode(argv[2], paths);
+  }
+  // Real-drive capture mode: ndt_bench_replay --capture out.json <NDT_CAPTURE_DIR>
+  if (argc == 4 && std::strcmp(argv[1], "--capture") == 0) {
+    return run_capture_mode(argv[2], argv[3]);
   }
 
   const int iters = (argc > 1) ? std::atoi(argv[1]) : 200;

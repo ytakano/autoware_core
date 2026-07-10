@@ -369,12 +369,11 @@ pub fn compute_derivatives(
         let c = point_contribution(map, sp, tp, &ad, cfg, &mut ws.neighbor_idx);
         #[cfg(feature = "wcet-count")]
         {
+            let k = u64::try_from(c.neighborhood).unwrap_or(u64::MAX);
             ws.counters.points_processed = ws.counters.points_processed.saturating_add(1);
-            ws.counters.sum_neighbors = ws
-                .counters
-                .sum_neighbors
-                .saturating_add(u64::try_from(c.neighborhood).unwrap_or(u64::MAX));
+            ws.counters.sum_neighbors = ws.counters.sum_neighbors.saturating_add(k);
             ws.counters.kd_nodes_visited = ws.counters.kd_nodes_visited.saturating_add(c.kd_nodes);
+            ws.counters.max_neighbors = ws.counters.max_neighbors.max(k);
         }
         red.add(&c);
     }
@@ -417,11 +416,11 @@ pub fn compute_derivatives_parallel(
     for c in &ws.contribs {
         #[cfg(feature = "wcet-count")]
         {
+            let k = u64::try_from(c.neighborhood).unwrap_or(u64::MAX);
             pass.points_processed = pass.points_processed.saturating_add(1);
-            pass.sum_neighbors = pass
-                .sum_neighbors
-                .saturating_add(u64::try_from(c.neighborhood).unwrap_or(u64::MAX));
+            pass.sum_neighbors = pass.sum_neighbors.saturating_add(k);
             pass.kd_nodes_visited = pass.kd_nodes_visited.saturating_add(c.kd_nodes);
+            pass.max_neighbors = pass.max_neighbors.max(k);
         }
         red.add(c);
     }
@@ -437,6 +436,7 @@ pub fn compute_derivatives_parallel(
             .counters
             .kd_nodes_visited
             .saturating_add(pass.kd_nodes_visited);
+        ws.counters.max_neighbors = ws.counters.max_neighbors.max(pass.max_neighbors);
     }
     finalize(red, p, cfg, source.len())
 }
