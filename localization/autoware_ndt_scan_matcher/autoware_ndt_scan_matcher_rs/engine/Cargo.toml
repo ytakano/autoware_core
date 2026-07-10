@@ -40,6 +40,12 @@ parallel = ["std", "dep:rayon"]
 # shipping hot path is untouched. No extra dependencies.
 wcet-count = []
 
+# The worst-input search needs the cost counters as its fitness; without the feature the example
+# has no meaningful fitness, so it is not built at all.
+[[example]]
+name = "wcet_search"
+required-features = ["wcet-count"]
+
 [dependencies]
 # Pure-Rust libm: provides sqrt in no_std (and matches C++ std::sqrt — sqrt is IEEE
 # correctly-rounded — so the differential oracle stays exact).
