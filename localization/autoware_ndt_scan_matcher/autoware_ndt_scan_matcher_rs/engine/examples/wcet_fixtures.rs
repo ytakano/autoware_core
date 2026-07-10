@@ -43,6 +43,8 @@
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
     clippy::doc_markdown,
+    clippy::similar_names,
+    clippy::cast_possible_wrap,
     reason = "example/benchmark tooling"
 )]
 
@@ -87,13 +89,15 @@ fn guess_xy(dx: f32, dy: f32) -> Matrix4<f32> {
     g
 }
 
-/// (a) `K = MAX_NEIGHBORS` by construction: 2×2×2 voxel blocks whose 8 voxels each cram their 8
+/// `K = MAX_NEIGHBORS` by construction: 2×2×2 voxel blocks whose 8 voxels each cram their 8
 /// points against the block's shared central corner (centroid → corner from inside each voxel),
 /// replicated over 8 overlapping tiles with distinct jitter → 8 tiles × 8 voxels = 64 leaf
-/// centroids within ~0.03 m of every block corner. Source points sit on the block corners.
-fn dense_neighbors() -> Fixture {
+/// centroids within ~0.03 m of every block corner. Source: `n_points` cycling the block corners
+/// (each collects the full 64 leaves). With `trans_epsilon = 1e-10` the align never converges,
+/// so every fixture built here does `31 × n_points × 64` kernel evaluations — the analytic
+/// maximum for its `(P, blocks)`.
+fn dense_corner(blocks: i32, n_points: usize, guess_dx: f32, guess_dy: f32) -> Fixture {
     let res = 2.0_f32;
-    let blocks = 6_i32; // blocks per axis (block = 2×2×2 voxels, pitch 2·res)
     let n_tiles = 8_usize;
     let mut tiles = Vec::with_capacity(n_tiles);
     for t in 0..n_tiles {
@@ -128,10 +132,9 @@ fn dense_neighbors() -> Fixture {
         }
         tiles.push(tile);
     }
-    // Source: 1500 points cycling the block corners (each collects the full 64 leaves).
-    let mut src = Vec::new();
-    for i in 0..1500_i32 {
-        let k = i % (blocks * blocks);
+    let mut src = Vec::with_capacity(n_points);
+    for i in 0..n_points {
+        let k = (i as i32) % (blocks * blocks);
         let kx = (2 * (k % blocks) + 1) as f32 * res;
         let ky = (2 * (k / blocks) + 1) as f32 * res;
         src.push([kx, ky, res]);
@@ -139,9 +142,14 @@ fn dense_neighbors() -> Fixture {
     Fixture {
         tiles,
         source: src,
-        guess: guess_xy(0.08, -0.06),
+        guess: guess_xy(guess_dx, guess_dy),
         params: params(30, 1e-10),
     }
+}
+
+/// (a) The hand-built max-`K` fixture (see [`dense_corner`]).
+fn dense_neighbors() -> Fixture {
+    dense_corner(6, 1500, 0.08, -0.06)
 }
 
 /// (b) Rough random surface + tiny trans_epsilon → never converges → N_iter = max_iterations.
@@ -279,8 +287,34 @@ fn probe(name: &str, fx: &Fixture) {
     println!();
 }
 
+/// `--psweep`: WCET-vs-`P` sweep set. The `search_00` champion geometry (8 tiles, blocks = 9,
+/// eps = 1e-10, guess (0.08, −0.35)) with `P` as the ONLY variable: per-point work is invariant
+/// by construction (iter = 30, K̄ = 64 at every `P`; verify via the probe counters), so timing
+/// the set fits the parametric model `WCET(P) = slope·P + const`.
+fn run_psweep(out_dir: &Path) {
+    std::fs::create_dir_all(out_dir).expect("create fixture dir");
+    println!("P-sweep WCET fixtures -> {}", out_dir.display());
+    for p in [250_usize, 500, 1000, 2000, 4000, 8000] {
+        let fx = dense_corner(9, p, 0.08, -0.35);
+        let name = format!("psweep_p{p:05}");
+        fx.write(&out_dir.join(format!("{name}.ndtfix")))
+            .expect("write fixture");
+        probe(&name, &fx);
+    }
+}
+
 fn main() {
-    let out_dir: PathBuf = std::env::args().nth(1).map_or_else(
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--psweep") {
+        let out_dir: PathBuf = args.get(1).map_or_else(
+            || Path::new("../../bench/fixtures/psweep").to_path_buf(),
+            Into::into,
+        );
+        run_psweep(&out_dir);
+        return;
+    }
+
+    let out_dir: PathBuf = args.first().map_or_else(
         || Path::new("../../bench/fixtures").to_path_buf(),
         Into::into,
     );
