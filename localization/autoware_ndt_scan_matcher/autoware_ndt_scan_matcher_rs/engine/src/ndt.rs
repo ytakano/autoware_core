@@ -47,7 +47,9 @@ use crate::voxel_grid::VoxelGridMap;
 /// well above the physical worst case (a radius == `leaf_size` voxel neighborhood is ≤ 27 voxels), so
 /// it does not truncate for real maps — if it ever does, the result deviates from the unbounded C++
 /// `radiusSearch` (first-N in traversal order), which should be treated as a misconfiguration.
-const MAX_NEIGHBORS: usize = 64;
+/// Per-point cap on the neighbor-search result (`radius_search`'s `max_nn`): the `K` of the WCET
+/// decomposition `T ≤ N_iter × Σ_p (T_search + K·T_kernel)` — see `plan/ndt_wcet.md`.
+pub const MAX_NEIGHBORS: usize = 64;
 
 /// Reusable scratch buffers for the per-frame derivative pass and the align loop. Hold one per engine
 /// and reuse across frames; the buffers `clear()` (keep capacity) per call, so after warmup the hot
@@ -61,6 +63,9 @@ pub struct AlignWorkspace {
     /// stays allocation-free.
     #[cfg(feature = "parallel")]
     contribs: Vec<PointContribution>,
+    /// Algorithmic-cost counters for the current/last [`align`] (reset at each align start).
+    #[cfg(feature = "wcet-count")]
+    pub counters: crate::wcet::WcetCounters,
 }
 
 impl AlignWorkspace {
@@ -73,6 +78,8 @@ impl AlignWorkspace {
             trans_cloud: Vec::new(),
             #[cfg(feature = "parallel")]
             contribs: Vec::new(),
+            #[cfg(feature = "wcet-count")]
+            counters: crate::wcet::WcetCounters::new(),
         }
     }
 }
@@ -145,6 +152,9 @@ struct PointContribution {
     nearest: f64,
     neighborhood: usize,
     found: bool,
+    /// kd-tree nodes visited by this point's neighbor search (WCET traversal counter).
+    #[cfg(feature = "wcet-count")]
+    kd_nodes: u64,
 }
 
 /// Compute one source point's [`PointContribution`]. `nbr` is caller-owned neighbor-search scratch
@@ -165,6 +175,9 @@ fn point_contribution(
     nbr: &mut Vec<usize>,
 ) -> PointContribution {
     nbr.clear();
+    #[cfg(feature = "wcet-count")]
+    let kd_nodes = map.radius_search_counted(tp, cfg.resolution, MAX_NEIGHBORS, nbr);
+    #[cfg(not(feature = "wcet-count"))]
     map.radius_search(tp, cfg.resolution, MAX_NEIGHBORS, nbr);
     if nbr.is_empty() {
         return PointContribution {
@@ -174,6 +187,8 @@ fn point_contribution(
             nearest: 0.0,
             neighborhood: 0,
             found: false,
+            #[cfg(feature = "wcet-count")]
+            kd_nodes,
         };
     }
     let pd = compute_point_derivatives(&vec3(sp), ad);
@@ -207,6 +222,8 @@ fn point_contribution(
         nearest,
         neighborhood: nbr.len(),
         found: true,
+        #[cfg(feature = "wcet-count")]
+        kd_nodes,
     }
 }
 
@@ -328,9 +345,22 @@ pub fn compute_derivatives(
 ) -> Derivatives {
     let ad = compute_angle_derivatives(p);
     let mut red = Reduction::new();
+    #[cfg(feature = "wcet-count")]
+    {
+        ws.counters.derivative_passes = ws.counters.derivative_passes.saturating_add(1);
+    }
     // Per-point-local contributions, folded in point-index order (zip stops at the shorter cloud).
     for (&tp, &sp) in trans_cloud.iter().zip(source.iter()) {
         let c = point_contribution(map, sp, tp, &ad, cfg, &mut ws.neighbor_idx);
+        #[cfg(feature = "wcet-count")]
+        {
+            ws.counters.points_processed = ws.counters.points_processed.saturating_add(1);
+            ws.counters.sum_neighbors = ws
+                .counters
+                .sum_neighbors
+                .saturating_add(u64::try_from(c.neighborhood).unwrap_or(u64::MAX));
+            ws.counters.kd_nodes_visited = ws.counters.kd_nodes_visited.saturating_add(c.kd_nodes);
+        }
         red.add(&c);
     }
     finalize(red, p, cfg, source.len())
@@ -367,8 +397,26 @@ pub fn compute_derivatives_parallel(
         .collect_into_vec(&mut ws.contribs);
 
     let mut red = Reduction::new();
+    #[cfg(feature = "wcet-count")]
+    let mut pass = crate::wcet::WcetCounters::new();
     for c in &ws.contribs {
+        #[cfg(feature = "wcet-count")]
+        {
+            pass.points_processed = pass.points_processed.saturating_add(1);
+            pass.sum_neighbors = pass
+                .sum_neighbors
+                .saturating_add(u64::try_from(c.neighborhood).unwrap_or(u64::MAX));
+            pass.kd_nodes_visited = pass.kd_nodes_visited.saturating_add(c.kd_nodes);
+        }
         red.add(c);
+    }
+    #[cfg(feature = "wcet-count")]
+    {
+        ws.counters.derivative_passes = ws.counters.derivative_passes.saturating_add(1);
+        ws.counters.points_processed = ws.counters.points_processed.saturating_add(pass.points_processed);
+        ws.counters.sum_neighbors = ws.counters.sum_neighbors.saturating_add(pass.sum_neighbors);
+        ws.counters.kd_nodes_visited =
+            ws.counters.kd_nodes_visited.saturating_add(pass.kd_nodes_visited);
     }
     finalize(red, p, cfg, source.len())
 }
@@ -575,6 +623,9 @@ pub struct AlignResult {
     pub transformation_array: Vec<Matrix4<f32>>,
     pub transform_probability_array: Vec<f32>,
     pub nearest_voxel_likelihood_array: Vec<f32>,
+    /// Algorithmic-cost counters of this align (WCET analysis; serial + parallel backends).
+    #[cfg(feature = "wcet-count")]
+    pub counters: crate::wcet::WcetCounters,
 }
 
 /// Solve `H · delta = -gradient` via SVD (mirrors the C++ `JacobiSVD(ComputeFullU|ComputeFullV)`).
@@ -684,6 +735,10 @@ pub fn align(
         gauss: &gauss,
         reg,
     };
+    #[cfg(feature = "wcet-count")]
+    {
+        ws.counters = crate::wcet::WcetCounters::new();
+    }
     // Use the rayon backend when the caller asks for >1 thread (bit-identical to serial; ignored
     // when the `parallel` feature is off).
     let parallel = params.num_threads > 1;
@@ -773,6 +828,10 @@ pub fn align(
     } else {
         (score / len as f64) as f32
     };
+    #[cfg(feature = "wcet-count")]
+    {
+        out.counters = ws.counters;
+    }
 }
 
 #[cfg(test)]

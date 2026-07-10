@@ -69,13 +69,40 @@ impl KdTree {
         out: &mut Vec<usize>,
     ) {
         let r2 = radius * radius;
-        self.search_rec(self.root, query, r2, max_nn, out);
+        // The visited counter is threaded unconditionally (a borrowed stack u64) but only ever
+        // written under `wcet-count`, so the shipping build carries no instrumentation cost.
+        let mut visited = 0_u64;
+        self.search_rec(self.root, query, r2, max_nn, out, &mut visited);
+    }
+
+    /// [`Self::radius_search`] that also returns the number of tree nodes visited — the
+    /// deterministic traversal-cost counter for the WCET analysis.
+    #[cfg(feature = "wcet-count")]
+    pub fn radius_search_counted(
+        &self,
+        query: &[f32; 3],
+        radius: f64,
+        max_nn: usize,
+        out: &mut Vec<usize>,
+    ) -> u64 {
+        let r2 = radius * radius;
+        let mut visited = 0_u64;
+        self.search_rec(self.root, query, r2, max_nn, out, &mut visited);
+        visited
     }
 
     #[allow(
         clippy::indexing_slicing,
         clippy::allow_attributes,
         reason = "axis is depth % 3 ∈ 0..3; indexes a fixed-size [f32; 3]"
+    )]
+    #[cfg_attr(
+        not(feature = "wcet-count"),
+        expect(
+            clippy::only_used_in_recursion,
+            reason = "the visited counter is only written under wcet-count; threading it \
+                      unconditionally keeps one recursion body with zero shipping cost"
+        )
     )]
     fn search_rec(
         &self,
@@ -84,6 +111,7 @@ impl KdTree {
         r2: f64,
         max_nn: usize,
         out: &mut Vec<usize>,
+        visited: &mut u64,
     ) {
         let Some(ni) = node else { return };
         if max_nn != 0 && out.len() >= max_nn {
@@ -93,6 +121,10 @@ impl KdTree {
         let Some(p) = self.points.get(n.point_idx) else {
             return;
         };
+        #[cfg(feature = "wcet-count")]
+        {
+            *visited = visited.saturating_add(1);
+        }
 
         if dist_sq(p, query) <= r2 {
             out.push(n.point_idx);
@@ -105,10 +137,10 @@ impl KdTree {
             (n.right, n.left)
         };
 
-        self.search_rec(near, query, r2, max_nn, out);
+        self.search_rec(near, query, r2, max_nn, out, visited);
         // Only descend the far side if the splitting plane is within the radius.
         if (diff * diff) <= r2 {
-            self.search_rec(far, query, r2, max_nn, out);
+            self.search_rec(far, query, r2, max_nn, out, visited);
         }
     }
 }

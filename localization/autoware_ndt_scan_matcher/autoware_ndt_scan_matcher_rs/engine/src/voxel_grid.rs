@@ -398,6 +398,29 @@ impl VoxelGridMap {
         }
     }
 
+    /// [`Self::radius_search`] that also returns the number of kd-tree nodes visited — the
+    /// deterministic traversal-cost counter for the WCET analysis (`plan/ndt_wcet.md`).
+    #[cfg(feature = "wcet-count")]
+    pub fn radius_search_counted(
+        &self,
+        point: [f32; 3],
+        radius: f64,
+        max_nn: usize,
+        out: &mut Vec<usize>,
+    ) -> u64 {
+        match &self.kdtree {
+            Some(kt) => kt.radius_search_counted(&point, radius, max_nn, out),
+            None => 0,
+        }
+    }
+
+    /// Number of searchable leaves (== kd-tree node count once built) — the analytic per-query
+    /// traversal bound used by the WCET property checks.
+    #[must_use]
+    pub fn num_leaves(&self) -> usize {
+        self.flat_leaves.len()
+    }
+
     /// The leaf at flat index `idx` (as returned by [`Self::radius_search`]), or `None` if out of
     /// range. Indices are only valid until the next [`Self::create_kdtree`].
     #[must_use]

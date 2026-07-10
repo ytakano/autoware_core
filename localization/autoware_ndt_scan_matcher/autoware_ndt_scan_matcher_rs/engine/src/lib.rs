@@ -97,6 +97,9 @@ pub mod scan_matcher;
 pub mod tpe;
 pub mod transform;
 pub mod voxel_grid;
+// Deterministic algorithmic-cost counters for the WCET analysis (plan/ndt_wcet.md); opt-in.
+#[cfg(feature = "wcet-count")]
+pub mod wcet;
 
 /// Re-export of the exact [`nalgebra`] version this crate is built against.
 ///
