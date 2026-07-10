@@ -10,8 +10,12 @@ it is the WCET reference, and it isolates the kernel from thread-pool scheduling
 
 ## Tiers
 
-- **L1 — node / end-to-end.** The full ROS node on a recorded sequence (rosbag / PCD map).
-  Highest fidelity, lowest control; methodology only for now (not yet automated here).
+- **L1 — node / end-to-end.** The full ROS node timed by its built-in `exe_time_ms` publisher (present
+  identically on both engines), `NDT_USE_RUST` OFF vs ON. **L1a** (automated, `bench/run_l1a.sh`) replays
+  the in-repo `standard_sequence` cloud through the node frame-by-frame — deterministic, download-free,
+  the CI regression baseline. **L1b** (opt-in scaffold, `bench/run_l1b.sh`) replays the Autoware
+  `sample-rosbag` against `sample-map-rosbag` for the headline number, downloading the sample data only
+  if absent; a converged run additionally needs TF + an EKF initial-pose stream, so it is best-effort.
 - **L2 — kernel micro-benchmark.** A tight per-frame `align` loop on a small synthetic cloud, to
   locate where time goes and bound per-frame WCET. Crate example `examples/wcet_frame.rs`.
 - **L3 — offline differential replay.** One executable drives **both** engines on identical inputs
@@ -39,6 +43,14 @@ colcon build --packages-select autoware_ndt_scan_matcher \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DNDT_USE_RUST=ON -DNDT_BUILD_BENCH=ON
 bench/run.sh [ITERS] [WARMUP] [INTERVAL]   # -> bench/ndt_bench.json + bench/report.html
 #   env: TASKSET="taskset -c 2" (pin a core), OUT_DIR=/path
+
+# L1a node end-to-end, deterministic synthetic cloud, C++ (OFF) vs Rust (ON). The runner does the
+# OFF/ON rebuild two-pass itself (opt-in NDT_BUILD_BENCH_L1); no download.
+bench/run_l1a.sh [ITERS] [WARMUP]          # -> bench/l1a.json + bench/l1a_report.html
+
+# L1b node end-to-end on the real Autoware sample-rosbag (opt-in; downloads ~193 MB if absent).
+bench/run_l1b.sh                           # -> bench/l1b.json + bench/l1b_report.html
+#   env: BAG_LIDAR_TOPIC=<bag lidar topic>, AUTOWARE_DATA_DIR=/path
 
 # L2 per-frame WCET micro-benchmark (crate only, no colcon).
 cargo run --release --example wcet_frame

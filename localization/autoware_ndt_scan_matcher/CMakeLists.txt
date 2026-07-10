@@ -145,6 +145,13 @@ if(NDT_BUILD_BENCH)
     multigrid_ndt_omp ${PCL_LIBRARIES} autoware_ndt_scan_matcher_rs)
 endif()
 
+# L1 node-level end-to-end benchmark (bench/l1a_node_frame_bench.cpp). Opt-in and off by default so
+# the default `colcon test` / `./test.sh` never build or run it. Unlike NDT_BUILD_BENCH it drives the
+# node (not the engine directly), so it builds under BOTH engine modes — bench/run_l1a.sh does the
+# NDT_USE_RUST OFF/ON two-pass and merges the two per-engine JSONs. The target is registered below,
+# inside BUILD_TESTING (it needs ament_cmake_gtest + the test fixture/stubs).
+option(NDT_BUILD_BENCH_L1 "Build the L1 node-level end-to-end benchmark" OFF)
+
 if(BUILD_TESTING)
   add_launch_test(
     test/test_ndt_scan_matcher_launch.py
@@ -189,6 +196,22 @@ if(BUILD_TESTING)
     test/test_ndt_scan_matcher_helper.cpp
   )
   target_link_libraries(test_ndt_scan_matcher_helper ${PROJECT_NAME})
+
+  # L1a node-level benchmark (opt-in via NDT_BUILD_BENCH_L1). Registered outside the NDT_USE_RUST
+  # split so it builds for BOTH engines; it drives the full node through the integration-test fixture
+  # and records the node's own exe_time_ms. Run directly by bench/run_l1a.sh (env-configured), not as
+  # a default ctest. Links ${PROJECT_NAME} (which carries the selected engine + the NDT_USE_RUST
+  # define transitively); the Rust crate is linked explicitly only in the ON build.
+  if(NDT_BUILD_BENCH_L1)
+    ament_auto_add_gtest(l1a_node_frame_bench
+      test/bench/l1a_node_frame_bench.cpp
+      TIMEOUT "600"
+    )
+    target_link_libraries(l1a_node_frame_bench ${PROJECT_NAME} multigrid_ndt_omp ${PCL_LIBRARIES})
+    if(NDT_USE_RUST)
+      target_link_libraries(l1a_node_frame_bench autoware_ndt_scan_matcher_rs)
+    endif()
+  endif()
 
   if(NDT_USE_RUST)
     # Differential and FFI tests for the Rust port. Each proves equivalence against the original C++

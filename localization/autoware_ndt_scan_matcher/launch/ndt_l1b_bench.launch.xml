@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<!--
+  L1b benchmark launch (see plan/ndt_bench.md, bench/run_l1b.sh) — SCAFFOLD / best-effort.
+
+  Composes the minimal graph needed to time the NDT node end-to-end on the Autoware `sample-rosbag`:
+  the pointcloud map loader (serving the map tile the node fetches over `pcd_loader_service`), an
+  optional voxel downsample feeding `points_raw`, and the NDT node itself (serial `num_threads:=1` for
+  a fair engine A/B). The engine (C++/Rust) is chosen at BUILD time via `NDT_USE_RUST`, not here.
+
+  NOTE — a fully converged run additionally needs, from the bag or an added node:
+    * TF `map -> base_link` (and `base_link -> <sensor_frame>`),
+    * an initial-pose stream on `ekf_pose_with_covariance` (normally autoware_ekf_localizer, primed by
+      autoware_pose_initializer) — the NDT node interpolates this per frame,
+    * the sensor cloud on whatever topic the bag publishes (set `input_pointcloud`/`bag_lidar_topic`).
+  Those are deployment-specific; wire them here or alongside `ros2 bag play`. The exe_time_ms number is
+  still produced per successful frame regardless of how the pose/TF are supplied.
+-->
+<launch>
+  <!-- Map (from bench/fetch_sample_data.sh -> sample-map-rosbag). -->
+  <arg name="pointcloud_map_path"/>
+  <arg name="pointcloud_map_metadata_path"/>
+  <arg name="map_loader_param_path"
+       default="$(find-pkg-share autoware_map_loader)/config/pointcloud_map_loader.param.yaml"/>
+
+  <!-- NDT wiring. `bag_lidar_topic` is the LiDAR topic the sample-rosbag publishes (discover with
+       `ros2 bag info`); it is remapped onto the node's `points_raw`. `num_threads:=1` = fair baseline. -->
+  <arg name="bag_lidar_topic" default="/points_raw"/>
+  <arg name="input_initial_pose_topic" default="/ekf_pose_with_covariance"/>
+  <arg name="ndt_param_path"
+       default="$(find-pkg-share autoware_ndt_scan_matcher)/config/ndt_scan_matcher.param.yaml"/>
+
+  <node pkg="autoware_map_loader" exec="autoware_pointcloud_map_loader"
+        name="pointcloud_map_loader" output="both">
+    <!-- The NDT node's map client (`client_map_loader`, default `pcd_loader_service`) calls the
+         differential service; map the loader's differential service onto it. -->
+    <remap from="service/get_differential_pcd_map" to="/pcd_loader_service"/>
+    <param from="$(var map_loader_param_path)" allow_substs="true"/>
+    <param name="pcd_paths_or_directory" value="[$(var pointcloud_map_path)]"/>
+    <param name="pcd_metadata_path" value="$(var pointcloud_map_metadata_path)"/>
+  </node>
+
+  <node pkg="autoware_ndt_scan_matcher" exec="autoware_ndt_scan_matcher_node"
+        name="ndt_scan_matcher" output="both">
+    <remap from="points_raw" to="$(var bag_lidar_topic)"/>
+    <remap from="ekf_pose_with_covariance" to="$(var input_initial_pose_topic)"/>
+    <remap from="client_map_loader" to="/pcd_loader_service"/>
+    <param from="$(var ndt_param_path)" allow_substs="true"/>
+    <param name="ndt.num_threads" value="1"/>
+  </node>
+</launch>

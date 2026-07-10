@@ -38,6 +38,9 @@ class TestNDTScanMatcher : public ::testing::Test
 protected:
   virtual int64_t particles_num_for_test() const { return 100; }
   virtual int64_t n_startup_trials_for_test() const { return 100; }
+  // Override `ndt.num_threads` when >= 0 (the L1a benchmark forces the serial baseline = 1); the
+  // default -1 leaves the config value untouched, so existing tests are unaffected.
+  virtual int64_t num_threads_for_test() const { return -1; }
 
   void SetUp() override
   {
@@ -62,6 +65,9 @@ protected:
       "initial_pose_estimation.particles_num", particles_num_for_test());
     node_options.parameter_overrides().emplace_back(
       "initial_pose_estimation.n_startup_trials", n_startup_trials_for_test());
+    if (num_threads_for_test() >= 0) {
+      node_options.parameter_overrides().emplace_back("ndt.num_threads", num_threads_for_test());
+    }
     node_ = std::make_shared<autoware::ndt_scan_matcher::NDTScanMatcher>(node_options);
     rcl_yaml_node_struct_fini(params_st);
 
