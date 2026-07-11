@@ -89,8 +89,12 @@ run_pass() {  # <engine> <OFF|ON> <out.json>
 
   cleanup_graph
   echo "[l1b] launching graph ($engine) ..."
+  # NOTE: a quoted "${VAR:+word}" with VAR unset yields an EMPTY '' argument in this bash,
+  # which ros2 launch rejects ("malformed launch argument ''") -- build the arg list instead.
+  local extra=()
+  [[ -n "${INITIAL_POSE:-}" ]] && extra+=("initial_pose:=[$INITIAL_POSE]")
   setsid ros2 launch "$PKG" ndt_l1b_bench.launch.xml \
-    map_path:="$MAP_DIR" use_sim_time:=true "${INITIAL_POSE:+initial_pose:=[$INITIAL_POSE]}" \
+    map_path:="$MAP_DIR" use_sim_time:=true "${extra[@]}" \
     > "$OUT_DIR/l1b_${engine}_launch.log" 2>&1 &
   # wait for the NDT node to appear
   local n=0; until ros2 node list 2>/dev/null | grep -q pose_estimator/ndt_scan_matcher || [ $n -ge 25 ]; do sleep 3; n=$((n+1)); done

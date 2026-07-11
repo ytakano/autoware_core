@@ -104,6 +104,7 @@ def main() -> int:
     rclpy.spin_until_future_complete(node, fut, timeout_sec=60.0)
     if not (fut.done() and fut.result() is not None):
         log.error("ndt_align call timed out")
+        call_player(Resume, "/rosbag2_player/resume")  # never leave the bag paused
         return 1
     res = fut.result()
     rp = res.pose_with_covariance.pose.pose.position
@@ -111,6 +112,7 @@ def main() -> int:
              f"refined=({rp.x:.2f}, {rp.y:.2f}, {rp.z:.2f})")
     if not res.success:
         log.error("ndt_align did NOT succeed -> map/cloud do not match (coordinate/map issue).")
+        call_player(Resume, "/rosbag2_player/resume")  # never leave the bag paused
         return 2
 
     # publish the REFINED pose as the EKF init + activate NDT/EKF

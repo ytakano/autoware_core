@@ -914,8 +914,7 @@ mod tests {
         assert!((p0.position[0]).abs() < 1e-9);
         assert!((p0.orientation[3] - 1.0).abs() < 1e-9);
         // Round-trip a translation + 90° yaw through pose_to_matrix4 → matrix4_to_aw_pose.
-        let m =
-            pose_to_matrix4(&[1.0, 2.0, 3.0], &[0.0, 0.0, 0.707_106_77, 0.707_106_77]).unwrap();
+        let m = pose_to_matrix4(&[1.0, 2.0, 3.0], &[0.0, 0.0, 0.707_106_77, 0.707_106_77]).unwrap();
         let p = matrix4_to_aw_pose(&m);
         assert!((p.position[0] - 1.0).abs() < 1e-5);
         assert!((p.position[1] - 2.0).abs() < 1e-5);

@@ -210,6 +210,47 @@ pub fn read_frame(path: &Path) -> io::Result<Frame> {
     Ok(Frame { guess, ids, source })
 }
 
+// ---------------------------------------------------------------------------
+// Env-gated live hook (`NDT_CAPTURE_DIR`) — called from the engine entry points
+// ---------------------------------------------------------------------------
+
+static HOOK_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+static HOOK_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The capture directory, if `NDT_CAPTURE_DIR` is set (resolved once; `None` disables the hook).
+/// The disabled cost on the align path is one `OnceLock` load.
+pub(crate) fn hook_dir() -> Option<&'static PathBuf> {
+    HOOK_DIR
+        .get_or_init(|| {
+            let d = std::env::var_os("NDT_CAPTURE_DIR").map(PathBuf::from)?;
+            std::fs::create_dir_all(&d).ok()?;
+            Some(d)
+        })
+        .as_ref()
+}
+
+/// Best-effort params capture (constant per run; overwrite harmless).
+pub(crate) fn hook_params(p: &NdtParams) {
+    if let Some(d) = hook_dir() {
+        write_params(d, p).ok();
+    }
+}
+
+/// Best-effort tile capture (write-once per cell id).
+pub(crate) fn hook_tile(id: &[u8], points: &[[f32; 3]]) {
+    if let Some(d) = hook_dir() {
+        write_tile(d, id, points).ok();
+    }
+}
+
+/// Best-effort align-input capture (one frame per call, monotonic sequence).
+pub(crate) fn hook_align(guess: &Matrix4<f32>, ids: &[Vec<u8>], source: &[[f32; 3]]) {
+    if let Some(d) = hook_dir() {
+        let seq = HOOK_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        write_frame(d, seq, guess, ids, source).ok();
+    }
+}
+
 /// List `frames/` sorted by sequence number.
 ///
 /// # Errors

@@ -134,7 +134,9 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_align(
         }
         if !outp.transformation_array.is_null() && !outp.transforms_count.is_null() {
             let cap = outp.transforms_cap as usize;
-            if let Some(buf) = ffi_ptr::opt_slice_mut(outp.transformation_array, cap.saturating_mul(16)) {
+            if let Some(buf) =
+                ffi_ptr::opt_slice_mut(outp.transformation_array, cap.saturating_mul(16))
+            {
                 write_matrix4_seq(buf, &result.transformation_array);
             }
             ffi_ptr::write_out(

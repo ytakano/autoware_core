@@ -46,6 +46,7 @@
 #include "autoware_ndt_scan_matcher_rs.h"
 
 #include <Eigen/Core>
+#include <Eigen/Geometry>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -475,6 +476,27 @@ bool read_capture_frame(const std::string & path, CaptureFrame & fr)
 int run_capture_mode(const std::string & out_path, const std::string & dir)
 {
   const int repeats = std::getenv("WCET_REPEATS") ? std::atoi(std::getenv("WCET_REPEATS")) : 5;
+  // Chain mode (WCET_CHAIN=1): feed BOTH engines the previous frame's Rust result pose as the
+  // guess (frame 0: WCET_CHAIN_SEED="x,y,z,qx,qy,qz,qw") -- a deterministic offline
+  // re-localization replay that decouples the envelope from the live EKF loop.
+  const bool chain = std::getenv("WCET_CHAIN") != nullptr;
+  Eigen::Matrix4f chain_guess = Eigen::Matrix4f::Identity();
+  Eigen::Matrix4f chain_prev = Eigen::Matrix4f::Identity();
+  bool have_prev = false;
+  if (chain) {
+    const char * seed = std::getenv("WCET_CHAIN_SEED");
+    if (seed != nullptr) {
+      double v[7] = {0, 0, 0, 0, 0, 0, 1};
+      std::sscanf(seed, "%lf,%lf,%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5],
+        &v[6]);
+      const Eigen::Quaternionf q(static_cast<float>(v[6]), static_cast<float>(v[3]),
+        static_cast<float>(v[4]), static_cast<float>(v[5]));
+      chain_guess.topLeftCorner<3, 3>() = q.normalized().toRotationMatrix();
+      chain_guess(0, 3) = static_cast<float>(v[0]);
+      chain_guess(1, 3) = static_cast<float>(v[1]);
+      chain_guess(2, 3) = static_cast<float>(v[2]);
+    }
+  }
   CaptureParams cp{};
   if (!read_capture_params(dir, cp)) {
     std::fprintf(stderr, "capture: cannot read %s/params.bin\n", dir.c_str());
@@ -577,8 +599,14 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     }
 
     Eigen::Matrix4f guess = Eigen::Matrix4f::Identity();
-    for (int r = 0; r < 4; ++r)
-      for (int c = 0; c < 4; ++c) guess(r, c) = fr.guess16[(r * 4) + c];
+    if (chain) {
+      guess = chain_guess;
+      for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) fr.guess16[(r * 4) + c] = guess(r, c);
+    } else {
+      for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) guess(r, c) = fr.guess16[(r * 4) + c];
+    }
     auto source = flat_to_cloud(fr.source);
     const size_t n_src = fr.source.size() / 3;
 
@@ -601,9 +629,20 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     std::sort(rs_ms_v.begin(), rs_ms_v.end());
     const int cpp_iter = ndt->getResult().iteration_num;
     int32_t rs_iter = 0;
+    std::array<float, 16> rs_pose{};
     AwNdtAlignOutput rout{};
     rout.iteration_num = &rs_iter;
+    rout.pose = rs_pose.data();
     autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &rout);
+    if (chain) {
+      Eigen::Matrix4f pose = Eigen::Matrix4f::Identity();
+      for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) pose(r, c) = rs_pose[(r * 4) + c];
+      // Constant-velocity extrapolation, mirroring the Rust replayer.
+      chain_guess = have_prev ? Eigen::Matrix4f(pose * (chain_prev.inverse() * pose)) : pose;
+      chain_prev = pose;
+      have_prev = true;
+    }
     const bool match = (cpp_iter == rs_iter);
     if (!match) ++mismatches;
 

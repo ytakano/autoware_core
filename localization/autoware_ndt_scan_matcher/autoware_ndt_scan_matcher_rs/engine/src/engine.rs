@@ -461,6 +461,16 @@ impl NdtEngine {
         outlier_ratio: f64,
         num_threads: usize,
     ) {
+        #[cfg(feature = "std")]
+        crate::capture::hook_params(&NdtParams {
+            trans_epsilon,
+            step_size,
+            resolution,
+            max_iterations,
+            outlier_ratio,
+            regularization: None,
+            num_threads: 1,
+        });
         swap_rcu(&self.state, |s| {
             let mut n = s.clone();
             n.params.trans_epsilon = trans_epsilon;
@@ -651,6 +661,8 @@ impl NdtEngine {
     /// owns the cell-id → `u64` mapping, assigning a fresh id on first use. Needs a following
     /// [`Self::create_kdtree`].
     pub fn add_target_bytes(&self, points: &[[f32; 3]], id: &[u8]) {
+        #[cfg(feature = "std")]
+        crate::capture::hook_tile(id, points);
         swap_rcu(&self.state, |s| {
             let mut n = s.clone();
             let u = if let Some(&u) = n.id_map.get(id) {
@@ -722,6 +734,11 @@ impl NdtEngine {
         source: &[[f32; 3]],
         scratch: &mut MatchScratch,
     ) {
+        // Env-gated real-drive input capture (NDT_CAPTURE_DIR): one OnceLock load when disabled.
+        #[cfg(feature = "std")]
+        if crate::capture::hook_dir().is_some() {
+            crate::capture::hook_align(guess, &self.map_ids(), source);
+        }
         let st = self.load_state();
         // Fold the per-call regularization into a local params copy (the free `align` reads
         // `params.regularization`); the engine's stored params keep `regularization: None`.

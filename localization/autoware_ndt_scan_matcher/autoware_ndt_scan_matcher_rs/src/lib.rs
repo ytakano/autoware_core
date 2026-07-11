@@ -38,8 +38,6 @@
 extern crate alloc;
 
 // C-ABI shims over the pure engine modules.
-// Env-gated real-drive input capture (NDT_CAPTURE_DIR; WCET operational envelope).
-mod capture_hook;
 mod ffi_cov_estimate;
 mod ffi_covariance;
 mod ffi_engine;

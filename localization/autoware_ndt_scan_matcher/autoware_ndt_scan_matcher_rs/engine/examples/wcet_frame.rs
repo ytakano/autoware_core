@@ -40,6 +40,7 @@
     clippy::print_stdout,
     clippy::arithmetic_side_effects,
     clippy::let_underscore_must_use,
+    clippy::too_many_lines,
     clippy::allow_attributes,
     reason = "benchmark example (diagnostic, not a gate)"
 )]
@@ -275,6 +276,29 @@ fn run_capture(dir: &std::path::Path) {
     let params = capture::read_params(dir).expect("read params.bin");
     let frame_paths = capture::list_frames(dir).expect("list frames");
     let repeats = frames_from_env(5);
+    // Chain mode (WCET_CHAIN=1): guess = the previous frame's result pose (frame 0 from
+    // WCET_CHAIN_SEED="x,y,z,qx,qy,qz,qw") -- deterministic offline re-localization replay.
+    let chain = std::env::var_os("WCET_CHAIN").is_some();
+    let mut chain_guess: Matrix4<f32> = Matrix4::identity();
+    let mut chain_prev: Option<Matrix4<f32>> = None; // for constant-velocity extrapolation
+    let mut guess_dump = std::env::var("WCET_GUESS_OUT")
+        .ok()
+        .map(|p| std::io::BufWriter::new(std::fs::File::create(p).expect("guess dump file")));
+    if let Ok(seed) = std::env::var("WCET_CHAIN_SEED") {
+        let v: Vec<f32> = seed
+            .split(',')
+            .filter_map(|t| t.trim().parse().ok())
+            .collect();
+        if v.len() == 7 {
+            let q = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+                v[6], v[3], v[4], v[5],
+            ));
+            chain_guess = q.to_homogeneous();
+            chain_guess[(0, 3)] = v[0];
+            chain_guess[(1, 3)] = v[1];
+            chain_guess[(2, 3)] = v[2];
+        }
+    }
     println!(
         "capture replay: {} frames, {} timing repeats/frame, eps={} max_iter={}",
         frame_paths.len(),
@@ -306,12 +330,35 @@ fn run_capture(dir: &std::path::Path) {
             cur_ids = Some(fr.ids.clone());
             epochs += 1;
         }
+        let guess = if chain { chain_guess } else { fr.guess };
         // Timing: median of `repeats` runs (first run also yields the counters).
         let mut times: Vec<u128> = Vec::with_capacity(repeats);
         for _ in 0..repeats {
             let t = Instant::now();
-            align(&map, &fr.source, &fr.guess, &params, &mut ws, &mut out);
+            align(&map, &fr.source, &guess, &params, &mut ws, &mut out);
             times.push(t.elapsed().as_nanos());
+        }
+        if chain {
+            // Constant-velocity extrapolation (the EKF prediction step's stand-in):
+            // guess_{k+1} = P_k * (P_{k-1}^-1 * P_k); falls back to P_k on the first frame.
+            chain_guess = match chain_prev {
+                Some(prev) => prev
+                    .try_inverse()
+                    .map_or(out.pose, |pi| out.pose * (pi * out.pose)),
+                None => out.pose,
+            };
+            chain_prev = Some(out.pose);
+            // WCET_GUESS_OUT: record the guess USED for this frame (row-major f32) so the
+            // open-loop pass can freeze the guess track and feed both engines identical inputs.
+            if let Some(gp) = &mut guess_dump {
+                use std::io::Write as _;
+                for r in 0..4 {
+                    for c in 0..4 {
+                        gp.write_all(&guess[(r, c)].to_le_bytes())
+                            .expect("guess dump");
+                    }
+                }
+            }
         }
         times.sort_unstable();
         let med_ms = us(times[times.len() / 2]) / 1000.0;
