@@ -13,7 +13,7 @@ cover the LiDAR range) and whether a full rebuild is required.
 
 `scan_matcher::apply_map_update` performs:
 
-1. `source.load(center, radius).await` — fetch the delta through the async [`MapSource`](host-vtable.md)
+1. `source.load(center, radius).await` — fetch the delta through the async `MapSource`
    port (empty delta ⇒ no-op, no republish).
 2. Build the new map on a **private staging engine** — `engine.clone()` for an incremental update, or
    `engine.clone_empty()` for a rebuild — apply the added/removed tiles, and `create_kdtree()`.
@@ -28,5 +28,5 @@ Rust owns the decision/state and the staging build; C++ keeps the ROS pcd-loader
 tile-apply, and the debug-map publish (`node_map_update.rs` bridges the C-ABI map-source vtable to
 the async port).
 
-> Source: `src/scan_matcher.rs` (`apply_map_update`), `src/node_map_update.rs`, `src/engine.rs`
-> (`commit_from`, `clone_empty`), `src/node_handle.rs` (`MapUpdateState`).
+> Source: `src/scan_matcher.rs` (`apply_map_update`), `../src/node_map_update.rs`, `src/engine.rs`
+> (`commit_from`, `clone_empty`), `../src/node_handle.rs` (`MapUpdateState`).

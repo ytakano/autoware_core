@@ -10,14 +10,14 @@ verification workflow.
 - **ON-vs-OFF differential (authoritative).** Unit gtests (helpers, covariance), property tests
   (`voxel_grid` / `kdtree` vs brute force), an align **trace diff**, and the `standard_sequence_*`
   integration tests — all must match between OFF (C++) and ON (Rust). See
-  [Differential testing](differential.md) and
-  [Trace-based state-machine verification](trace-verification.md).
+  Differential testing and
+  Trace-based state-machine verification.
 - **Numeric parity.** The f32 `Matrix4f` pipeline, the Gauss constants, and serial/parallel
   bit-identity are checked so scores and poses match to tight tolerances. See
-  [Numeric parity](numeric-parity.md).
+  Numeric parity.
 - **Bounded WCET.** A zero-allocation-per-frame test (`tests/zero_alloc.rs`) and a worst-case
   frame-time benchmark (`examples/wcet_frame.rs`) on the serial backend, plus a real-time review
-  per engine/align patch. See [The WCET contract](../rt/wcet.md).
+  per engine/align patch. See *The WCET contract* in the engine crate book.
 - **`no_std` gate.** `cargo rustc --no-default-features --lib --target
   {x86_64,aarch64}-unknown-none --crate-type rlib` — proves the portable core stays kernel-buildable.
 - **Unsafe FFI under Miri.** `cargo +nightly miri test` with `libm/force-soft-floats`, exercising
@@ -32,7 +32,7 @@ For the deterministic paths the differential check is effectively exact; for the
 accepted tolerances are: pose translation ≤ 1e-3 m, rotation ≤ 1e-3 rad, TP / NVTL ≤ 1e-4,
 iteration count **exact**. Where a documented upstream divergence exists the port **mirrors** it
 (rather than "fixing" it locally) until the upstream fix lands, then follows the fix — see
-[Divergences from upstream](divergences.md).
+Divergences from upstream.
 
 Some behaviour is not amenable to exact traces — notably the align-service TPE search, which in
 C++ samples with a libstdc++-specific `std::mt19937_64` + distributions. There, verification
@@ -55,8 +55,8 @@ own results via `colcon test-result --test-result-base build/<pkg>`. See
 
 ## Sub-chapters
 
-- [Differential testing](differential.md)
-- [Trace-based state-machine verification](trace-verification.md)
-- [Numeric parity](numeric-parity.md)
+- Differential testing
+- Trace-based state-machine verification
+- Numeric parity
 
 > Source: the crate `tests/` + the package's C++ gtests and `standard_sequence_*` launch tests.

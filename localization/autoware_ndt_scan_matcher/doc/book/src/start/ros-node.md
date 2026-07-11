@@ -17,7 +17,7 @@ regularization is enabled — `sensing/gnss/pose_with_covariance`.
 
 - `trigger_node` (`std_srvs/srv/SetBool`) — activate/deactivate the matcher.
 - `ndt_align_srv` — estimate an initial pose by the align-service search (see
-  [The TPE pose search](../arch/tpe.md)).
+  The TPE pose search).
 
 ## Parameters
 
@@ -25,7 +25,7 @@ Grouped under `ros__parameters`: `frame.*` (base/ndt/map frames), `sensor_points
 required distance), `ndt.*` (`trans_epsilon`, `step_size`, `resolution`, `max_iterations`,
 `num_threads`, `regularization.*`), `initial_pose_estimation.*`, and `score_estimation.*`
 (`converged_param_type` — default `1` = NVTL — and the two thresholds). See
-[Scores: TP and NVTL](../concepts/scores.md) for the convergence gate and
+Scores: TP and NVTL for the convergence gate and
 [Parameter reference](../appendix/parameters.md) for the full table.
 
 ## Regularization (optional, off by default)

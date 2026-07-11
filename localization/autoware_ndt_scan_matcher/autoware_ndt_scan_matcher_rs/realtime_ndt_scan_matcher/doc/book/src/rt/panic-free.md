@@ -23,7 +23,7 @@ Lossy `as` casts are banned in favor of `TryFrom`; a `Result` is never discarded
 however — a consumer that imports the engine crate from outside this workspace (e.g. the `no_std`
 kernel repo) gets **its own** profile, so that final binary must re-declare
 `overflow-checks = true` (and re-apply the lint gates in its CI) to keep this guarantee. See the
-note in `engine/Cargo.toml`.
+note in `Cargo.toml`.
 
 ## Bounded and non-blocking
 
@@ -35,6 +35,6 @@ and no user callback. Together these give the [WCET contract](wcet.md) its teeth
 
 A `rust-realtime-review` accompanies each engine/align patch to keep these properties from
 regressing; the lints themselves are enforced in CI (see
-[Lint gates and suppression policy](../quality/hardening.md)).
+Lint gates and suppression policy).
 
 > Source: `Cargo.toml` `[lints]` / `[profile.release]`; `src/ndt.rs`.

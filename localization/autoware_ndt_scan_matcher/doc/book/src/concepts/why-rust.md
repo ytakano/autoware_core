@@ -13,16 +13,16 @@ ad-hoc `unsafe` sites.
 ## Panic-free, WCET-bounded real time
 
 The localization align path is safety-relevant and runs every frame. The Rust align kernel is
-**allocation-free after warmup**, cannot panic (the crate bans `unwrap`/`expect`/`panic`/indexing in
-non-test code), and carries a documented worst-case execution-time contract. See
-[The WCET contract](../rt/wcet.md), [Zero-allocation guarantees](../rt/zero-alloc.md), and
-[Panic-free, bounded execution](../rt/panic-free.md).
+**allocation-free after warmup**, cannot panic (the engine bans `unwrap`/`expect`/`panic`/indexing in
+non-test code), and carries a documented worst-case execution-time contract — see the *Real-Time and
+no_std* part of the engine crate book (WCET, zero-allocation, panic-free).
 
 ## A `no_std` / kernel target
 
 Portability is the deeper driver: the same algorithm core builds without `std` so it can run under a
-bare-metal kernel, not just ROS. This shaped the two-layer split (portable core vs `std` FFI shell)
-and the [Host ports](../arch/host-vtable.md). See [Portability](../arch/portability.md).
+bare-metal kernel, not just ROS. This shaped the **two-crate split** — the portable engine
+(`realtime_ndt_scan_matcher`) vs the `std` node crate — and the
+[Host ports](../arch/host-vtable.md).
 
 ## Keep rclcpp; don't rewrite ROS
 

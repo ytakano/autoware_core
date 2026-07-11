@@ -35,4 +35,4 @@ transformation likelihood — are covered in [Scores: TP and NVTL](scores.md).
 
 > Source: `src/voxel_grid.rs`, `src/derivatives.rs`, `src/ndt.rs`, `src/transform.rs`
 > (`gauss_constants`); the package `README.md`. See the NDT references in the
-> [appendix](../appendix/references.md).
+> appendix.

@@ -1,7 +1,7 @@
 # Portability and the Host ports
 
 The same algorithm core runs under ROS, a bare-metal kernel, or an async runtime because it is
-written against the [Host ports](host-vtable.md), not against ROS.
+written against the Host ports, not against ROS.
 
 ## `ScanMatcher` over `H: Host`
 

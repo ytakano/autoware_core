@@ -8,10 +8,15 @@ parameters).
 
 The port keeps `rclcpp` as the ROS 2 runtime and moves the *algorithmic core* — the NDT
 engine, scan-matching state, convergence judgement, covariance estimation, map-update
-decisions, and callback bodies — into a Rust crate,
-[`autoware_ndt_scan_matcher_rs`](https://github.com/autowarefoundation/autoware_core).
+decisions, and callback bodies — into Rust, split across two crates in one Cargo workspace:
+
+- **`realtime_ndt_scan_matcher`** — the ROS-free, `no_std`-capable **engine** (the algorithm).
+  It has its own book under `realtime_ndt_scan_matcher/doc/book/`.
+- **`autoware_ndt_scan_matcher_rs`** (this book) — the **node crate**: the C ABI over the engine's
+  Rust API plus the `std` ROS 2 node shell.
+
 The C++ side becomes a thin shell that owns only the ROS 2 boundary and forwards each
-callback to a single Rust entry point.
+callback to a single Rust entry point in the node crate.
 
 ## Why this exists
 
@@ -41,12 +46,15 @@ flowchart TB
         node["rclcpp::Node\nsubscriptions · publishers\nservices · timers · TF"]
         host["Host vtable impl\n(ROS side effects)"]
     end
-    subgraph rust["Rust / autoware_ndt_scan_matcher_rs"]
-        handle["NdtScanMatcherRs\n(std FFI shell: node state)"]
-        matcher["ScanMatcher (no_std core)"]
-        engine["NdtEngine\n(&self-only, lock-free map)"]
-        handle --> matcher --> engine
+    subgraph nodecrate["Rust node crate / autoware_ndt_scan_matcher_rs (std)"]
+        handle["NdtScanMatcherRs\n(C ABI + node state)"]
     end
+    subgraph enginecrate["Rust engine crate / realtime_ndt_scan_matcher (no_std)"]
+        matcher["ScanMatcher (over Host ports)"]
+        engine["NdtEngine\n(&self-only, lock-free map)"]
+        matcher --> engine
+    end
+    handle --> matcher
     node -- "one on_* call per callback\n(C ABI, message views)" --> handle
     handle -- "side effects\n(publish, TF, log, map load)" --> host
     host --> node

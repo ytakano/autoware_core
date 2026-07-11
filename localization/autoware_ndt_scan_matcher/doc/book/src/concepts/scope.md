@@ -9,8 +9,9 @@ Exactly which responsibilities are Rust's and which stay in C++.
 - Node-level algorithmic state: pose buffers, activation flag, map-update policy/bookkeeping.
 - The convergence decision, publish/skip decisions, and diagnostics *content*.
 
-These live in the `autoware_ndt_scan_matcher_rs` crate — a portable `no_std` core plus a `std` FFI
-shell (see [System overview](../arch/overview.md)).
+These live in Rust across two crates: the portable `no_std` **engine**
+(`realtime_ndt_scan_matcher`) and the `std` **node crate** (`autoware_ndt_scan_matcher_rs`) that
+wraps it with the C ABI and the ROS shell (see [System overview](../arch/overview.md)).
 
 ## C++ / rclcpp owns (the runtime boundary)
 

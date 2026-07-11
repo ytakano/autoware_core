@@ -3,7 +3,7 @@
 The host abstraction — how Rust reaches ROS side effects — is a **portable Rust trait**. The C
 vtable is just one adapter of it, so the same core runs under ROS, a kernel, or an async runtime.
 
-## The Rust ports (`src/host.rs`)
+## The Rust ports (`realtime_ndt_scan_matcher/src/host.rs`)
 
 ```rust,ignore
 pub trait MapSource { fn load(&self, center: [f64; 2], radius: f64) -> impl Future<Output = MapDelta>; }
@@ -19,7 +19,7 @@ between awaits — so a single-threaded executor can't deadlock on a blocking ma
 ## Adapters
 
 - **ROS** — a Rust `FfiHost` implements `Host` on top of the C vtable below.
-- **Tokio** — `examples/tokio_ndt.rs`, the async reference over synthetic data.
+- **Tokio** — `realtime_ndt_scan_matcher/examples/tokio_ndt.rs`, the async reference over synthetic data.
 - **Kernel** (future) — its own async runtime + flash/DMA map source.
 
 ## The C vtable (`src/ffi_host.rs`)
@@ -46,4 +46,4 @@ is `catch(...)`-guarded so a publish exception never unwinds across the boundary
 **ROS side effects only** — clock, TF, publish, log, map-load — never algorithm state (that is
 Rust-owned; see [Scope](../concepts/scope.md)).
 
-> Source: `src/host.rs`, `src/ffi_host.rs`, `src/node_map_update.rs`, `examples/tokio_ndt.rs`.
+> Source: `realtime_ndt_scan_matcher/src/host.rs`, `src/ffi_host.rs`, `src/node_map_update.rs`, `realtime_ndt_scan_matcher/examples/tokio_ndt.rs`.

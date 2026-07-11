@@ -29,6 +29,6 @@ There is no engine-owned or thread-local scratch under `mt`: each task/thread ow
 backend feature (`x86`/`aarch64`/`rv64`/`rv32` on bare metal, or `awkernel_sync/std` on a host) —
 otherwise `awkernel_sync` does not compile. `examples/threads_ndt.rs` exercises shared-engine usage;
 the host-testable lint gate is `--features mt,awkernel_sync/std` (see
-[Build and test](../start/build-and-test.md)).
+Build and test).
 
 > Source: `src/engine.rs` (`mt` cfg paths), `Cargo.toml` (`mt` feature), `examples/threads_ndt.rs`.

@@ -65,27 +65,29 @@ colcon test --packages-select autoware_ndt_scan_matcher \
 `test_ndt_scan_matcher_helper`. The `standard_sequence_*` / launch tests are slow (300 s timeouts,
 need PCD maps), so filter with `--ctest-args -R` while iterating.
 
-## Working on the Rust crate directly
+## Working on the Rust crates directly
 
-The crate lives at `autoware_ndt_scan_matcher/autoware_ndt_scan_matcher_rs/`. Iterating with cargo
-is much faster than a full colcon build, and covers everything except the ROS-message FFI shims
-(see the `ros` note below):
+The workspace lives at `autoware_ndt_scan_matcher/autoware_ndt_scan_matcher_rs/` and has **two
+members**: the node crate (workspace root, `autoware_ndt_scan_matcher_rs`) and the engine crate
+(`realtime_ndt_scan_matcher/`). Iterating with cargo is much faster than a full colcon build, and
+covers everything except the ROS-message FFI shims (see the `ros` note below). The engine crate's
+own build/feature gates are documented in its book; the essentials:
 
 ```sh
-cd .../autoware_ndt_scan_matcher/autoware_ndt_scan_matcher_rs
+cd .../autoware_ndt_scan_matcher/autoware_ndt_scan_matcher_rs   # the workspace root
 
-# Tests
-cargo test               # unit + doctests + integration tests (tests/zero_alloc.rs, tests/concurrency.rs)
+# Tests (from the root, cargo runs both members: node + engine)
+cargo test               # unit + doctests + the engine's integration tests (tests/zero_alloc.rs, …)
 cargo test --lib         # unit tests only (fastest)
 cargo test --doc         # the doctests shown throughout this book
 
 # Lints (the hardening gate — see Quality Gates)
-cargo clippy --all-targets -- -D warnings                                   # std (default)
-cargo clippy --no-default-features --features mt,awkernel_sync/std -- -D warnings   # no_std multi-core
+cargo clippy --workspace --all-targets -- -D warnings                                   # std (default)
+cargo clippy -p realtime_ndt_scan_matcher --no-default-features --features mt,awkernel_sync/std -- -D warnings   # engine, no_std multi-core
 
-# no_std build gate (the portable core must compile without std)
+# no_std build gate (the engine crate must compile without std)
 rustup target add x86_64-unknown-none            # once, if not already installed
-cargo rustc --no-default-features --lib --target x86_64-unknown-none --crate-type rlib
+cargo rustc -p realtime_ndt_scan_matcher --no-default-features --lib --target x86_64-unknown-none --crate-type rlib
 #   (repeat with aarch64-unknown-none for the arm64 kernel target)
 
 # API reference
@@ -98,11 +100,12 @@ Notes:
   on the include path. That is wired up by colcon (the CTest `autoware_ndt_scan_matcher_rs_cargo_test`
   runs `cargo test --features ros` with `ROS_INCLUDE_DIRS` set), so run the `ros`-gated shims through
   colcon rather than bare `cargo`. Plain `cargo test` covers everything else.
-- The single-core `no_std` config is verified with the `cargo rustc … --target …-unknown-none` gate
-  above, **not** `cargo clippy --no-default-features` (that fails standalone — a `no_std` staticlib
-  needs a `#[panic_handler]` from the final binary).
+- The single-core `no_std` config is verified with the
+  `cargo rustc -p realtime_ndt_scan_matcher … --target …-unknown-none` gate above, **not**
+  `cargo clippy -p realtime_ndt_scan_matcher --no-default-features` (that fails standalone — a
+  `no_std` staticlib needs a `#[panic_handler]` from the final binary).
 - **Miri** (unsafe FFI) and **coverage** are in [Behavior equivalence and verification](../port/verification.md);
   **benchmarks** are in [Benchmarking](../quality/benchmarks.md).
 
-See [Feature flags and build configurations](features.md) for the `std` / `parallel` / `mt` / `ros`
-matrix, and [Using the Rust crate](using-the-crate.md) for the API tour.
+See Feature flags and build configurations for the `std` / `parallel` / `mt` / `ros`
+matrix, and Using the Rust crate for the API tour.

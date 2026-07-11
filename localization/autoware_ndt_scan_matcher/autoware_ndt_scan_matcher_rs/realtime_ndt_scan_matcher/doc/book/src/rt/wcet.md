@@ -30,7 +30,7 @@ throughput option, not the WCET reference.
 ## Measured
 
 The per-frame WCET micro-benchmark `examples/wcet_frame.rs` measures the tail directly; current
-numbers are in [Benchmarking](../quality/benchmarks.md#l2--per-frame-wcet-exampleswcet_framers). A
+numbers are in Benchmarking. A
 `rust-realtime-review` accompanies each engine/align patch.
 
 > Source: `src/ndt.rs` (the `align` WCET contract, ≈ lines 317 / 617), `examples/wcet_frame.rs`.

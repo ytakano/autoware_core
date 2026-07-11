@@ -20,8 +20,8 @@ flowchart TB
     end
 
     subgraph rustcore["Rust no_std core"]
-        matcher["ScanMatcher — src/scan_matcher.rs\ngeneric over Host ports"]
-        engine["NdtEngine — src/engine.rs\n&self-only · lock-free ArcSwap map"]
+        matcher["ScanMatcher — realtime_ndt_scan_matcher/src/scan_matcher.rs\ngeneric over Host ports"]
+        engine["NdtEngine — realtime_ndt_scan_matcher/src/engine.rs\n&self-only · lock-free ArcSwap map"]
         kernels["pure kernels\nndt · voxel_grid · convergence\ncovariance · cov_estimate · tpe"]
         matcher --> engine
         engine --> kernels
@@ -33,21 +33,24 @@ flowchart TB
     hostimpl --> ros
 ```
 
-## The two Rust layers
+## The two Rust crates
 
-The Rust side is deliberately **two** layers, because the same core must run under a `no_std`
-kernel:
+The Rust side is deliberately **two crates** in one Cargo workspace, because the same core must run
+under a `no_std` kernel:
 
-1. **Portable core (`no_std`)** — `ScanMatcher` is generic over the [host ports](host-vtable.md)
-   and wraps the persistent [`NdtEngine`](engine.md). No ROS, no FFI, no `std`. It reuses the pure
-   `convergence` / `covariance` / `cov_estimate` kernels. This is the kernel (Track-B) target.
-2. **`std` FFI shell** — `NdtScanMatcherRs` is the opaque handle C++ holds. It owns the *node-level*
-   state the algorithm core does not (pose buffers, activation flag, map-update bookkeeping) and
-   adapts everything to the C ABI. It lives in the `#[cfg(feature = "std")]` `node` /
-   `node_map_update` / `node_align_service` modules and is never compiled into the `no_std` rlib.
+1. **Engine crate — `realtime_ndt_scan_matcher` (`no_std` + `alloc`, ROS-free).** `ScanMatcher` is
+   generic over the [host ports](host-vtable.md) and wraps the persistent `NdtEngine`. No ROS, no
+   FFI, no `std`. It reuses the pure `convergence` / `covariance` / `cov_estimate` kernels. This is
+   the kernel (Track-B) target, and it has its own book. Its `lib.rs` carries
+   `#![cfg_attr(not(any(test, feature = "std")), no_std)]`.
+2. **Node crate — `autoware_ndt_scan_matcher_rs` (always `std`).** `NdtScanMatcherRs` is the opaque
+   handle C++ holds. It depends on the engine crate, owns the *node-level* state the engine does not
+   (pose buffers, activation flag, map-update bookkeeping), and adapts everything to the C ABI in
+   its `node` / `node_map_update` / `node_align_service` modules. It is never part of the `no_std`
+   build.
 
-`lib.rs` is `#![cfg_attr(not(any(test, feature = "std")), no_std)]`. New algorithmic code goes in
-the portable core so the kernel build keeps it; only ROS/FFI glue is `std`-gated.
+New algorithmic code goes in the engine crate so the kernel build keeps it; only ROS/FFI glue lives
+in the node crate.
 
 ## The opaque handle
 
@@ -66,6 +69,6 @@ void NDTScanMatcher::callback_sensor_points(
 ```
 
 The next chapters go down each seam: the [FFI boundary](ffi-boundary.md), the
-[engine](engine.md), and the [align hot path](align.md).
+engine, and the align hot path.
 
-> Source: `src/lib.rs`, `src/scan_matcher.rs`, `src/engine.rs`.
+> Source: `src/lib.rs`, `realtime_ndt_scan_matcher/src/scan_matcher.rs`, `realtime_ndt_scan_matcher/src/engine.rs`.

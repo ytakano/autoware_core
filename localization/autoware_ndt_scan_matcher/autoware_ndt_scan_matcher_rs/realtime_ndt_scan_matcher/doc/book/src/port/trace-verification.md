@@ -27,7 +27,7 @@ Deterministic control flow (request validation, availability gates, initial-pose
 response packaging, and the host side-effect summary: topic/type/count) gets **exact** trace checks.
 The TPE/NDT search — where libstdc++'s sampler makes exact candidate traces unstable — gets
 tolerance checks on the align outcome and property/statistical checks on search quality instead (see
-[Verification](verification.md)). Tolerances are established from measured C++ baseline self-variance,
+Verification). Tolerances are established from measured C++ baseline self-variance,
 not invented up front.
 
-> Source: `src/node_align_service.rs` (the trace events + the deterministic decision functions).
+> Source: `../src/node_align_service.rs` (the trace events + the deterministic decision functions).

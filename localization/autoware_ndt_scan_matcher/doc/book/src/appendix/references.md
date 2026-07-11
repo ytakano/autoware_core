@@ -6,7 +6,7 @@
 - The package `README.md` — node I/O, parameters, and the regularization derivation.
 - The crate rustdoc (`cargo doc --no-deps`) and the per-module docs in `src/`.
 - Upstream fix: `autoware_core` PR #1217 — the NDT `h_ang` "d1" pitch² sign correction (see
-  [Divergences from upstream](../port/divergences.md)).
+  Divergences from upstream).
 
 ## NDT algorithm
 

@@ -6,7 +6,7 @@ The guiding principle is **capture-once, replay-everywhere**: capture representa
 then replay them deterministically through both engines so a comparison is apples-to-apples and free
 of live-system jitter. The predictable **serial** backend (`num_threads = 1`) is the fair baseline —
 it is the WCET reference, and it isolates the kernel from thread-pool scheduling noise (see
-[Parallelism and worker threads](../start/features.md#parallelism-and-worker-threads)).
+Parallelism and worker threads).
 
 ## Tiers
 
@@ -115,7 +115,7 @@ Rust serial `align`, small 288-point cloud, 5 iterations, 20,000 frames (µs per
 | 524 | 647 | 859 | 1090 |
 
 (min 513 µs, mean 529 µs.) The bounded, low-spread tail reflects the allocation-free, panic-free
-align path (see [The WCET contract](../rt/wcet.md)).
+align path (see *The WCET contract* in the engine crate book).
 
 ### Caveats
 

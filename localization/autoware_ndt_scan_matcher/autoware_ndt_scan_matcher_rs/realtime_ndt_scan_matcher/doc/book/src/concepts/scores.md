@@ -22,7 +22,7 @@ observed maps, so it is the default convergence gate in Autoware.
 (the config default is `1`). The selected score is compared against its threshold
 (`converged_param_transform_probability` or
 `converged_param_nearest_voxel_transformation_likelihood`); the pure decision — including the
-oscillation override — is [`convergence::evaluate_convergence`](../port/verification.md), whose
+oscillation override — is `convergence::evaluate_convergence`, whose
 inputs/verdict are documented on `convergence::ConvergenceInput` / `ConvergenceVerdict`.
 
 ## Traces and no-ground variants
@@ -30,7 +30,7 @@ inputs/verdict are documented on `convergence::ConvergenceInput` / `ConvergenceV
 `align` also records the per-iteration score traces (`transform_probability_array`,
 `nearest_voxel_likelihood_array`) for diagnostics/plotting. The sensor callback additionally computes
 **no-ground** TP/NVTL (scores on the cloud with ground points filtered) and publishes them as debug
-topics. Both scores travel out of a match in [`host::MatchResult`](../arch/host-vtable.md).
+topics. Both scores travel out of a match in `host::MatchResult`.
 
 ## How the scores feed downstream
 

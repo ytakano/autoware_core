@@ -47,7 +47,7 @@ This replaces the C++ giant `ndt_ptr_` mutex on the hot path.
 
 The engine is the read/update data structure, not the control loop. The WCET-bounded computation
 is the free function [`ndt::align`](align.md); node-level state (pose buffers, activation) lives
-in the [`NdtScanMatcherRs` shell](overview.md), not here.
+in the `NdtScanMatcherRs` shell, not here.
 
 ## Sub-chapters
 

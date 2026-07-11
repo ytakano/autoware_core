@@ -27,7 +27,7 @@ subset most relevant to the port.
 | `step_size` | 0.1 | More-Thuente line-search max step |
 | `resolution` | 2.0 | voxel-grid resolution [m] |
 | `max_iterations` | 30 | optimizer iteration cap |
-| `num_threads` | 4 | derivative-reduction worker count (`>1` ⇒ parallel; sizes the global pool — see [features](../start/features.md#parallelism-and-worker-threads)) |
+| `num_threads` | 4 | derivative-reduction worker count (`>1` ⇒ parallel; sizes the global pool — see features) |
 | `regularization.enable` | false | enable longitudinal regularization |
 | `regularization.scale_factor` | 0.01 | regularization strength |
 
@@ -58,8 +58,8 @@ subset most relevant to the port.
 | `no_ground_points.enable` | false | also score on the no-ground cloud |
 
 The `covariance.*` group (estimation mode, scale, softmax temperature, configured 6×6, XY search
-offsets) drives [covariance estimation](../arch/covariance.md); see the README/schema for its full
-list. Each of these maps to a Rust engine setter (see [Engine state](../arch/engine-state.md)).
+offsets) drives covariance estimation; see the README/schema for its full
+list. Each of these maps to a Rust engine setter (see Engine state).
 
 > Source: `config/ndt_scan_matcher.param.yaml`, `config/ndt_scan_matcher.schema.json`, the package
 > `README.md`.

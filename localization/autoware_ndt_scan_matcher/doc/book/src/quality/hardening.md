@@ -14,7 +14,7 @@ The crate holds itself to a zero-warning, zero-clippy-finding build, enforced by
   `pedantic` (priority `-1`); **`allow_attributes_without_reason = "deny"`** (every suppression needs
   a `reason`).
 - **`[profile.release] overflow-checks = true`** — integer overflow panics, so integer arithmetic
-  must be explicit `checked_*`/`saturating_*`/`wrapping_*` (see [Panic-free](../rt/panic-free.md)).
+  must be explicit `checked_*`/`saturating_*`/`wrapping_*` (see *Panic-free, bounded execution* in the engine crate book).
 
 ## Suppression policy
 

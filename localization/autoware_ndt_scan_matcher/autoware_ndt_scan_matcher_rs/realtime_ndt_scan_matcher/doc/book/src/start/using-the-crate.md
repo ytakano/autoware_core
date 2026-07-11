@@ -1,6 +1,6 @@
-# Using the Rust crate
+# Using the engine crate
 
-`autoware_ndt_scan_matcher_rs` is usable as a plain Rust library, independently of ROS. This
+`realtime_ndt_scan_matcher` is usable as a plain Rust library, independently of ROS. This
 chapter tours the public API. The examples are the crate's own rustdoc doctests (verified with
 `cargo test --doc`); browse the full reference with `cargo doc --no-deps --open`.
 
@@ -8,7 +8,7 @@ chapter tours the public API. The examples are the crate's own rustdoc doctests 
 
 Pose guesses and results are `nalgebra` matrices (`Matrix4<f32>` for poses, `Matrix6<f64>` for
 Hessians/covariances). The crate **re-exports the exact `nalgebra` version it is built against**,
-so construct those matrices through `autoware_ndt_scan_matcher_rs::nalgebra` rather than pinning
+so construct those matrices through `realtime_ndt_scan_matcher::nalgebra` rather than pinning
 your own (a different version is a distinct, incompatible type).
 
 ## Primary API: `NdtEngine`
@@ -17,8 +17,8 @@ The persistent engine ([`engine::NdtEngine`](../arch/engine.md)) is the main ent
 target map, build the kd-tree, then align sensor clouds:
 
 ```rust
-use autoware_ndt_scan_matcher_rs::engine::NdtEngine;
-use autoware_ndt_scan_matcher_rs::nalgebra::Matrix4;
+use realtime_ndt_scan_matcher::engine::NdtEngine;
+use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 
 // Empty engine: 2.0 m voxels; MultiVoxelGridCovariance defaults (min 6 points / eig 0.01).
 let engine = NdtEngine::new(2.0, 6, 0.01);
@@ -44,8 +44,8 @@ warmup. These are the **only** align entry points under the `mt` feature (the im
 variants are compiled out):
 
 ```rust
-use autoware_ndt_scan_matcher_rs::engine::{MatchScratch, NdtEngine};
-use autoware_ndt_scan_matcher_rs::nalgebra::Matrix4;
+use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine};
+use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 
 let engine = NdtEngine::new(2.0, 6, 0.01);
 let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
@@ -60,7 +60,7 @@ assert!(scratch.result().iteration_num >= 0);
 ## Portable orchestration: `ScanMatcher`
 
 [`scan_matcher::ScanMatcher`](../arch/portability.md) wraps the engine and drives it over the
-[host ports](../arch/host-vtable.md) (`MapSource` / `OutputSink` / `Clock`). Map loading is
+host ports (`MapSource` / `OutputSink` / `Clock`). Map loading is
 `async`; the match is the synchronous WCET hot path. It runs unchanged under ROS, a kernel, or an
 async runtime — `examples/tokio_ndt.rs` is the reference host implementation.
 
@@ -70,9 +70,9 @@ async runtime — `examples/tokio_ndt.rs` is the reference host implementation.
 directly when you hold a `VoxelGridMap` yourself:
 
 ```rust
-use autoware_ndt_scan_matcher_rs::ndt::{align, AlignResult, AlignWorkspace, NdtParams};
-use autoware_ndt_scan_matcher_rs::voxel_grid::VoxelGridMap;
-use autoware_ndt_scan_matcher_rs::nalgebra::Matrix4;
+use realtime_ndt_scan_matcher::ndt::{align, AlignResult, AlignWorkspace, NdtParams};
+use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
+use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 
 let mut map = VoxelGridMap::new([2.0; 3], 6, 0.01);
 let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();

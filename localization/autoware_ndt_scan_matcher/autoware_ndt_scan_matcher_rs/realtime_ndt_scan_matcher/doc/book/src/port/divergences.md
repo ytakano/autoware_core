@@ -7,7 +7,7 @@ rather than fixing it locally.
 
 ## Why reproduce, not fix
 
-The differential test against C++ is the oracle (see [Verification](verification.md)). If the Rust
+The differential test against C++ is the oracle (see *Behavior equivalence and verification* in the node crate book). If the Rust
 port silently "corrected" a C++ bug, the differential test would go red and we would lose the
 ability to prove equivalence. So the correct fix belongs **upstream** (in pcl / Autoware), and the
 port keeps the C++ behavior verbatim until that upstream fix lands.
@@ -46,7 +46,7 @@ compute the corrected value).
   misconfigured `trans_epsilon / 2 > step_size` makes `min > max`. The C++ (`computeStepLengthMT`,
   `multigrid_ndt_omp_impl.hpp:953-955`) applies `std::min(a_t, step_max)` **then**
   `std::max(a_t, step_min)` — never panicking, yielding `step_min` in that case. The port now
-  mirrors the exact min-then-max order (`engine/src/ndt.rs`; Rust `f64::min`/`max` also match
+  mirrors the exact min-then-max order (`src/ndt.rs`; Rust `f64::min`/`max` also match
   `std::min`/`max` on single-NaN operands). Found by the 2026-07-10 numeric-hazard scan; pinned by
   `align_degenerate_step_bounds_do_not_panic`.
 
@@ -56,28 +56,28 @@ Per the roadmap's Rule 3 (`plan/ndt_pr.md`), the port adds **branch-only guards*
 leaves unguarded. Each fires **only on the degenerate domain** (where C++ produces NaN/Inf/garbage),
 so the valid-domain differential tests are unaffected. Added by the 2026-07-10 hazard scan:
 
-- **Non-finite result pose → non-converged** (`engine/src/engine.rs`, `run_align_with`): the
+- **Non-finite result pose → non-converged** (`src/engine.rs`, `run_align_with`): the
   convergence verdict is forced to `is_converged = false` when the align result pose is not finite,
   so no consumer publishes NaN/Inf downstream (the node gates every pose/TF publish on
   `is_converged`). Pinned by `run_align_gates_non_finite_pose_to_not_converged`.
-- **`asin` domain clamp** (`engine/src/transform.rs`, `matrix_to_euler`): the sine argument is
+- **`asin` domain clamp** (`src/transform.rs`, `matrix_to_euler`): the sine argument is
   clamped to `[-1, 1]` — FP error near gimbal can push `|m02|` past 1, where `asin` returns NaN
   (C++ uses the atan2-based Eigen `eulerAngles`, which cannot NaN). Pinned by
   `matrix_to_euler_clamps_asin_overshoot`.
-- **Gauss-constants config clamp** (`engine/src/transform.rs`, `gauss_constants`): degenerate
+- **Gauss-constants config clamp** (`src/transform.rs`, `gauss_constants`): degenerate
   configs (`resolution <= 0`, `outlier_ratio` outside `(0, 1)`, non-finite) are clamped into the
   valid domain; the C++ (`computeTransformation` lines 229-233) yields `inf`/`log(0)`/NaN there,
   poisoning every score. Pinned by `gauss_constants_degenerate_configs_stay_finite` (+ a
   bit-identical valid-domain test).
-- **Softmax temperature guard** (`engine/src/covariance.rs`, `calc_weight_vec`): non-positive or
+- **Softmax temperature guard** (`src/covariance.rs`, `calc_weight_vec`): non-positive or
   non-finite temperature falls back to uniform `1/n` weights; C++
   (`estimate_covariance.cpp:135`) divides unguarded. Pinned by
   `calc_weight_vec_degenerate_temperature_is_uniform`.
-- **Zero-norm quaternion guard** (node crate `src/sensor_points.rs`, `pose_to_matrix4`): a
+- **Zero-norm quaternion guard** (node crate `../src/sensor_points.rs`, `pose_to_matrix4`): a
   zero-norm/non-finite interpolated EKF quaternion is routed to the existing
   interpolate-failed path (`SM_INTERPOLATE_FAILED`) instead of being normalized into NaN. Pinned by
   `pose_to_matrix4_degenerate_quaternion_is_none`.
-- **Align-service best-pose gate** (node crate `src/node_align_service.rs`): a particle whose
+- **Align-service best-pose gate** (node crate `../src/node_align_service.rs`): a particle whose
   result pose is non-finite can never be selected as `best_pose`, even with a finite score.
 
 ## Intentional differences
@@ -94,12 +94,12 @@ certification in the comparison harness handles the residual. See
 The align-service TPE uses a deterministic Rust-owned sampler instead of libstdc++'s
 implementation-defined `std::normal_distribution` sequence, because that sequence is not portable
 (this is why exact candidate-trace equivalence for the TPE search is out of scope; see
-[Verification](verification.md)).
+Verification).
 
 **Gimbal-lock RPY interpolation is kept C++-identical (an intentional non-divergence).** The pose
-buffer's quaternion↔RPY conversions (`engine/src/pose_buffer.rs`) share tf2 `getRPY`'s singularity
+buffer's quaternion↔RPY conversions (`src/pose_buffer.rs`) share tf2 `getRPY`'s singularity
 at pitch ±90°: the roll/yaw split is ill-conditioned there, giving a possibly-degenerate (but
 always finite, never panicking) interpolated orientation. Guarding it would change behavior where
 the C++ is equally degenerate, so parity wins.
 
-> Source: `engine/src/derivatives.rs` (the `h_ang` table + FD tests); upstream issue/PR links.
+> Source: `src/derivatives.rs` (the `h_ang` table + FD tests); upstream issue/PR links.
