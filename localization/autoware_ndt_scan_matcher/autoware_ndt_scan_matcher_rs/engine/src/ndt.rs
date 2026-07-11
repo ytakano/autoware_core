@@ -38,7 +38,8 @@ use crate::derivatives::{
     AngleDerivatives, compute_angle_derivatives, compute_point_derivatives, update_derivatives,
 };
 use crate::transform::{
-    GaussConstants, gauss_constants, matrix_to_euler, se3_matrix_f32, transform_cloud_f32,
+    GaussConstants, gauss_constants, matrix_to_euler, se3_matrix_f32, transform_cloud_by_matrix,
+    transform_cloud_f32,
 };
 use crate::voxel_grid::VoxelGridMap;
 
@@ -669,19 +670,34 @@ fn derivatives_at(
 ) -> Derivatives {
     let mut trans = core::mem::take(&mut ws.trans_cloud);
     transform_cloud_f32(p, source, &mut trans);
+    let d = derivatives_from(map, source, &trans, p, cfg, ws, parallel);
+    ws.trans_cloud = trans;
+    d
+}
+
+/// [`derivatives_at`] over an already-transformed cloud (the initial pass transforms by the guess
+/// MATRIX for C++ parity; see `align`).
+fn derivatives_from(
+    map: &VoxelGridMap,
+    source: &[[f32; 3]],
+    trans: &[[f32; 3]],
+    p: &Vector6<f64>,
+    cfg: &ScoreConfig,
+    ws: &mut AlignWorkspace,
+    parallel: bool,
+) -> Derivatives {
     // `parallel` selects the rayon backend (bit-identical to serial) when the feature is built.
     #[cfg(feature = "parallel")]
     let d = if parallel {
-        compute_derivatives_parallel(map, source, &trans, p, cfg, ws)
+        compute_derivatives_parallel(map, source, trans, p, cfg, ws)
     } else {
-        compute_derivatives(map, source, &trans, p, cfg, ws)
+        compute_derivatives(map, source, trans, p, cfg, ws)
     };
     #[cfg(not(feature = "parallel"))]
     let d = {
         let _ = parallel; // no rayon backend in this build; always serial
-        compute_derivatives(map, source, &trans, p, cfg, ws)
+        compute_derivatives(map, source, trans, p, cfg, ws)
     };
-    ws.trans_cloud = trans;
     d
 }
 
@@ -782,10 +798,21 @@ pub fn align(
     let guess_f64 = guess.map(f64::from);
     let mut p = matrix_to_euler(&guess_f64);
 
-    out.transformation_array.push(se3_matrix_f32(&p));
+    out.transformation_array.push(*guess);
 
-    // Derivatives at the initial guess.
-    let mut d = derivatives_at(map, source, &p, &cfg, ws, parallel);
+    // Derivatives at the initial guess. C++ PARITY: the initial pass transforms the cloud by the
+    // guess MATRIX (`pcl::transformPointCloud(output, output, guess)`, multigrid_ndt_omp_impl
+    // :266) and records the guess matrix itself; only SUBSEQUENT passes rebuild the transform
+    // from the Euler 6-vector. Rebuilding here instead is not bit-equal for rotated guesses
+    // (`R_rebuilt(euler(R)) != R` in f32, amplified by the map's coordinate magnitude) and was
+    // the root cause of the real-map iteration divergence (PORT-QUIRK; see the porting notes).
+    let mut d = {
+        let mut trans = core::mem::take(&mut ws.trans_cloud);
+        transform_cloud_by_matrix(guess, source, &mut trans);
+        let d = derivatives_from(map, source, &trans, &p, &cfg, ws, parallel);
+        ws.trans_cloud = trans;
+        d
+    };
     out.transform_probability_array
         .push(d.transform_probability as f32);
     out.nearest_voxel_likelihood_array

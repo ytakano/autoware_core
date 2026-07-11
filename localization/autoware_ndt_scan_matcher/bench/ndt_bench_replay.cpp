@@ -594,6 +594,158 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
       }
       ndt->createVoxelKdtree();
       autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng);
+      // WCET_DUMP: compare the two engines' voxel maps (leaf means as sorted multisets).
+      if (std::getenv("WCET_DUMP") != nullptr) {
+        auto cpd = ndt->getVoxelPCD();
+        std::vector<std::array<float, 3>> cppm;
+        for (const auto & q : cpd) cppm.push_back({q.x, q.y, q.z});
+        const double leaf3[3] = {cp.resolution, cp.resolution, cp.resolution};
+        struct AwNdtVoxelGridMap * rmap =
+          autoware_ndt_scan_matcher_rs_voxel_grid_map_new(leaf3, 6, 0.01);
+        for (size_t i = 0; i < fr.ids.size(); ++i) {
+          const auto & e2 = tile_cache.at(hex_of(fr.ids[i]));
+          autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
+            rmap, e2.second.data(), e2.second.size() / 3, static_cast<uint64_t>(i));
+        }
+        autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(rmap);
+        std::vector<std::array<float, 3>> rustm;
+        for (uint32_t i = 0;; ++i) {
+          double mean[3];
+          double icov[9];
+          if (!autoware_ndt_scan_matcher_rs_voxel_grid_map_leaf(rmap, i, mean, icov)) break;
+          rustm.push_back({static_cast<float>(mean[0]), static_cast<float>(mean[1]),
+            static_cast<float>(mean[2])});
+        }
+        autoware_ndt_scan_matcher_rs_voxel_grid_map_free(rmap);
+        // icov comparison: fetch each Rust leaf's C++ counterpart via a tiny radiusSearch on a
+        // standalone MultiVoxelGridCovariance built exactly as the NDT builds its target cells.
+        {
+          pclomp::MultiVoxelGridCovariance<pcl::PointXYZ> mv;
+          mv.setLeafSize(static_cast<float>(cp.resolution), static_cast<float>(cp.resolution),
+            static_cast<float>(cp.resolution));
+          for (size_t i = 0; i < fr.ids.size(); ++i) {
+            const auto & e2 = tile_cache.at(hex_of(fr.ids[i]));
+            char name[16];
+            std::snprintf(name, sizeof(name), "%06zu", i);
+            mv.setInputCloudAndFilter(e2.first, name);
+          }
+          mv.createKdtree();
+          struct AwNdtVoxelGridMap * rmap2 = autoware_ndt_scan_matcher_rs_voxel_grid_map_new(
+            leaf3, 6, 0.01);
+          for (size_t i = 0; i < fr.ids.size(); ++i) {
+            const auto & e2 = tile_cache.at(hex_of(fr.ids[i]));
+            autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
+              rmap2, e2.second.data(), e2.second.size() / 3, static_cast<uint64_t>(i));
+          }
+          autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(rmap2);
+          size_t checked = 0, icov_exact = 0, icov_small = 0, icov_big = 0, mean_exact = 0;
+          double worst = 0.0;
+          for (uint32_t i = 0; i < 400000U; ++i) {
+            double rmean[3];
+            double ricov[9];
+            if (!autoware_ndt_scan_matcher_rs_voxel_grid_map_leaf(rmap2, i, rmean, ricov)) break;
+            pcl::PointXYZ q;
+            q.x = static_cast<float>(rmean[0]);
+            q.y = static_cast<float>(rmean[1]);
+            q.z = static_cast<float>(rmean[2]);
+            std::vector<pclomp::MultiVoxelGridCovariance<pcl::PointXYZ>::LeafConstPtr> ls;
+            mv.radiusSearch(q, 0.001, ls, 1);
+            if (ls.empty()) continue;
+            ++checked;
+            const auto & cm = ls[0]->getMean();
+            const auto & ci = ls[0]->getInverseCov();
+            if (cm(0) == rmean[0] && cm(1) == rmean[1] && cm(2) == rmean[2]) ++mean_exact;
+            double rel = 0.0;
+            bool exact = true;
+            for (int r = 0; r < 3; ++r)
+              for (int c = 0; c < 3; ++c) {
+                const double a = ci(r, c);
+                const double b = ricov[(r * 3) + c];
+                if (a != b) exact = false;
+                const double denom = std::max(std::abs(a), 1e-12);
+                rel = std::max(rel, std::abs(a - b) / denom);
+              }
+            if (exact) ++icov_exact;
+            else if (rel < 1e-6) ++icov_small;
+            else ++icov_big;
+            worst = std::max(worst, rel);
+          }
+          std::fprintf(stderr,
+            "DUMP icov: checked=%zu mean_exact=%zu icov_exact=%zu small(<1e-6)=%zu big=%zu "
+            "worst_rel=%.3e\n",
+            checked, mean_exact, icov_exact, icov_small, icov_big, worst);
+          // Neighbor-set comparison at the actual (transformed) source points of this frame.
+          {
+            Eigen::Matrix4f g;
+            for (int r = 0; r < 4; ++r)
+              for (int c = 0; c < 4; ++c) g(r, c) = fr.guess16[(r * 4) + c];
+            size_t pts = 0, k_equal = 0, set_equal = 0, k_diff = 0;
+            std::vector<uint32_t> ridx(128);
+            for (size_t pi = 0; pi + 2 < fr.source.size(); pi += 3) {
+              const Eigen::Vector4f sp(fr.source[pi], fr.source[pi + 1], fr.source[pi + 2], 1.0F);
+              const Eigen::Vector4f tp4 = g * sp;
+              pcl::PointXYZ q;
+              q.x = tp4(0);
+              q.y = tp4(1);
+              q.z = tp4(2);
+              std::vector<pclomp::MultiVoxelGridCovariance<pcl::PointXYZ>::LeafConstPtr> ls;
+              mv.radiusSearch(q, cp.resolution, ls);
+              const float qf[3] = {tp4(0), tp4(1), tp4(2)};
+              const uint32_t rk = autoware_ndt_scan_matcher_rs_voxel_grid_map_radius_search(
+                rmap2, qf, cp.resolution, 64, ridx.data(), 128);
+              ++pts;
+              if (ls.size() == rk) {
+                ++k_equal;
+                // Compare leaf identity via bitwise means (order-insensitive).
+                std::vector<std::array<double, 3>> a, b;
+                for (const auto & lp : ls) {
+                  const auto & m = lp->getMean();
+                  a.push_back({m(0), m(1), m(2)});
+                }
+                for (uint32_t j = 0; j < rk; ++j) {
+                  double rm[3];
+                  double ric[9];
+                  autoware_ndt_scan_matcher_rs_voxel_grid_map_leaf(rmap2, ridx[j], rm, ric);
+                  b.push_back({rm[0], rm[1], rm[2]});
+                }
+                std::sort(a.begin(), a.end());
+                std::sort(b.begin(), b.end());
+                if (a == b) ++set_equal;
+              } else {
+                ++k_diff;
+                if (k_diff <= 3) {
+                  std::fprintf(stderr,
+                    "  nbr-diff at pt %zu: cpp K=%zu rust K=%u (query %.6f,%.6f,%.6f)\n", pi / 3,
+                    ls.size(), rk, static_cast<double>(q.x), static_cast<double>(q.y),
+                    static_cast<double>(q.z));
+                }
+              }
+            }
+            std::fprintf(stderr,
+              "DUMP nbr: pts=%zu K-equal=%zu set-equal=%zu K-diff=%zu\n", pts, k_equal,
+              set_equal, k_diff);
+          }
+          autoware_ndt_scan_matcher_rs_voxel_grid_map_free(rmap2);
+        }
+        std::sort(cppm.begin(), cppm.end());
+        std::sort(rustm.begin(), rustm.end());
+        size_t diff = 0;
+        for (size_t i = 0; i < std::min(cppm.size(), rustm.size()); ++i) {
+          if (std::memcmp(cppm[i].data(), rustm[i].data(), 12) != 0) ++diff;
+        }
+        std::fprintf(stderr, "DUMP map: cpp leaves=%zu rust leaves=%zu mean-mismatches=%zu\n",
+          cppm.size(), rustm.size(), diff);
+        if (diff > 0) {
+          for (size_t i = 0, shown = 0; i < std::min(cppm.size(), rustm.size()) && shown < 3;
+               ++i) {
+            if (std::memcmp(cppm[i].data(), rustm[i].data(), 12) != 0) {
+              std::fprintf(stderr, "  leaf %zu: cpp (%.9g,%.9g,%.9g) rust (%.9g,%.9g,%.9g)\n", i,
+                cppm[i][0], cppm[i][1], cppm[i][2], rustm[i][0], rustm[i][1], rustm[i][2]);
+              ++shown;
+            }
+          }
+        }
+      }
       cur_ids = fr.ids;
       ++epochs;
     }
@@ -628,6 +780,55 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     std::sort(cpp_ms_v.begin(), cpp_ms_v.end());
     std::sort(rs_ms_v.begin(), rs_ms_v.end());
     const int cpp_iter = ndt->getResult().iteration_num;
+    // WCET_DUMP=1: per-iteration score/pose comparison for divergence root-causing.
+    if (std::getenv("WCET_DUMP") != nullptr) {
+      const auto res = ndt->getResult();
+      std::vector<float> rtp(64), rnvl(64);
+      uint32_t rcount = 0;
+      autoware_ndt_scan_matcher_rs_ndt_engine_get_score_arrays(
+        eng, rtp.data(), rnvl.data(), 64, &rcount);
+      std::fprintf(stderr, "DUMP frame %zu: cpp iters=%d rust iters(arrays)=%u\n", fi, cpp_iter,
+        rcount);
+      // First-step pose fork: translation delta between engines after Newton step 1.
+      {
+        std::vector<float> rtf(16 * 40);
+        uint32_t rtn = 0;
+        AwNdtAlignOutput ro2{};
+        ro2.transformation_array = rtf.data();
+        ro2.transforms_cap = 40;
+        ro2.transforms_count = &rtn;
+        autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &ro2);
+        if (!res.transformation_array.empty() && rtn > 0) {
+          const auto & cp1 = res.transformation_array[0];
+          const double dx = static_cast<double>(cp1(0, 3)) - static_cast<double>(rtf[3]);
+          const double dy = static_cast<double>(cp1(1, 3)) - static_cast<double>(rtf[7]);
+          const double dz = static_cast<double>(cp1(2, 3)) - static_cast<double>(rtf[11]);
+          std::fprintf(stderr, "  pose1 delta: (%.3e, %.3e, %.3e) m\n", dx, dy, dz);
+        }
+      }
+      const size_t n_it =
+        std::max(res.transform_probability_array.size(), static_cast<size_t>(rcount));
+      for (size_t i = 0; i < n_it; ++i) {
+        const float ct = i < res.transform_probability_array.size()
+                           ? res.transform_probability_array[i]
+                           : -1.0F;
+        const float cn = i < res.nearest_voxel_transformation_likelihood_array.size()
+                           ? res.nearest_voxel_transformation_likelihood_array[i]
+                           : -1.0F;
+        const float rt = i < rcount ? rtp[i] : -1.0F;
+        const float rn = i < rcount ? rnvl[i] : -1.0F;
+        uint32_t ctb;
+        uint32_t rtb;
+        std::memcpy(&ctb, &ct, 4);
+        std::memcpy(&rtb, &rt, 4);
+        std::fprintf(stderr,
+          "  it %2zu: tp cpp=%.9e rust=%.9e %s (bits %08x/%08x)  nvl cpp=%.9e rust=%.9e %s\n", i,
+          ct, rt, (ctb == rtb ? "==" : "DIFF"), ctb, rtb, cn, rn,
+          ([&] { uint32_t a, b; std::memcpy(&a, &cn, 4); std::memcpy(&b, &rn, 4); return a == b; }()
+             ? "=="
+             : "DIFF"));
+      }
+    }
     int32_t rs_iter = 0;
     std::array<float, 16> rs_pose{};
     AwNdtAlignOutput rout{};
