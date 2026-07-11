@@ -22,8 +22,8 @@ use nalgebra::{Matrix3, Matrix4, Quaternion, Rotation3, UnitQuaternion, Vector6}
 use crate::ffi_host::AwPose;
 use crate::ffi_ptr::{ffi_mut, ffi_mut_slice, ffi_ref, ffi_slice};
 use crate::node_handle::NdtScanMatcherRs;
-use autoware_ndt_rs::engine::{NdtEngine, run_align};
-use autoware_ndt_rs::tpe::{Direction, TreeStructuredParzenEstimator, Trial};
+use realtime_ndt_scan_matcher::engine::{NdtEngine, run_align};
+use realtime_ndt_scan_matcher::tpe::{Direction, TreeStructuredParzenEstimator, Trial};
 
 /// Initial pose TF lookup failed.
 pub const NDT_ALIGN_SERVICE_STATUS_TRANSFORM_UNAVAILABLE: i32 = 0;
@@ -774,7 +774,7 @@ fn run_align_service_search_impl(
     )
     .ok()?;
 
-    let conv = autoware_ndt_rs::engine::ConvergenceParams {
+    let conv = realtime_ndt_scan_matcher::engine::ConvergenceParams {
         converged_param_type: 1,
         converged_param_transform_probability: 0.0,
         converged_param_nearest_voxel_transformation_likelihood: input.reliable_score_threshold,
@@ -790,7 +790,7 @@ fn run_align_service_search_impl(
     for i in 0..particles_num {
         let tpe_input = tpe.get_next_input().ok()?;
         let tpe_vec = Vector6::from(tpe_input);
-        let guess = autoware_ndt_rs::transform::se3_matrix_f32(&tpe_vec);
+        let guess = realtime_ndt_scan_matcher::transform::se3_matrix_f32(&tpe_vec);
         let outcome = run_align(engine, &guess, source, &conv);
         let initial_pose = matrix4_to_aw_pose(&guess);
         let result_pose = matrix4_to_aw_pose(&outcome.pose);
@@ -811,7 +811,7 @@ fn run_align_service_search_impl(
             best_pose = result_pose;
         }
         let result_euler =
-            autoware_ndt_rs::transform::matrix_to_euler(&matrix4f_to_matrix4d(&outcome.pose));
+            realtime_ndt_scan_matcher::transform::matrix_to_euler(&matrix4f_to_matrix4d(&outcome.pose));
         tpe.add_trial(Trial {
             input: result_euler.into(),
             score: f64::from(outcome.transform_probability),

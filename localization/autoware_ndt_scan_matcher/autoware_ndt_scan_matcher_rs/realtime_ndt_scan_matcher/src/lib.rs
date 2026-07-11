@@ -50,8 +50,8 @@
 //! Load a one-tile target map, build the kd-tree, and align a source cloud from an identity guess:
 //!
 //! ```
-//! use autoware_ndt_rs::engine::NdtEngine;
-//! use autoware_ndt_rs::nalgebra::Matrix4;
+//! use realtime_ndt_scan_matcher::engine::NdtEngine;
+//! use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 //!
 //! // Empty engine: 2.0 m voxels; `MultiVoxelGridCovariance` defaults (min 6 points / eig 0.01).
 //! let engine = NdtEngine::new(2.0, 6, 0.01);

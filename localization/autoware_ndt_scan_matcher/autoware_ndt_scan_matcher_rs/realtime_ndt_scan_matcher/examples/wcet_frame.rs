@@ -47,9 +47,9 @@
 
 use std::time::Instant;
 
-use autoware_ndt_rs::fixture::Fixture;
-use autoware_ndt_rs::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
-use autoware_ndt_rs::voxel_grid::VoxelGridMap;
+use realtime_ndt_scan_matcher::fixture::Fixture;
+use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
+use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 use nalgebra::Matrix4;
 
 fn dense_cluster(cx: f32, cy: f32, cz: f32) -> Vec<[f32; 3]> {
@@ -271,7 +271,7 @@ fn main() {
 fn run_capture(dir: &std::path::Path) {
     use std::fmt::Write as _;
 
-    use autoware_ndt_rs::capture;
+    use realtime_ndt_scan_matcher::capture;
 
     let params = capture::read_params(dir).expect("read params.bin");
     let frame_paths = capture::list_frames(dir).expect("list frames");

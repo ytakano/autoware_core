@@ -29,9 +29,9 @@ use core::future::Future;
 use alloc::vec::Vec;
 
 use crate::ffi_ptr::{self, ffi_mut, ffi_ref, ffi_slice};
-use autoware_ndt_rs::engine::NdtEngine;
-use autoware_ndt_rs::host::{MapDelta, MapSource, MapTile};
-use autoware_ndt_rs::scan_matcher::apply_map_update;
+use realtime_ndt_scan_matcher::engine::NdtEngine;
+use realtime_ndt_scan_matcher::host::{MapDelta, MapSource, MapTile};
+use realtime_ndt_scan_matcher::scan_matcher::apply_map_update;
 
 /// Poll a ready future to completion with a noop waker — the C++ `fill` callback resolves the map load
 /// synchronously, so the future never actually suspends (one poll). Mirrors the bare-metal executor in

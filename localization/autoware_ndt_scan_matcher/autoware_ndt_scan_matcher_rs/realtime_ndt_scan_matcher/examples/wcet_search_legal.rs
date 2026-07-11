@@ -54,9 +54,9 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use autoware_ndt_rs::fixture::Fixture;
-use autoware_ndt_rs::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
-use autoware_ndt_rs::voxel_grid::VoxelGridMap;
+use realtime_ndt_scan_matcher::fixture::Fixture;
+use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
+use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 use nalgebra::Matrix4;
 
 const RES: f32 = 2.0;

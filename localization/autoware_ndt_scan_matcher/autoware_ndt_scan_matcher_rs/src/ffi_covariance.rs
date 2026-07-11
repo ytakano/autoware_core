@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! C ABI shims over [`autoware_ndt_rs::covariance`]. These wrap the pure covariance helpers with the
+//! C ABI shims over [`realtime_ndt_scan_matcher::covariance`]. These wrap the pure covariance helpers with the
 //! flat-buffer / row-major marshaling the C++ side expects. The numeric logic lives in the engine
 //! crate; this module only validates pointers (per rust-c-ffi-safety) and marshals.
 
-use autoware_ndt_rs::covariance::{
+use realtime_ndt_scan_matcher::covariance::{
     adjust_diagonal_covariance, calc_weight_vec, calculate_weighted_mean_and_cov,
     laplace_xy_covariance, rotate_covariance_to_base_link, rotate_covariance_to_map,
 };

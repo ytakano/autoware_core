@@ -37,11 +37,11 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use autoware_ndt_rs::ndt::{
+use realtime_ndt_scan_matcher::ndt::{
     AlignResult, AlignWorkspace, NdtParams, ScoreConfig, align, compute_derivatives,
 };
-use autoware_ndt_rs::transform::{gauss_constants, transform_point};
-use autoware_ndt_rs::voxel_grid::VoxelGridMap;
+use realtime_ndt_scan_matcher::transform::{gauss_constants, transform_point};
+use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 use nalgebra::{Matrix4, Vector3, Vector6};
 
 /// A pass-through allocator that counts allocations while `ENABLED` is set. The default
@@ -250,7 +250,7 @@ fn engine_allocations_after_warmup() {
     // --- engine path: MatchScratch::with_capacity makes the FIRST engine align allocation-free ---
     // (Same process-global counter, so this stays in the single sequential test.)
     {
-        use autoware_ndt_rs::engine::{MatchScratch, NdtEngine};
+        use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine};
         let engine = NdtEngine::new(2.0, 6, 0.01);
         for (id, &(cx, cy, cz)) in centers.iter().enumerate() {
             engine.add_target(&dense_cluster(cx, cy, cz), id as u64);

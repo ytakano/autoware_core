@@ -15,9 +15,9 @@
 //! C-ABI node shell for the Autoware `autoware_ndt_scan_matcher` NDT localization core.
 //!
 //! This crate is the **ROS-node C ABI**: it wraps the pure-Rust engine crate
-//! [`autoware_ndt_rs`](autoware_ndt_rs) with `extern "C"` shims (the `autoware_ndt_scan_matcher_rs_*`
+//! [`realtime_ndt_scan_matcher`](realtime_ndt_scan_matcher) with `extern "C"` shims (the `autoware_ndt_scan_matcher_rs_*`
 //! symbols the C++ package links against) plus the ROS-node callback glue. All numeric kernels and
-//! the portable engine API live in `autoware_ndt_rs`; this crate only validates the FFI boundary
+//! the portable engine API live in `realtime_ndt_scan_matcher`; this crate only validates the FFI boundary
 //! (per rust-c-ffi-safety) and marshals data to/from the engine's public Rust API.
 //!
 //! The crate is always `std` (it is the ROS-node shell). The only build knob is the `ros` feature,
@@ -26,7 +26,7 @@
 //! # Layout
 //!
 //! - [`ffi_engine`], [`ffi_ndt`], [`ffi_voxel_grid`], [`ffi_tpe`], [`ffi_covariance`],
-//!   [`ffi_cov_estimate`] — the C-ABI shims over the matching `autoware_ndt_rs` modules.
+//!   [`ffi_cov_estimate`] — the C-ABI shims over the matching `realtime_ndt_scan_matcher` modules.
 //! - [`ffi`] / [`ffi_host`] — the panic-safe boundary (`catch_unwind`) and the ROS side-effects host
 //!   vtable.
 //! - [`node`], [`node_handle`], [`node_map_update`], [`node_align_service`], [`sensor_points`] — the
@@ -54,7 +54,7 @@ pub mod ffi_host;
 // Audited C-ABI pointer helpers + guard macros — the single home for raw-pointer dereferences at
 // the FFI boundary.
 pub mod ffi_ptr;
-// ROS-gated `geometry_msgs::Pose` helper glue (bridges to the pure `autoware_ndt_rs::helper`).
+// ROS-gated `geometry_msgs::Pose` helper glue (bridges to the pure `realtime_ndt_scan_matcher::helper`).
 #[cfg(feature = "ros")]
 mod helper_ros;
 // ROS-node callback glue.
@@ -100,11 +100,11 @@ use crate::ffi_ptr::ffi_ref;
 /// `Matrix6<f64>` Hessians/covariances). Construct and read them through this re-export so the type
 /// identities match the engine's — a locally pinned `nalgebra` of a different version would be a
 /// distinct, incompatible type.
-pub use autoware_ndt_rs::nalgebra;
+pub use realtime_ndt_scan_matcher::nalgebra;
 
 /// C ABI entry point for the C++ side of `autoware_ndt_scan_matcher`.
 ///
-/// Delegates to [`autoware_ndt_rs::add`]. Both arguments are passed by value and the return is a
+/// Delegates to [`realtime_ndt_scan_matcher::add`]. Both arguments are passed by value and the return is a
 /// plain `u64`, so there are no pointers or lifetimes crossing the boundary to validate.
 #[expect(
     unsafe_code,
@@ -112,10 +112,10 @@ pub use autoware_ndt_rs::nalgebra;
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn autoware_ndt_scan_matcher_rs_add(left: u64, right: u64) -> u64 {
-    autoware_ndt_rs::add(left, right)
+    realtime_ndt_scan_matcher::add(left, right)
 }
 
-/// C ABI entry point for [`autoware_ndt_rs::init_thread_pool`]. Passed by value; no pointers cross
+/// C ABI entry point for [`realtime_ndt_scan_matcher::init_thread_pool`]. Passed by value; no pointers cross
 /// the boundary. Returns `true` iff this call initialized the pool.
 #[expect(
     unsafe_code,
@@ -123,12 +123,12 @@ pub extern "C" fn autoware_ndt_scan_matcher_rs_add(left: u64, right: u64) -> u64
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn autoware_ndt_scan_matcher_rs_init_thread_pool(num_threads: usize) -> bool {
-    autoware_ndt_rs::init_thread_pool(num_threads)
+    realtime_ndt_scan_matcher::init_thread_pool(num_threads)
 }
 
 /// Rotate the 3x3 position block of a 6x6 row-major pose covariance: `out = R * C * R^T`.
 ///
-/// Delegates to [`autoware_ndt_rs::helper::rotate_covariance`].
+/// Delegates to [`realtime_ndt_scan_matcher::helper::rotate_covariance`].
 ///
 /// # Safety
 /// `src_cov` and `out_cov` must each point to a readable/writable array of 36 `f64`, and
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_rotate_covariance(
 ) {
     let src = ffi_ref!(src_cov.cast::<[f64; 36]>(), else return);
     let rotation = ffi_ref!(rot.cast::<[f64; 9]>(), else return);
-    let result = autoware_ndt_rs::helper::rotate_covariance(src, rotation);
+    let result = realtime_ndt_scan_matcher::helper::rotate_covariance(src, rotation);
     // SAFETY: `out_cov` is a valid, aligned, writable [f64; 36] per the contract, audited in ffi_ptr.
     unsafe {
         ffi_ptr::write_out(out_cov.cast::<[f64; 36]>(), result);
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        assert_eq!(autoware_ndt_rs::add(2, 2), 4);
+        assert_eq!(realtime_ndt_scan_matcher::add(2, 2), 4);
         assert_eq!(autoware_ndt_scan_matcher_rs_add(2, 2), 4);
     }
 
@@ -215,7 +215,7 @@ mod tests {
                 out.as_mut_ptr(),
             );
         }
-        assert_eq!(out, autoware_ndt_rs::helper::rotate_covariance(&src, &rot));
+        assert_eq!(out, realtime_ndt_scan_matcher::helper::rotate_covariance(&src, &rot));
     }
 
     #[test]
@@ -253,7 +253,7 @@ mod tests {
         };
         assert_eq!(
             via_ffi,
-            autoware_ndt_rs::helper::count_oscillation(&positions)
+            realtime_ndt_scan_matcher::helper::count_oscillation(&positions)
         );
         assert_eq!(via_ffi, 3);
 

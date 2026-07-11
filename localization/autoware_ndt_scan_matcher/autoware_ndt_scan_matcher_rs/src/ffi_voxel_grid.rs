@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! C ABI shims over [`autoware_ndt_rs::voxel_grid`] — the opaque single-grid `VoxelGrid` handle and
+//! C ABI shims over [`realtime_ndt_scan_matcher::voxel_grid`] — the opaque single-grid `VoxelGrid` handle and
 //! the multi-grid `VoxelGridMap` handle (build / radius-search / leaf lookup). The data structures
 //! live in the engine crate; this module only owns the handle lifecycle and marshals pointers.
 
-use autoware_ndt_rs::voxel_grid::{VoxelGrid, VoxelGridMap};
+use realtime_ndt_scan_matcher::voxel_grid::{VoxelGrid, VoxelGridMap};
 
 use crate::ffi_ptr::{self, ffi_mut, ffi_read, ffi_ref, ffi_slice};
 

@@ -118,7 +118,7 @@ void write_samples(FILE * f, const std::vector<double> & xs)
 // WCET fixture mode (plan/ndt_wcet.md, M4)
 // ---------------------------------------------------------------------------
 
-// One frozen align input, mirroring the Rust `autoware_ndt_rs::fixture` "NDTFIX01" layout
+// One frozen align input, mirroring the Rust `realtime_ndt_scan_matcher::fixture` "NDTFIX01" layout
 // (little-endian; map stored as tiles — one setInputTarget id each — because leaf overlap across
 // tiles is what drives the per-point neighbor count K).
 struct WcetFixture

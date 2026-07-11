@@ -226,8 +226,8 @@ struct EngineState {
 /// Own one scratch per task/thread and reuse it across frames (the only align path under `mt`):
 ///
 /// ```
-/// use autoware_ndt_rs::engine::{MatchScratch, NdtEngine};
-/// use autoware_ndt_rs::nalgebra::Matrix4;
+/// use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine};
+/// use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 ///
 /// let engine = NdtEngine::new(2.0, 6, 0.01);
 /// let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
@@ -313,8 +313,8 @@ std::thread_local! {
 /// available in every build config):
 ///
 /// ```
-/// use autoware_ndt_rs::engine::{MatchScratch, NdtEngine};
-/// use autoware_ndt_rs::nalgebra::Matrix4;
+/// use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine};
+/// use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 ///
 /// let engine = NdtEngine::new(2.0, 6, 0.01);
 /// // trans_epsilon, step_size, resolution, max_iterations, outlier_ratio, num_threads

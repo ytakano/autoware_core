@@ -24,7 +24,7 @@ use core::ffi::c_void;
 // `scan_matcher` can reuse it); this module keeps the `Aw*` C-ABI mirrors + the `extern "C"` shim.
 use crate::ffi_ptr::{self, ffi_mut, ffi_ref};
 use crate::node_handle::{AwPoseWithCovarianceStampedView, NdtScanMatcherRs};
-use autoware_ndt_rs::convergence::{ConvergenceInput, evaluate_convergence};
+use realtime_ndt_scan_matcher::convergence::{ConvergenceInput, evaluate_convergence};
 
 /// A node callback's `DiagnosticsInterface` (the `/diagnostics` status it builds + publishes), as a
 /// C-ABI vtable over an opaque handle (the `DiagnosticsInterface*`). Built C++-side via
@@ -241,7 +241,7 @@ pub struct AwConvergenceInput {
     pub converged_param_nearest_voxel_transformation_likelihood: f64,
 }
 
-/// C ABI mirror of [`autoware_ndt_rs::convergence::ConvergenceVerdict`] (same field order). `bool` is a 1-byte,
+/// C ABI mirror of [`realtime_ndt_scan_matcher::convergence::ConvergenceVerdict`] (same field order). `bool` is a 1-byte,
 /// C-ABI-stable type.
 /// (`#[repr(C)]` exempts this from `struct_excessive_bools` — the FFI layout is fixed by the ABI.)
 #[repr(C)]
@@ -683,13 +683,13 @@ mod tests {
         let h = unsafe { &*handle };
         h.set_activated(true);
         // Two poses → interpolatable.
-        h.push_initial_pose(&autoware_ndt_rs::pose_buffer::TimedPoseWithCov {
+        h.push_initial_pose(&realtime_ndt_scan_matcher::pose_buffer::TimedPoseWithCov {
             stamp_ns: 1,
             position: [0.0; 3],
             orientation: [0.0, 0.0, 0.0, 1.0],
             covariance: [0.0; 36],
         });
-        h.push_initial_pose(&autoware_ndt_rs::pose_buffer::TimedPoseWithCov {
+        h.push_initial_pose(&realtime_ndt_scan_matcher::pose_buffer::TimedPoseWithCov {
             stamp_ns: 2_000_000_001,
             position: [1.0, 0.0, 0.0],
             orientation: [0.0, 0.0, 0.0, 1.0],

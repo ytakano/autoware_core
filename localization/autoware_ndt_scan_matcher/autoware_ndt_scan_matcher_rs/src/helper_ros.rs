@@ -13,13 +13,13 @@
 // limitations under the License.
 
 //! ROS-gated helper glue that bridges `geometry_msgs::msg::Pose` to the pure
-//! [`autoware_ndt_rs::helper`] kernels. Only built under the `ros` feature (the pure numeric path
+//! [`realtime_ndt_scan_matcher::helper`] kernels. Only built under the `ros` feature (the pure numeric path
 //! lives in the engine crate).
 
 /// Count the maximum consecutive direction inversions over a `geometry_msgs::Pose` trajectory.
 ///
 /// Reads only `position.{x,y,z}` from each pose and delegates to the pure
-/// [`autoware_ndt_rs::helper::count_oscillation`] (the private step-classification kernel lives in
+/// [`realtime_ndt_scan_matcher::helper::count_oscillation`] (the private step-classification kernel lives in
 /// the engine crate, so this extracts the positions first).
 #[must_use]
 pub fn count_oscillation_poses(poses: &[crate::ros_msgs::geometry_msgs__msg__Pose]) -> i32 {
@@ -27,7 +27,7 @@ pub fn count_oscillation_poses(poses: &[crate::ros_msgs::geometry_msgs__msg__Pos
         .iter()
         .map(|p| [p.position.x, p.position.y, p.position.z])
         .collect();
-    autoware_ndt_rs::helper::count_oscillation(&positions)
+    realtime_ndt_scan_matcher::helper::count_oscillation(&positions)
 }
 
 #[cfg(test)]
@@ -56,7 +56,7 @@ mod tests {
             let poses: Vec<_> = xs.iter().map(|&x| pose(x)).collect();
             assert_eq!(
                 count_oscillation_poses(&poses),
-                autoware_ndt_rs::helper::count_oscillation(&positions)
+                realtime_ndt_scan_matcher::helper::count_oscillation(&positions)
             );
         }
     }

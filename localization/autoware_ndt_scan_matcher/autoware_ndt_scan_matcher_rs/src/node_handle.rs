@@ -28,8 +28,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::ffi::{Error, ffi_boundary_ptr};
 use crate::ffi_ptr::{self, ffi_mut, ffi_mut_slice, ffi_ref};
 use crate::node::{MapUpdateInput, evaluate_map_update};
-use autoware_ndt_rs::engine::NdtEngine;
-use autoware_ndt_rs::pose_buffer::{InterpolateResult, PoseBuffer, TimedPoseWithCov};
+use realtime_ndt_scan_matcher::engine::NdtEngine;
+use realtime_ndt_scan_matcher::pose_buffer::{InterpolateResult, PoseBuffer, TimedPoseWithCov};
 
 /// The validated, Rust-owned parameters the node needs (the union of the engine's `set_params` /
 /// `set_convergence_params` / `set_covariance_config` inputs). Converted once from [`AwNdtParams`]
@@ -143,7 +143,7 @@ impl NdtScanMatcherRs {
         // runs before any align since the handle is built at node startup. The returned bool is
         // observational (whether THIS call initialized the pool), so it is intentionally unused.
         let _pool_sized =
-            params.num_threads > 1 && autoware_ndt_rs::init_thread_pool(params.num_threads);
+            params.num_threads > 1 && realtime_ndt_scan_matcher::init_thread_pool(params.num_threads);
 
         let engine = params.make_engine();
         let regularization_buffer = if params.regularization_enable {

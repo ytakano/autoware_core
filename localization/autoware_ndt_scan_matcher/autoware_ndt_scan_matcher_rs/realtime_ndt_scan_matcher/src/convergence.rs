@@ -81,7 +81,7 @@ const OSCILLATION_NUM_THRESHOLD: i32 = 10;
 /// # Examples
 ///
 /// ```
-/// use autoware_ndt_rs::convergence::{evaluate_convergence, ConvergenceInput};
+/// use realtime_ndt_scan_matcher::convergence::{evaluate_convergence, ConvergenceInput};
 ///
 /// let verdict = evaluate_convergence(&ConvergenceInput {
 ///     iteration_num: 5,

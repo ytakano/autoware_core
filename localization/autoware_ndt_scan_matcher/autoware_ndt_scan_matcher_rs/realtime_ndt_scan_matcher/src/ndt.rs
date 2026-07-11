@@ -580,7 +580,7 @@ pub fn nearest_voxel_score_each_point(
 /// Start from [`Default`] and override only what you need (struct-update syntax):
 ///
 /// ```
-/// use autoware_ndt_rs::ndt::NdtParams;
+/// use realtime_ndt_scan_matcher::ndt::NdtParams;
 ///
 /// let params = NdtParams {
 ///     resolution: 2.0,
@@ -628,7 +628,7 @@ impl Default for NdtParams {
 /// Construct an empty slot with [`Default`], hand it to [`align`], then read the fields:
 ///
 /// ```
-/// use autoware_ndt_rs::ndt::AlignResult;
+/// use realtime_ndt_scan_matcher::ndt::AlignResult;
 ///
 /// let out = AlignResult::default();
 /// assert_eq!(out.iteration_num, 0);
@@ -731,9 +731,9 @@ fn derivatives_from(
 /// # Examples
 ///
 /// ```
-/// use autoware_ndt_rs::ndt::{align, AlignResult, AlignWorkspace, NdtParams};
-/// use autoware_ndt_rs::voxel_grid::VoxelGridMap;
-/// use autoware_ndt_rs::nalgebra::Matrix4;
+/// use realtime_ndt_scan_matcher::ndt::{align, AlignResult, AlignWorkspace, NdtParams};
+/// use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
+/// use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 ///
 /// let mut map = VoxelGridMap::new([2.0; 3], 6, 0.01);
 /// let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();

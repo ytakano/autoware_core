@@ -1,5 +1,5 @@
 [package]
-name = "autoware_ndt_rs"
+name = "realtime_ndt_scan_matcher"
 version = "0.1.0"
 edition = "2024"
 

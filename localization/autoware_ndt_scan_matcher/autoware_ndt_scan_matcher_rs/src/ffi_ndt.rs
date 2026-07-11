@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! C ABI shim for the one-shot NDT align entry over [`autoware_ndt_rs::ndt::align`]. It builds a
+//! C ABI shim for the one-shot NDT align entry over [`realtime_ndt_scan_matcher::ndt::align`]. It builds a
 //! target [`VoxelGridMap`] from flat inputs and marshals the result matrices row-major; the numeric
 //! kernel lives in the engine crate.
 
-use autoware_ndt_rs::ndt::{AlignResult, AlignWorkspace, NdtParams, Regularization, align};
-use autoware_ndt_rs::voxel_grid::VoxelGridMap;
+use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, NdtParams, Regularization, align};
+use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 
 use crate::ffi_matrix::{
     matrix4_from_row_major, write_matrix4_row_major, write_matrix4_seq, write_matrix6_row_major,
@@ -164,7 +164,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_align(
     reason = "test code"
 )]
 mod tests {
-    use autoware_ndt_rs::nalgebra::Matrix4;
+    use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 
     use super::*;
 

@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! C ABI shims over [`autoware_ndt_rs::cov_estimate`] — the multi-NDT covariance estimators driven
+//! C ABI shims over [`realtime_ndt_scan_matcher::cov_estimate`] — the multi-NDT covariance estimators driven
 //! from flat C buffers. The estimators themselves (and the pure helpers they build on) live in the
 //! engine crate; this module only builds the target map / marshals the pointers.
 
-use autoware_ndt_rs::cov_estimate::{
+use realtime_ndt_scan_matcher::cov_estimate::{
     estimate_xy_covariance_by_multi_ndt, estimate_xy_covariance_by_multi_ndt_score,
     propose_poses_to_search,
 };
-use autoware_ndt_rs::ndt::{AlignResult, AlignWorkspace, NdtParams};
-use autoware_ndt_rs::voxel_grid::VoxelGridMap;
+use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, NdtParams};
+use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 
 use crate::ffi_matrix::{matrix4_from_row_major, write_matrix4_seq};
 use crate::ffi_ptr::{ffi_mut_slice, ffi_ref, ffi_slice};
@@ -202,7 +202,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_propose_poses_to_search(
     reason = "test code"
 )]
 mod tests {
-    use autoware_ndt_rs::nalgebra::Matrix4;
+    use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 
     use super::*;
 

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! C ABI shims over [`autoware_ndt_rs::tpe`] — the opaque `AwTpe` handle + the propose/evaluate
+//! C ABI shims over [`realtime_ndt_scan_matcher::tpe`] — the opaque `AwTpe` handle + the propose/evaluate
 //! entry points the align-service pose search drives from C++. The estimator itself lives in the
 //! engine crate; this module is always compiled (the node crate is std).
 
-use autoware_ndt_rs::tpe::{
+use realtime_ndt_scan_matcher::tpe::{
     Direction, Error, INPUT_DIMENSION, PRIOR_DIMENSION, TreeStructuredParzenEstimator, Trial,
 };
 
@@ -250,7 +250,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_tpe_above_num(handle: *con
 mod tests {
     use core::f64::consts::PI;
 
-    use autoware_ndt_rs::tpe::Input;
+    use realtime_ndt_scan_matcher::tpe::Input;
 
     use super::*;
 

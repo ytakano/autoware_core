@@ -39,9 +39,9 @@ use crate::host::{CovarianceResult, MapSource, MatchResult};
 /// or the Tokio example.)
 ///
 /// ```no_run
-/// use autoware_ndt_rs::host::{MapDelta, MapSource, MapTile};
-/// use autoware_ndt_rs::scan_matcher::{MatchScratch, ScanMatcher};
-/// use autoware_ndt_rs::nalgebra::Matrix4;
+/// use realtime_ndt_scan_matcher::host::{MapDelta, MapSource, MapTile};
+/// use realtime_ndt_scan_matcher::scan_matcher::{MatchScratch, ScanMatcher};
+/// use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 ///
 /// // A trivial map source (ROS backs this with the `pcd_loader` service).
 /// struct Synthetic;

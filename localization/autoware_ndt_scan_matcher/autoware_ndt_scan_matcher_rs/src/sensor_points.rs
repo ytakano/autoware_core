@@ -30,7 +30,7 @@ use crate::ffi_host::{
 use crate::ffi_ptr::{self, ffi_mut, ffi_mut_slice, ffi_ref, ffi_slice};
 use crate::node::{DIAGNOSTIC_ERROR, DIAGNOSTIC_WARN, Diagnostics};
 use crate::node_handle::NdtScanMatcherRs;
-use autoware_ndt_rs::engine::{
+use realtime_ndt_scan_matcher::engine::{
     ConvergenceParams, CovEstimationParams, NdtEngine, estimate_pose_covariance, run_align,
 };
 

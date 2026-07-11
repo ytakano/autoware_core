@@ -21,7 +21,7 @@
 //! (allowlisted). Writers fill `min(dst-chunks, rows/poses)`; short destinations truncate and
 //! short sources leave the tail untouched, matching the old bounded loops.
 
-use autoware_ndt_rs::nalgebra::{Matrix4, Matrix6};
+use realtime_ndt_scan_matcher::nalgebra::{Matrix4, Matrix6};
 
 /// Read a 16-float row-major buffer into a `Matrix4<f32>` (callers pass an `ffi_slice!(_, 16)`).
 #[expect(

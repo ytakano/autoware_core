@@ -21,7 +21,7 @@ ros = ["dep:bindgen"]
 [dependencies]
 # The pure-Rust NDT engine (ROS-free, no_std-capable). Built with std + the rayon derivative
 # reduction for the ROS node. The C ABI in this crate wraps this crate's public Rust API.
-autoware_ndt_rs = { path = "engine", features = ["std", "parallel"] }
+realtime_ndt_scan_matcher = { path = "realtime_ndt_scan_matcher", features = ["std", "parallel"] }
 # Same nalgebra version/features as the engine crate, so `Matrix4<f32>`/`Matrix6<f64>` type
 # identities unify to a single instance across the two crates (Cargo unifies identical deps).
 nalgebra = { version = "0.33", default-features = false, features = ["libm"] }
@@ -32,7 +32,7 @@ libm = "0.2"
 bindgen = { version = "0.69", optional = true }
 
 [workspace]
-members = [".", "engine"]
+members = [".", "realtime_ndt_scan_matcher"]
 
 # rust-hardening gates shared by both workspace members (see .claude/skills/rust-hardening).
 [workspace.lints.rust]

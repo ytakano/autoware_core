@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! C ABI shims over [`autoware_ndt_rs::engine`] — the opaque `NdtEngine` handle lifecycle + the
+//! C ABI shims over [`realtime_ndt_scan_matcher::engine`] — the opaque `NdtEngine` handle lifecycle + the
 //! sensor-callback align and covariance orchestrators. The engine and its numeric kernels live in
 //! the engine crate; this module owns the handle box lifecycle and marshals pointers/matrices.
 //!
@@ -20,10 +20,10 @@
 //! (never `&mut *engine`): concurrent calls on a shared `const AwNdtEngine*` are sound without an
 //! external lock. The lifecycle shims (`new`/`free`/`clone`) own/reclaim the `Box`.
 
-use autoware_ndt_rs::engine::{
+use realtime_ndt_scan_matcher::engine::{
     ConvergenceParams, CovEstimationParams, NdtEngine, estimate_pose_covariance, run_align,
 };
-use autoware_ndt_rs::nalgebra::Matrix4;
+use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 
 use crate::ffi_matrix::{
     matrix4_from_row_major, write_matrix4_row_major, write_matrix4_seq, write_matrix6_row_major,
@@ -723,7 +723,7 @@ pub(crate) unsafe fn fill_pose_buffer(buf: *mut f32, cap: usize, poses: &[Matrix
 mod tests {
     use alloc::vec::Vec;
 
-    use autoware_ndt_rs::engine::MatchScratch;
+    use realtime_ndt_scan_matcher::engine::MatchScratch;
 
     use super::*;
 

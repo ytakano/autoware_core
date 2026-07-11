@@ -35,9 +35,9 @@
     reason = "test code"
 )]
 
-use autoware_ndt_rs::nalgebra::Matrix4;
-use autoware_ndt_rs::ndt::{AlignResult, AlignWorkspace, MAX_NEIGHBORS, NdtParams, align};
-use autoware_ndt_rs::voxel_grid::VoxelGridMap;
+use realtime_ndt_scan_matcher::nalgebra::Matrix4;
+use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, MAX_NEIGHBORS, NdtParams, align};
+use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 use proptest::prelude::*;
 
 /// Build a voxel-grid map from clustered points: `clusters` cluster centers on a coarse grid, each

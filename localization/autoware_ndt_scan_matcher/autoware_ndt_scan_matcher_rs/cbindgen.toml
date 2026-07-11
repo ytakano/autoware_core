@@ -44,9 +44,9 @@ autogen_warning = "// C ABI exported by the `autoware_ndt_scan_matcher_rs` Rust 
 
 [parse]
 # The `extern "C"` fns all live in THIS (node) crate, but their signatures reference the opaque
-# handle/POD types that now live in the pure-Rust engine crate `autoware_ndt_rs` (a path dependency):
+# handle/POD types that now live in the pure-Rust engine crate `realtime_ndt_scan_matcher` (a path dependency):
 # `NdtEngine`/`VoxelGrid`/`VoxelGridMap` (renamed below) plus the `Aw*` engine structs. So cbindgen
 # must parse that dependency to resolve and emit those types (and apply the renames). The `include`
 # whitelist keeps it from also walking nalgebra/libm/etc. — only this crate + the engine crate.
 parse_deps = true
-include = ["autoware_ndt_rs"]
+include = ["realtime_ndt_scan_matcher"]
