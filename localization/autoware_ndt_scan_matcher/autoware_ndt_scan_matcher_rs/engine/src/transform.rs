@@ -153,12 +153,26 @@ pub fn transform_point(p: &Vector6<f64>, x: &Vector3<f64>) -> Vector3<f64> {
 )]
 #[must_use]
 pub fn se3_matrix_f32(p: &Vector6<f64>) -> Matrix4<f32> {
+    // NOTE on trig choice: Eigen's AngleAxisf uses the PLATFORM sinf/cosf (glibc here), which
+    // disagrees with the pure-Rust `libm` crate on ~1.25 % of arguments (both ≤1-ULP-correct,
+    // differently rounded; measured on this toolchain). We deliberately KEEP `libm` — build/ISA
+    // determinism of the engine outweighs the last ULP of host C++ parity (measured impact:
+    // 1 extra ±1-iteration flip in 22,416 real frames; see the porting notes' divergence
+    // finding). The wcet-count counters certify equal work per frame wherever it matters.
     let (sx, cx) = (libm::sinf(p[3] as f32), libm::cosf(p[3] as f32));
     let (sy, cy) = (libm::sinf(p[4] as f32), libm::cosf(p[4] as f32));
     let (sz, cz) = (libm::sinf(p[5] as f32), libm::cosf(p[5] as f32));
-    let rx = Matrix3::<f32>::new(1.0, 0.0, 0.0, 0.0, cx, -sx, 0.0, sx, cx);
-    let ry = Matrix3::<f32>::new(cy, 0.0, sy, 0.0, 1.0, 0.0, -sy, 0.0, cy);
-    let rz = Matrix3::<f32>::new(cz, -sz, 0.0, sz, cz, 0.0, 0.0, 0.0, 1.0);
+    // C++ BIT-PARITY: `convertTransform` composes Eigen `AngleAxisf` rotations, whose
+    // `toRotationMatrix` computes the on-axis diagonal entry as `(1 - c) + c` — NOT exactly 1.0
+    // in f32 for every angle (Eigen/src/Geometry/AngleAxis.h: `diagonal = cos1_axis∘axis + c`).
+    // Reproduce that value exactly; everything else of the axis matrices is identical to the
+    // sparse textbook form (products with the 0/1 axis components are exact).
+    let dx = (1.0_f32 - cx) + cx;
+    let dy = (1.0_f32 - cy) + cy;
+    let dz = (1.0_f32 - cz) + cz;
+    let rx = Matrix3::<f32>::new(dx, 0.0, 0.0, 0.0, cx, -sx, 0.0, sx, cx);
+    let ry = Matrix3::<f32>::new(cy, 0.0, sy, 0.0, dy, 0.0, -sy, 0.0, cy);
+    let rz = Matrix3::<f32>::new(cz, -sz, 0.0, sz, cz, 0.0, 0.0, 0.0, dz);
     let r = rx * ry * rz;
     let mut m = Matrix4::<f32>::identity();
     m.fixed_view_mut::<3, 3>(0, 0).copy_from(&r);
@@ -179,13 +193,21 @@ pub fn se3_matrix_f32(p: &Vector6<f64>) -> Matrix4<f32> {
     reason = "nalgebra f32 matrix math; constant indices into a fixed-size Matrix4; m/r/t/v locals"
 )]
 pub fn transform_cloud_by_matrix(m: &Matrix4<f32>, source: &[[f32; 3]], out: &mut Vec<[f32; 3]>) {
-    let r = m.fixed_view::<3, 3>(0, 0).into_owned();
-    let t = Vector3::new(m[(0, 3)], m[(1, 3)], m[(2, 3)]);
     out.clear();
     out.reserve(source.len()); // len == 0 after clear, so this reserves the full size (no-op once warm)
+    // C++ BIT-PARITY: pcl 1.12's SSE `Transformer<float>::se3` computes, per component,
+    // `x·c0 + (y·c1 + (z·c2 + t))` — RIGHT-associated with the translation innermost
+    // (pcl/common/impl/transforms.hpp:124-129). A left-associated `r·v + t` rounds differently
+    // for ROTATED poses (translation-only poses are exact either way, which is why the
+    // synthetic differential suites never exposed the difference; see the porting notes'
+    // divergence finding). Keep this association exactly.
     for &[sx, sy, sz] in source {
-        let v = r * Vector3::new(sx, sy, sz) + t;
-        out.push([v.x, v.y, v.z]);
+        let v = [
+            sx * m[(0, 0)] + (sy * m[(0, 1)] + (sz * m[(0, 2)] + m[(0, 3)])),
+            sx * m[(1, 0)] + (sy * m[(1, 1)] + (sz * m[(1, 2)] + m[(1, 3)])),
+            sx * m[(2, 0)] + (sy * m[(2, 1)] + (sz * m[(2, 2)] + m[(2, 3)])),
+        ];
+        out.push(v);
     }
 }
 
