@@ -82,6 +82,15 @@ so the valid-domain differential tests are unaffected. Added by the 2026-07-10 h
 
 ## Intentional differences
 
+**Transcendental ULPs: `libm` kept over platform parity.** The engine's `sinf`/`cosf`/`exp` come
+from the pure-Rust `libm` crate for build/ISA determinism; glibc rounds ~1.25 % of f32 trig
+arguments differently (both ≤ 1 ULP correct). Together with the nalgebra-vs-Eigen eigensolver's
+≤ 2e-15 inverse-covariance noise, this leaves an irreducible ±1-iteration divergence on 0.12 % of
+real-map frames (28 of 22,416 measured; knife-edge convergence tests). Adopting platform trig was
+measured to recover exactly one frame and was rejected — the per-frame `iteration_num`
+certification in the comparison harness handles the residual. See
+[Numeric parity](numeric-parity.md) for the fixed (non-intentional) rotated-pose findings.
+
 The align-service TPE uses a deterministic Rust-owned sampler instead of libstdc++'s
 implementation-defined `std::normal_distribution` sequence, because that sequence is not portable
 (this is why exact candidate-trace equivalence for the TPE search is out of scope; see
