@@ -56,6 +56,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -324,7 +325,8 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     if (hooks.reset && hooks.get) {
       cpp_allocs = static_cast<long long>(hooks.get() / static_cast<unsigned long long>(iters));
     }
-    const int cpp_iter = ndt.getResult().iteration_num;
+    const auto cpp_res = ndt.getResult();
+    const int cpp_iter = cpp_res.iteration_num;
 
     // ---- Rust engine (over the C ABI) ----
     struct AwNdtEngine * eng =
@@ -352,8 +354,14 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
       rs_allocs = static_cast<long long>(hooks.get() / static_cast<unsigned long long>(iters));
     }
     int32_t rs_iter = 0;
+    std::array<float, 16> rs_pose{};
+    float rs_tp = 0.0F;
+    float rs_nvtl = 0.0F;
     AwNdtAlignOutput rout{};
     rout.iteration_num = &rs_iter;
+    rout.pose = rs_pose.data();
+    rout.transform_probability = &rs_tp;
+    rout.nearest_voxel_likelihood = &rs_nvtl;
     autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &rout);
     autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
 
@@ -362,6 +370,37 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     if (!iter_match) {
       std::fprintf(stderr, "wcet: ITERATION MISMATCH on %s: cpp=%d rust=%d\n", path.c_str(),
         cpp_iter, rs_iter);
+      rc = 1;
+    }
+
+    // ---- pose/score certificate (plan/paper_fix.md B1): the equal-work certificate's
+    // second leg. Both engines already expose the final pose and both scores, so agreement
+    // is asserted per fixture with no extra instrumentation.
+    double trans_delta = 0.0;
+    double rot_delta = 0.0;
+    for (int r = 0; r < 3; ++r) {
+      const double dt = static_cast<double>(cpp_res.pose(r, 3)) -
+                        static_cast<double>(rs_pose[(static_cast<size_t>(r) * 4) + 3]);
+      trans_delta += dt * dt;
+      for (int c = 0; c < 3; ++c) {
+        rot_delta = std::max(
+          rot_delta, std::abs(
+                       static_cast<double>(cpp_res.pose(r, c)) -
+                       static_cast<double>(rs_pose[(static_cast<size_t>(r) * 4) + c])));
+      }
+    }
+    trans_delta = std::sqrt(trans_delta);
+    const double tp_delta = std::abs(
+      static_cast<double>(cpp_res.transform_probability) - static_cast<double>(rs_tp));
+    const double nvtl_delta = std::abs(
+      static_cast<double>(cpp_res.nearest_voxel_transformation_likelihood) -
+      static_cast<double>(rs_nvtl));
+    const bool pose_match =
+      trans_delta < 1e-4 && rot_delta < 1e-5 && tp_delta < 1e-4 && nvtl_delta < 1e-4;
+    if (!pose_match) {
+      std::fprintf(stderr,
+        "wcet: POSE/SCORE MISMATCH on %s: dtrans=%.3e drot=%.3e dtp=%.3e dnvtl=%.3e\n",
+        path.c_str(), trans_delta, rot_delta, tp_delta, nvtl_delta);
       rc = 1;
     }
 
@@ -374,6 +413,11 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     std::fprintf(f, "      \"max_iterations\": %d,\n", fx.max_iterations);
     std::fprintf(f, "      \"iter_match\": %s,\n", iter_match ? "true" : "false");
     std::fprintf(
+      f,
+      "      \"cert\": { \"pose_match\": %s, \"trans_delta_m\": %.3e, \"rot_delta\": %.3e, "
+      "\"tp_delta\": %.3e, \"nvtl_delta\": %.3e },\n",
+      pose_match ? "true" : "false", trans_delta, rot_delta, tp_delta, nvtl_delta);
+    std::fprintf(
       f, "      \"cpp\": { \"iteration_num\": %d, \"allocs_per_align\": %lld, \"samples_ms\": ",
       cpp_iter, cpp_allocs);
     write_samples(f, cpp_ms);
@@ -384,8 +428,10 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     write_samples(f, rs_ms);
     std::fprintf(f, " }\n    }");
 
-    std::fprintf(stderr, "wcet: %-18s map=%zu src=%zu iter cpp=%d rust=%d %s\n", name.c_str(),
-      n_map, n_src, cpp_iter, rs_iter, iter_match ? "OK" : "MISMATCH");
+    std::fprintf(stderr,
+      "wcet: %-18s map=%zu src=%zu iter cpp=%d rust=%d %s pose/score %s (dtrans=%.1e)\n",
+      name.c_str(), n_map, n_src, cpp_iter, rs_iter, iter_match ? "OK" : "MISMATCH",
+      pose_match ? "OK" : "MISMATCH", trans_delta);
   }
   std::fprintf(f, "\n  }\n}\n");
   std::fclose(f);
