@@ -1,0 +1,59 @@
+{
+ "profile": "B",
+ "benchmark_cpu": 2,
+ "corunner_cpu": 4,
+ "corunner_cpu_note": "different physical core sharing the L3 (cpu3, the SMT sibling of the benchmark cpu2, is taken offline for the campaign; placing a co-runner on the sibling would measure SMT interference, a separate deliberate experiment)",
+ "fixtures_dir": "fixtures",
+ "tiers": {
+  "tail": {
+   "fixtures": [
+    "search_00",
+    "legal_worst",
+    "legal_osc"
+   ],
+   "samples": 1000
+  },
+  "standard": {
+   "fixtures": [
+    "search_01",
+    "dense_neighbors",
+    "max_iterations",
+    "cache_hostile",
+    "subnormal"
+   ],
+   "samples": 100
+  }
+ },
+ "warmup": 10,
+ "cold": {
+  "samples": 100,
+  "warmup": 0,
+  "evict_mib": 64
+ },
+ "corunner": {
+  "fixtures": [
+   "search_00",
+   "legal_worst"
+  ],
+  "modes": [
+   "membw",
+   "llc",
+   "fp"
+  ],
+  "samples": 100,
+  "mib": {
+   "membw": 256,
+   "llc": 32
+  }
+ },
+ "abort": {
+  "min_freq_frac": 0.9,
+  "nominal_khz": 3300000,
+  "max_temp_c": 85,
+  "nominal_note": "Ryzen 9 5900HX base clock; amd-pstate exposes no sysfs base_frequency -- set per host",
+  "max_calib_slowdown": 1.1
+ },
+ "sessions": 3,
+ "output_dir": "campaign_runs",
+ "note": "Profile B campaign per plan/ndt_timing_measurement_policy.md; sample tiers per the paper_fix.md budget matrix (1000+ only for tail-claim fixtures; co-runners on union-worst + legal-worst only)."
+}

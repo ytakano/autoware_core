@@ -239,10 +239,41 @@ std::string fixture_stem(const std::string & path)
 // Replays each frozen fixture through BOTH engines on identical buffers; asserts iteration_num
 // equality (equal work — the precondition for a fair timing comparison); emits one JSON with
 // per-fixture sample arrays. Returns the process exit code.
+// Software cache-eviction approximation for the cold-cache series (WCET_EVICT_BYTES):
+// stream-write then stride-read the buffer between timed samples, outside the timed region.
+// This is an approximation, not a guaranteed flush (plan/ndt_timing_measurement_policy.md,
+// "Cache Measurement Policy").
+void evict_caches(std::vector<char> & buf)
+{
+  for (size_t i = 0; i < buf.size(); i += 64) {
+    buf[i] = static_cast<char>(i);
+  }
+  volatile long long sink = 0;
+  for (size_t i = 0; i < buf.size(); i += 64) {
+    sink += buf[i];
+  }
+  (void)sink;
+}
+
 int run_fixture_mode(const std::string & out_path, const std::vector<std::string> & paths)
 {
   const int iters = std::getenv("WCET_ITERS") ? std::atoi(std::getenv("WCET_ITERS")) : 100;
   const int warmup = std::getenv("WCET_WARMUP") ? std::atoi(std::getenv("WCET_WARMUP")) : 10;
+  // Campaign controls (plan/ndt_timing_measurement_policy.md): engine selection so the
+  // orchestrator can randomize C++/Rust order across invocations, and between-sample cache
+  // eviction for the cold series. Defaults preserve the original both-engines/warm behavior.
+  const char * eng_env = std::getenv("WCET_ENGINE");
+  const std::string engine_sel = (eng_env != nullptr) ? eng_env : "both";
+  if (engine_sel != "both" && engine_sel != "cpp" && engine_sel != "rust") {
+    std::fprintf(stderr, "wcet: WCET_ENGINE must be cpp|rust|both (got '%s')\n",
+      engine_sel.c_str());
+    return 1;
+  }
+  const bool run_cpp = engine_sel != "rust";
+  const bool run_rust = engine_sel != "cpp";
+  const long long evict_bytes =
+    std::getenv("WCET_EVICT_BYTES") ? std::atoll(std::getenv("WCET_EVICT_BYTES")) : 0;
+  std::vector<char> evict_buf(evict_bytes > 0 ? static_cast<size_t>(evict_bytes) : 0);
   const AllocHooks hooks = find_alloc_hooks();
 
   FILE * f = std::fopen(out_path.c_str(), "w");
@@ -260,6 +291,9 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
   std::fprintf(f, "    \"unit\": \"ms\",\n");
   std::fprintf(
     f, "    \"alloc_counting\": %s,\n", (hooks.reset && hooks.get) ? "true" : "false");
+  std::fprintf(f, "    \"engine\": \"%s\",\n", engine_sel.c_str());
+  std::fprintf(f, "    \"evict_bytes\": %lld,\n", evict_bytes);
+  std::fprintf(f, "    \"cache_condition\": \"%s\",\n", evict_bytes > 0 ? "cold" : "warm");
   std::fprintf(f, "    \"note\": \"align loop only; map+kdtree built once per engine per fixture\"\n");
   std::fprintf(f, "  },\n");
   std::fprintf(f, "  \"fixtures\": {\n");
@@ -292,116 +326,136 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     }
 
     // ---- C++ engine ----
-    pclomp::NdtParams params{};
-    params.trans_epsilon = fx.trans_epsilon;
-    params.step_size = fx.step_size;
-    params.resolution = static_cast<float>(fx.resolution);
-    params.max_iterations = fx.max_iterations;
-    params.search_method = pclomp::KDTREE;
-    params.num_threads = 1;  // serial baseline (matches the fixture contract)
-    params.regularization_scale_factor = 0.0F;
-    params.use_line_search = false;
-
-    Ndt ndt;
-    ndt.setParams(params);
-    for (size_t t = 0; t < fx.tiles.size(); ++t) {
-      ndt.addTarget(flat_to_cloud(fx.tiles[t]), std::to_string(t));
-    }
-    ndt.createVoxelKdtree();
-    auto source = flat_to_cloud(fx.source);
-    auto aligned = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-    for (int i = 0; i < warmup; ++i) {
-      ndt.align(*aligned, guess, source);
-    }
-    long long cpp_allocs = -1;
-    if (hooks.reset && hooks.get) hooks.reset();
     std::vector<double> cpp_ms;
-    cpp_ms.reserve(static_cast<size_t>(iters));
-    for (int i = 0; i < iters; ++i) {
-      const auto t0 = Clock::now();
-      ndt.align(*aligned, guess, source);
-      cpp_ms.push_back(ms_since(t0));
+    long long cpp_allocs = -1;
+    int cpp_iter = -1;
+    pclomp::NdtResult cpp_res{};
+    if (run_cpp) {
+      pclomp::NdtParams params{};
+      params.trans_epsilon = fx.trans_epsilon;
+      params.step_size = fx.step_size;
+      params.resolution = static_cast<float>(fx.resolution);
+      params.max_iterations = fx.max_iterations;
+      params.search_method = pclomp::KDTREE;
+      params.num_threads = 1;  // serial baseline (matches the fixture contract)
+      params.regularization_scale_factor = 0.0F;
+      params.use_line_search = false;
+
+      Ndt ndt;
+      ndt.setParams(params);
+      for (size_t t = 0; t < fx.tiles.size(); ++t) {
+        ndt.addTarget(flat_to_cloud(fx.tiles[t]), std::to_string(t));
+      }
+      ndt.createVoxelKdtree();
+      auto source = flat_to_cloud(fx.source);
+      auto aligned = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+      for (int i = 0; i < warmup; ++i) {
+        ndt.align(*aligned, guess, source);
+      }
+      if (hooks.reset && hooks.get) hooks.reset();
+      cpp_ms.reserve(static_cast<size_t>(iters));
+      for (int i = 0; i < iters; ++i) {
+        if (!evict_buf.empty()) evict_caches(evict_buf);
+        const auto t0 = Clock::now();
+        ndt.align(*aligned, guess, source);
+        cpp_ms.push_back(ms_since(t0));
+      }
+      if (hooks.reset && hooks.get) {
+        cpp_allocs = static_cast<long long>(hooks.get() / static_cast<unsigned long long>(iters));
+      }
+      cpp_res = ndt.getResult();
+      cpp_iter = cpp_res.iteration_num;
     }
-    if (hooks.reset && hooks.get) {
-      cpp_allocs = static_cast<long long>(hooks.get() / static_cast<unsigned long long>(iters));
-    }
-    const auto cpp_res = ndt.getResult();
-    const int cpp_iter = cpp_res.iteration_num;
 
     // ---- Rust engine (over the C ABI) ----
-    struct AwNdtEngine * eng =
-      autoware_ndt_scan_matcher_rs_ndt_engine_new(fx.resolution, 6, 0.01);
-    autoware_ndt_scan_matcher_rs_ndt_engine_set_params(
-      eng, fx.trans_epsilon, fx.step_size, fx.resolution, fx.max_iterations, fx.outlier_ratio, 1);
-    for (size_t t = 0; t < fx.tiles.size(); ++t) {
-      autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
-        eng, fx.tiles[t].data(), fx.tiles[t].size() / 3, t);
-    }
-    autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng);
-    for (int i = 0; i < warmup; ++i) {
-      autoware_ndt_scan_matcher_rs_ndt_engine_align(eng, fx.guess16.data(), fx.source.data(), n_src);
-    }
-    long long rs_allocs = -1;
-    if (hooks.reset && hooks.get) hooks.reset();
     std::vector<double> rs_ms;
-    rs_ms.reserve(static_cast<size_t>(iters));
-    for (int i = 0; i < iters; ++i) {
-      const auto t0 = Clock::now();
-      autoware_ndt_scan_matcher_rs_ndt_engine_align(eng, fx.guess16.data(), fx.source.data(), n_src);
-      rs_ms.push_back(ms_since(t0));
-    }
-    if (hooks.reset && hooks.get) {
-      rs_allocs = static_cast<long long>(hooks.get() / static_cast<unsigned long long>(iters));
-    }
-    int32_t rs_iter = 0;
+    long long rs_allocs = -1;
+    int32_t rs_iter = -1;
     std::array<float, 16> rs_pose{};
     float rs_tp = 0.0F;
     float rs_nvtl = 0.0F;
-    AwNdtAlignOutput rout{};
-    rout.iteration_num = &rs_iter;
-    rout.pose = rs_pose.data();
-    rout.transform_probability = &rs_tp;
-    rout.nearest_voxel_likelihood = &rs_nvtl;
-    autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &rout);
-    autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
-
-    // ---- equal-work assert ----
-    const bool iter_match = (cpp_iter == rs_iter);
-    if (!iter_match) {
-      std::fprintf(stderr, "wcet: ITERATION MISMATCH on %s: cpp=%d rust=%d\n", path.c_str(),
-        cpp_iter, rs_iter);
-      rc = 1;
+    if (run_rust) {
+      struct AwNdtEngine * eng =
+        autoware_ndt_scan_matcher_rs_ndt_engine_new(fx.resolution, 6, 0.01);
+      autoware_ndt_scan_matcher_rs_ndt_engine_set_params(
+        eng, fx.trans_epsilon, fx.step_size, fx.resolution, fx.max_iterations, fx.outlier_ratio,
+        1);
+      for (size_t t = 0; t < fx.tiles.size(); ++t) {
+        autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
+          eng, fx.tiles[t].data(), fx.tiles[t].size() / 3, t);
+      }
+      autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng);
+      for (int i = 0; i < warmup; ++i) {
+        autoware_ndt_scan_matcher_rs_ndt_engine_align(
+          eng, fx.guess16.data(), fx.source.data(), n_src);
+      }
+      if (hooks.reset && hooks.get) hooks.reset();
+      rs_ms.reserve(static_cast<size_t>(iters));
+      for (int i = 0; i < iters; ++i) {
+        if (!evict_buf.empty()) evict_caches(evict_buf);
+        const auto t0 = Clock::now();
+        autoware_ndt_scan_matcher_rs_ndt_engine_align(
+          eng, fx.guess16.data(), fx.source.data(), n_src);
+        rs_ms.push_back(ms_since(t0));
+      }
+      if (hooks.reset && hooks.get) {
+        rs_allocs = static_cast<long long>(hooks.get() / static_cast<unsigned long long>(iters));
+      }
+      rs_iter = 0;
+      AwNdtAlignOutput rout{};
+      rout.iteration_num = &rs_iter;
+      rout.pose = rs_pose.data();
+      rout.transform_probability = &rs_tp;
+      rout.nearest_voxel_likelihood = &rs_nvtl;
+      autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &rout);
+      autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
     }
+    const bool both = run_cpp && run_rust;
 
-    // ---- pose/score certificate (plan/paper_fix.md B1): the equal-work certificate's
-    // second leg. Both engines already expose the final pose and both scores, so agreement
-    // is asserted per fixture with no extra instrumentation.
+    // ---- equal-work assert (only meaningful when both engines ran in this invocation;
+    // single-engine cells are paired and re-asserted by the campaign orchestrator's merge)
+    bool iter_match = true;
+    bool pose_match = true;
     double trans_delta = 0.0;
     double rot_delta = 0.0;
-    for (int r = 0; r < 3; ++r) {
-      const double dt = static_cast<double>(cpp_res.pose(r, 3)) -
-                        static_cast<double>(rs_pose[(static_cast<size_t>(r) * 4) + 3]);
-      trans_delta += dt * dt;
-      for (int c = 0; c < 3; ++c) {
-        rot_delta = std::max(
-          rot_delta, std::abs(
-                       static_cast<double>(cpp_res.pose(r, c)) -
-                       static_cast<double>(rs_pose[(static_cast<size_t>(r) * 4) + c])));
+    double tp_delta = 0.0;
+    double nvtl_delta = 0.0;
+    if (both) {
+      iter_match = (cpp_iter == rs_iter);
+      if (!iter_match) {
+        std::fprintf(stderr, "wcet: ITERATION MISMATCH on %s: cpp=%d rust=%d\n", path.c_str(),
+          cpp_iter, rs_iter);
+        rc = 1;
       }
-    }
-    trans_delta = std::sqrt(trans_delta);
-    const double tp_delta = std::abs(
-      static_cast<double>(cpp_res.transform_probability) - static_cast<double>(rs_tp));
-    const double nvtl_delta = std::abs(
-      static_cast<double>(cpp_res.nearest_voxel_transformation_likelihood) -
-      static_cast<double>(rs_nvtl));
-    const bool pose_match =
-      trans_delta < 1e-4 && rot_delta < 1e-5 && tp_delta < 1e-4 && nvtl_delta < 1e-4;
-    if (!pose_match) {
-      std::fprintf(stderr,
-        "wcet: POSE/SCORE MISMATCH on %s: dtrans=%.3e drot=%.3e dtp=%.3e dnvtl=%.3e\n",
-        path.c_str(), trans_delta, rot_delta, tp_delta, nvtl_delta);
-      rc = 1;
+
+      // ---- pose/score certificate (plan/paper_fix.md B1): the equal-work certificate's
+      // second leg. Both engines already expose the final pose and both scores, so agreement
+      // is asserted per fixture with no extra instrumentation.
+      for (int r = 0; r < 3; ++r) {
+        const double dt = static_cast<double>(cpp_res.pose(r, 3)) -
+                          static_cast<double>(rs_pose[(static_cast<size_t>(r) * 4) + 3]);
+        trans_delta += dt * dt;
+        for (int c = 0; c < 3; ++c) {
+          rot_delta = std::max(
+            rot_delta, std::abs(
+                         static_cast<double>(cpp_res.pose(r, c)) -
+                         static_cast<double>(rs_pose[(static_cast<size_t>(r) * 4) + c])));
+        }
+      }
+      trans_delta = std::sqrt(trans_delta);
+      tp_delta = std::abs(
+        static_cast<double>(cpp_res.transform_probability) - static_cast<double>(rs_tp));
+      nvtl_delta = std::abs(
+        static_cast<double>(cpp_res.nearest_voxel_transformation_likelihood) -
+        static_cast<double>(rs_nvtl));
+      pose_match =
+        trans_delta < 1e-4 && rot_delta < 1e-5 && tp_delta < 1e-4 && nvtl_delta < 1e-4;
+      if (!pose_match) {
+        std::fprintf(stderr,
+          "wcet: POSE/SCORE MISMATCH on %s: dtrans=%.3e drot=%.3e dtp=%.3e dnvtl=%.3e\n",
+          path.c_str(), trans_delta, rot_delta, tp_delta, nvtl_delta);
+        rc = 1;
+      }
     }
 
     const std::string name = fixture_stem(path);
@@ -411,27 +465,42 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     std::fprintf(f, "      \"n_tiles\": %zu,\n", fx.tiles.size());
     std::fprintf(f, "      \"n_source\": %zu,\n", n_src);
     std::fprintf(f, "      \"max_iterations\": %d,\n", fx.max_iterations);
-    std::fprintf(f, "      \"iter_match\": %s,\n", iter_match ? "true" : "false");
-    std::fprintf(
-      f,
-      "      \"cert\": { \"pose_match\": %s, \"trans_delta_m\": %.3e, \"rot_delta\": %.3e, "
-      "\"tp_delta\": %.3e, \"nvtl_delta\": %.3e },\n",
-      pose_match ? "true" : "false", trans_delta, rot_delta, tp_delta, nvtl_delta);
-    std::fprintf(
-      f, "      \"cpp\": { \"iteration_num\": %d, \"allocs_per_align\": %lld, \"samples_ms\": ",
-      cpp_iter, cpp_allocs);
-    write_samples(f, cpp_ms);
-    std::fprintf(f, " },\n");
-    std::fprintf(
-      f, "      \"rust\": { \"iteration_num\": %d, \"allocs_per_align\": %lld, \"samples_ms\": ",
-      rs_iter, rs_allocs);
-    write_samples(f, rs_ms);
-    std::fprintf(f, " }\n    }");
+    if (both) {
+      std::fprintf(f, "      \"iter_match\": %s,\n", iter_match ? "true" : "false");
+      std::fprintf(
+        f,
+        "      \"cert\": { \"pose_match\": %s, \"trans_delta_m\": %.3e, \"rot_delta\": %.3e, "
+        "\"tp_delta\": %.3e, \"nvtl_delta\": %.3e },\n",
+        pose_match ? "true" : "false", trans_delta, rot_delta, tp_delta, nvtl_delta);
+    }
+    bool first_engine = true;
+    if (run_cpp) {
+      std::fprintf(
+        f, "      \"cpp\": { \"iteration_num\": %d, \"allocs_per_align\": %lld, \"samples_ms\": ",
+        cpp_iter, cpp_allocs);
+      write_samples(f, cpp_ms);
+      std::fprintf(f, " }");
+      first_engine = false;
+    }
+    if (run_rust) {
+      std::fprintf(f, "%s", first_engine ? "" : ",\n");
+      std::fprintf(
+        f, "      \"rust\": { \"iteration_num\": %d, \"allocs_per_align\": %lld, \"samples_ms\": ",
+        rs_iter, rs_allocs);
+      write_samples(f, rs_ms);
+      std::fprintf(f, " }");
+    }
+    std::fprintf(f, "\n    }");
 
-    std::fprintf(stderr,
-      "wcet: %-18s map=%zu src=%zu iter cpp=%d rust=%d %s pose/score %s (dtrans=%.1e)\n",
-      name.c_str(), n_map, n_src, cpp_iter, rs_iter, iter_match ? "OK" : "MISMATCH",
-      pose_match ? "OK" : "MISMATCH", trans_delta);
+    if (both) {
+      std::fprintf(stderr,
+        "wcet: %-18s map=%zu src=%zu iter cpp=%d rust=%d %s pose/score %s (dtrans=%.1e)\n",
+        name.c_str(), n_map, n_src, cpp_iter, rs_iter, iter_match ? "OK" : "MISMATCH",
+        pose_match ? "OK" : "MISMATCH", trans_delta);
+    } else {
+      std::fprintf(stderr, "wcet: %-18s map=%zu src=%zu engine=%s iter=%d\n", name.c_str(),
+        n_map, n_src, engine_sel.c_str(), run_cpp ? cpp_iter : static_cast<int>(rs_iter));
+    }
   }
   std::fprintf(f, "\n  }\n}\n");
   std::fclose(f);
