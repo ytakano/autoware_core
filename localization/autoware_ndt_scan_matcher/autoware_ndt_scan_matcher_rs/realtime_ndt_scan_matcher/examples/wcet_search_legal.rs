@@ -54,10 +54,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use nalgebra::Matrix4;
 use realtime_ndt_scan_matcher::fixture::Fixture;
 use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
 use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
-use nalgebra::Matrix4;
 
 const RES: f32 = 2.0;
 /// Production preprocessing contract (autoware_launch localization defaults).
@@ -322,6 +322,14 @@ fn verify_legal(fx: &Fixture) -> Result<(), String> {
 
 type Fitness = (u64, u64, u64);
 
+/// Fitness mode (`WCET_SEARCH_FITNESS`): `osc` (default) maximizes the lexicographic
+/// `(iterations, Σneighbors, kd_nodes)` vector; `maxk` (plan/paper_fix.md B3) maximizes
+/// `(max per-point K, iterations, Σneighbors)` to hunt a legal witness above the K = 8
+/// voxel-center heuristic (the provable ceiling is 27).
+fn fitness_is_maxk() -> bool {
+    std::env::var("WCET_SEARCH_FITNESS").is_ok_and(|v| v == "maxk")
+}
+
 fn evaluate(fx: &Fixture) -> Fitness {
     let mut map = VoxelGridMap::new([fx.params.resolution; 3], 6, 0.01);
     for (id, tile) in fx.tiles.iter().enumerate() {
@@ -332,11 +340,19 @@ fn evaluate(fx: &Fixture) -> Fitness {
     let mut out = AlignResult::default();
     align(&map, &fx.source, &fx.guess, &fx.params, &mut ws, &mut out);
     let c = out.counters;
-    (
-        u64::try_from(out.iteration_num.max(0)).unwrap_or(0),
-        c.sum_neighbors,
-        c.kd_nodes_visited,
-    )
+    if fitness_is_maxk() {
+        (
+            c.max_neighbors,
+            u64::try_from(out.iteration_num.max(0)).unwrap_or(0),
+            c.sum_neighbors,
+        )
+    } else {
+        (
+            u64::try_from(out.iteration_num.max(0)).unwrap_or(0),
+            c.sum_neighbors,
+            c.kd_nodes_visited,
+        )
+    }
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
@@ -372,7 +388,12 @@ fn main() {
         .collect();
     println!(
         "wcet_search_legal: pop={pop_n} gens={gens} seed={seed:#x} \
-         (production params frozen; fitness: iter, Σnbr, kd)"
+         (production params frozen; fitness: {})",
+        if fitness_is_maxk() {
+            "maxK, iter, Σnbr"
+        } else {
+            "iter, Σnbr, kd"
+        }
     );
 
     for generation in 0..gens {
@@ -388,10 +409,17 @@ fn main() {
             }
         }
         let best = pop.iter().map(|(_, f)| *f).max().unwrap();
-        println!(
-            "  gen {generation:>3}: best iter={} Σnbr={} kd={}",
-            best.0, best.1, best.2
-        );
+        if fitness_is_maxk() {
+            println!(
+                "  gen {generation:>3}: best maxK={} iter={} Σnbr={}",
+                best.0, best.1, best.2
+            );
+        } else {
+            println!(
+                "  gen {generation:>3}: best iter={} Σnbr={} kd={}",
+                best.0, best.1, best.2
+            );
+        }
     }
 
     pop.sort_by_key(|(_, f)| std::cmp::Reverse(*f));
@@ -399,10 +427,13 @@ fn main() {
     let fx = g.build();
     verify_legal(&fx).expect("champion must be legal");
     println!(
-        "champion: iter={} Σnbr={} kd={}  genome: half={} amp={:.2} cluster={:.2} cf={:.2} \
+        "champion: {}={} {}={} {}={}  genome: half={} amp={:.2} cluster={:.2} cf={:.2} \
          src_z={:.2} guess=({:.2},{:.2},yaw {:.3}) seed={:#x}",
+        if fitness_is_maxk() { "maxK" } else { "iter" },
         f.0,
+        if fitness_is_maxk() { "iter" } else { "Σnbr" },
         f.1,
+        if fitness_is_maxk() { "Σnbr" } else { "kd" },
         f.2,
         g.half,
         g.amp,
@@ -419,7 +450,23 @@ fn main() {
               map sub-grid ≥ 0.35 m)",
         fx.source.len()
     );
-    if f.0 == 30 {
+    if fitness_is_maxk() {
+        // B3: freeze only a witness that beats the K = 8 voxel-center heuristic.
+        if f.0 >= 9 {
+            let path = out_dir.join("legal_k.ndtfix");
+            fx.write(&path).expect("write fixture");
+            println!(
+                "max-K witness ABOVE the voxel-center heuristic (K={}) -> frozen: {}",
+                f.0,
+                path.display()
+            );
+        } else {
+            println!(
+                "max-K witness NOT above the heuristic (best K={} ≤ 8) -- nothing frozen",
+                f.0
+            );
+        }
+    } else if f.0 == 30 {
         let path = out_dir.join("legal_osc.ndtfix");
         fx.write(&path).expect("write fixture");
         println!(
