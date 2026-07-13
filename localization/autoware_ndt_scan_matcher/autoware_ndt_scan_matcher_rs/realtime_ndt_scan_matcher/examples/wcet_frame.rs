@@ -256,11 +256,75 @@ fn main() {
     if paths.first().map(String::as_str) == Some("--capture") {
         let dir = paths.get(1).expect("--capture needs a directory");
         run_capture(std::path::Path::new(dir));
+    } else if paths.first().map(String::as_str) == Some("--freeze") {
+        run_freeze(&paths[1..]);
     } else if paths.is_empty() {
         run_synthetic();
     } else {
         run_fixtures(&paths);
     }
+}
+
+/// Freeze one captured frame as a self-contained `.ndtfix` fixture:
+/// `--freeze <capture_dir> <seq> <guess_track.bin> <out.ndtfix>`.
+///
+/// The map tiles are embedded in the captured sorted-id order (the same order both capture
+/// replayers use per epoch), and the guess is taken from the frozen open-loop guess track
+/// (`WCET_GUESS_OUT` dump, 64 bytes/frame row-major f32) — i.e. the exact per-frame input of
+/// the realdata open-loop protocol, now replayable by every fixture consumer.
+fn run_freeze(args: &[String]) {
+    use realtime_ndt_scan_matcher::capture;
+
+    let usage = "--freeze <capture_dir> <seq> <guess_track.bin> <out.ndtfix>";
+    let dir = std::path::Path::new(args.first().expect(usage));
+    let seq: usize = args
+        .get(1)
+        .expect(usage)
+        .parse()
+        .expect("seq must be a number");
+    let track_path = args.get(2).expect(usage);
+    let out_path = args.get(3).expect(usage);
+
+    let params = capture::read_params(dir).expect("read params.bin");
+    let frame_paths = capture::list_frames(dir).expect("list frames");
+    let fp = frame_paths.get(seq).expect("seq out of range");
+    let fr = capture::read_frame(fp).expect("read frame");
+
+    let track = std::fs::read(track_path).expect("read guess track");
+    let rec = track
+        .get(seq * 64..(seq + 1) * 64)
+        .expect("track too short for seq");
+    let mut guess: Matrix4<f32> = Matrix4::identity();
+    for r in 0..4 {
+        for c in 0..4 {
+            let off = (r * 4 + c) * 4;
+            let bytes: [u8; 4] = rec[off..off + 4].try_into().expect("chunk");
+            guess[(r, c)] = f32::from_le_bytes(bytes);
+        }
+    }
+
+    let tiles: Vec<Vec<[f32; 3]>> = fr
+        .ids
+        .iter()
+        .map(|id| capture::read_tile(dir, &capture::hex_id(id)).expect("read tile"))
+        .collect();
+    let fx = Fixture {
+        tiles,
+        source: fr.source.clone(),
+        guess,
+        params,
+    };
+    println!(
+        "froze frame {} -> {} (tiles={} map_pts={} src={} eps={} max_iter={})",
+        seq,
+        out_path,
+        fx.tiles.len(),
+        fx.map_len(),
+        fx.source.len(),
+        fx.params.trans_epsilon,
+        fx.params.max_iterations
+    );
+    fx.write(std::path::Path::new(out_path)).expect("write fixture");
 }
 
 /// Replay a real-drive capture directory (`NDT_CAPTURE_DIR` sidecar format): frames grouped into
