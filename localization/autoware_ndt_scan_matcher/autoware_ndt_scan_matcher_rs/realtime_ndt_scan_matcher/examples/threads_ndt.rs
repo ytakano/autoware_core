@@ -39,9 +39,11 @@
 
 use std::sync::Arc;
 
-use realtime_ndt_scan_matcher::host::{Clock, MapDelta, MapSource, MapTile, MatchResult, OutputSink};
-use realtime_ndt_scan_matcher::scan_matcher::{MatchScratch, ScanMatcher};
 use nalgebra::Matrix4;
+use realtime_ndt_scan_matcher::host::{
+    Clock, MapDelta, MapSource, MapTile, MatchResult, OutputSink,
+};
+use realtime_ndt_scan_matcher::scan_matcher::{MatchScratch, ScanMatcher};
 
 /// Poll a future to completion with a no-op waker — the minimal executor a no_std scheduler provides.
 /// Suitable for self-contained futures (no external I/O wait); our `MapSource::load` is immediately
@@ -92,6 +94,10 @@ struct ThreadHost {
 }
 
 impl MapSource for ThreadHost {
+    #[allow(
+        clippy::unused_async_trait_impl,
+        reason = "the MapSource trait method is async"
+    )]
     async fn load(&self, _center: [f64; 2], _radius: f64) -> MapDelta {
         let mut add = vec![
             dense_tile(0.0, 0.0, 0.0, b"0"),

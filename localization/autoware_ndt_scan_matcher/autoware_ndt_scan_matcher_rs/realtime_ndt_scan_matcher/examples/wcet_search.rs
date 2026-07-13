@@ -65,7 +65,7 @@ use std::path::{Path, PathBuf};
 
 use nalgebra::Matrix4;
 use realtime_ndt_scan_matcher::fixture::Fixture;
-use realtime_ndt_scan_matcher::ndt::{align, AlignResult, AlignWorkspace, NdtParams};
+use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
 use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 
 /// Fixed source point count: `P` is the node's responsibility (downsample cap), not a search

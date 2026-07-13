@@ -142,8 +142,8 @@ impl NdtScanMatcherRs {
         // `parallel` build only). Best-effort: a no-op if the pool is already initialized, and it
         // runs before any align since the handle is built at node startup. The returned bool is
         // observational (whether THIS call initialized the pool), so it is intentionally unused.
-        let _pool_sized =
-            params.num_threads > 1 && realtime_ndt_scan_matcher::init_thread_pool(params.num_threads);
+        let _pool_sized = params.num_threads > 1
+            && realtime_ndt_scan_matcher::init_thread_pool(params.num_threads);
 
         let engine = params.make_engine();
         let regularization_buffer = if params.regularization_enable {

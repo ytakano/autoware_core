@@ -361,7 +361,7 @@ mod tests {
         }
         // Translation block is the identity.
         for d in 0..3 {
-            assert!(pd.gradient[(d, d)] == 1.0);
+            assert_eq!(pd.gradient[(d, d)], 1.0);
         }
     }
 

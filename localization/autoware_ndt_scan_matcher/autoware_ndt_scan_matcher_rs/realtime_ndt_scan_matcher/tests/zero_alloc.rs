@@ -37,12 +37,12 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use nalgebra::{Matrix4, Vector3, Vector6};
 use realtime_ndt_scan_matcher::ndt::{
     AlignResult, AlignWorkspace, NdtParams, ScoreConfig, align, compute_derivatives,
 };
 use realtime_ndt_scan_matcher::transform::{gauss_constants, transform_point};
 use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
-use nalgebra::{Matrix4, Vector3, Vector6};
 
 /// A pass-through allocator that counts allocations while `ENABLED` is set. The default
 /// `GlobalAlloc::realloc` routes through `alloc`, so `Vec` growth is counted too.

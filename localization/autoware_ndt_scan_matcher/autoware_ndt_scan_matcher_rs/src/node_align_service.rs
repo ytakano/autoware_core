@@ -810,8 +810,9 @@ fn run_align_service_search_impl(
             best_iteration = outcome.iteration_num;
             best_pose = result_pose;
         }
-        let result_euler =
-            realtime_ndt_scan_matcher::transform::matrix_to_euler(&matrix4f_to_matrix4d(&outcome.pose));
+        let result_euler = realtime_ndt_scan_matcher::transform::matrix_to_euler(
+            &matrix4f_to_matrix4d(&outcome.pose),
+        );
         tpe.add_trial(Trial {
             input: result_euler.into(),
             score: f64::from(outcome.transform_probability),

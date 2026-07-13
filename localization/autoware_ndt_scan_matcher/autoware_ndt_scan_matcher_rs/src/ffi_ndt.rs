@@ -16,7 +16,9 @@
 //! target [`VoxelGridMap`] from flat inputs and marshals the result matrices row-major; the numeric
 //! kernel lives in the engine crate.
 
-use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, NdtParams, Regularization, align};
+use realtime_ndt_scan_matcher::ndt::{
+    AlignResult, AlignWorkspace, NdtParams, Regularization, align,
+};
 use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 
 use crate::ffi_matrix::{

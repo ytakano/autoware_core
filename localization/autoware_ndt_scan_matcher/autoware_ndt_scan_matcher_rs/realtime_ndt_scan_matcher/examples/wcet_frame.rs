@@ -47,10 +47,10 @@
 
 use std::time::Instant;
 
+use nalgebra::Matrix4;
 use realtime_ndt_scan_matcher::fixture::Fixture;
 use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
 use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
-use nalgebra::Matrix4;
 
 fn dense_cluster(cx: f32, cy: f32, cz: f32) -> Vec<[f32; 3]> {
     (0..8)
@@ -324,7 +324,8 @@ fn run_freeze(args: &[String]) {
         fx.params.trans_epsilon,
         fx.params.max_iterations
     );
-    fx.write(std::path::Path::new(out_path)).expect("write fixture");
+    fx.write(std::path::Path::new(out_path))
+        .expect("write fixture");
 }
 
 /// Replay a real-drive capture directory (`NDT_CAPTURE_DIR` sidecar format): frames grouped into

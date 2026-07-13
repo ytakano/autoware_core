@@ -41,8 +41,8 @@
 use std::sync::Arc;
 use std::thread;
 
-use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine};
 use nalgebra::Matrix4;
+use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine};
 
 fn dense_cluster(cx: f32, cy: f32, cz: f32) -> Vec<[f32; 3]> {
     (0..8)

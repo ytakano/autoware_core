@@ -17,6 +17,9 @@ default = []
 # `ros`: build the ROS-message bindings (bindgen over the rosidl C headers) and the Pose-pointer
 # FFI shims. build.rs only does work under this feature.
 ros = ["dep:bindgen"]
+# `wcet-trace`: expose the engine crate's per-pass trace (C1 trace certificate) over the C ABI.
+# Enabled only by the NDT_BUILD_TRACED analysis configure; never a shipping feature.
+wcet-trace = ["realtime_ndt_scan_matcher/wcet-trace"]
 
 [dependencies]
 # The pure-Rust NDT engine (ROS-free, no_std-capable). Built with std + the rayon derivative

@@ -57,3 +57,159 @@ impl WcetCounters {
         }
     }
 }
+
+/// 64-bit FNV-1a offset basis (the trace-hash initial value). Shared with the C++ analysis
+/// build (`bench/traced/include/ndt_trace.hpp`); the two implementations are bit-identical and
+/// covered by the same test vectors.
+#[cfg(feature = "wcet-trace")]
+pub const FNV_OFFSET: u64 = 14_695_981_039_346_656_037;
+/// 64-bit FNV-1a prime.
+#[cfg(feature = "wcet-trace")]
+pub const FNV_PRIME: u64 = 1_099_511_628_211;
+/// Maximum derivative passes a trace stores (`max_iterations` caps at 30 in production, so 40
+/// leaves margin; `AlignTrace::len` still counts every pass even past the storage cap).
+#[cfg(feature = "wcet-trace")]
+pub const MAX_TRACE_PASSES: usize = 40;
+
+/// Fold one `u64` (little-endian bytes) into a 64-bit FNV-1a state.
+#[cfg(feature = "wcet-trace")]
+#[must_use]
+pub fn fnv1a_u64(mut h: u64, v: u64) -> u64 {
+    let mut x = v;
+    for _ in 0..8 {
+        h ^= x & 0xff;
+        h = h.wrapping_mul(FNV_PRIME);
+        x >>= 8;
+    }
+    h
+}
+
+/// One derivative pass of the trace certificate: structural work (points, neighbors, the
+/// engine-own kd counter), the neighbor-identity hash, and the pass-final numeric bits.
+#[cfg(feature = "wcet-trace")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PassTrace {
+    /// Source points processed in this pass.
+    pub points: u64,
+    /// Neighbor leaves collected in this pass (Sigma over points of K(p)).
+    pub neighbors: u64,
+    /// This engine's own kd traversal count for the pass (NOT cross-language comparable).
+    pub kd_nodes: u64,
+    /// FNV-1a over each neighbor leaf's `mean` f64 bits, per point in index order, per
+    /// neighbor in search-return order — the language-neutral neighbor-identity/order hash.
+    pub nbr_hash: u64,
+    /// Bit pattern of the pass-final score (the value handed to the Newton step).
+    pub score_bits: u64,
+    /// FNV-1a over the pass-final gradient's 6 f64 bit patterns (index order).
+    pub grad_hash: u64,
+    /// FNV-1a over the pass-final Hessian's 36 f64 bit patterns (row-major (r, c) order).
+    pub hess_hash: u64,
+}
+
+#[cfg(feature = "wcet-trace")]
+impl PassTrace {
+    /// Empty pass record (hash fields start at the FNV offset basis).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            points: 0,
+            neighbors: 0,
+            kd_nodes: 0,
+            nbr_hash: FNV_OFFSET,
+            score_bits: 0,
+            grad_hash: FNV_OFFSET,
+            hess_hash: FNV_OFFSET,
+        }
+    }
+}
+
+#[cfg(feature = "wcet-trace")]
+impl Default for PassTrace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Per-align trace: one [`PassTrace`] per derivative pass, in pass order.
+#[cfg(feature = "wcet-trace")]
+#[derive(Clone, Copy, Debug)]
+pub struct AlignTrace {
+    /// Total passes recorded (counts every pass, even beyond [`MAX_TRACE_PASSES`]).
+    pub len: usize,
+    /// `true` when the trace is not deterministic-order valid (parallel backend ran).
+    pub poisoned: bool,
+    /// The stored pass records (`passes[..len.min(MAX_TRACE_PASSES)]` are valid).
+    pub passes: [PassTrace; MAX_TRACE_PASSES],
+}
+
+#[cfg(feature = "wcet-trace")]
+impl AlignTrace {
+    /// Empty trace.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            len: 0,
+            poisoned: false,
+            passes: [PassTrace::new(); MAX_TRACE_PASSES],
+        }
+    }
+
+    /// Append one pass record (drops the record body past the storage cap; `len` still counts).
+    pub fn push(&mut self, pass: PassTrace) {
+        if let Some(slot) = self.passes.get_mut(self.len) {
+            *slot = pass;
+        }
+        self.len = self.len.saturating_add(1);
+    }
+}
+
+#[cfg(feature = "wcet-trace")]
+impl Default for AlignTrace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(all(test, feature = "wcet-trace"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::allow_attributes,
+    reason = "test code may relax freely"
+)]
+mod trace_tests {
+    use super::*;
+
+    /// Shared C++/Rust test vectors: `bench/traced/include/ndt_trace.hpp` must produce the same
+    /// values (checked by the traced replay's self-test at startup).
+    #[test]
+    fn fnv1a_shared_vectors() {
+        // Canonical FNV-1a of eight 0x00 bytes from the offset basis.
+        assert_eq!(fnv1a_u64(FNV_OFFSET, 0), 0xa8c7_f832_281a_39c5);
+        // 1.0_f64's bit pattern (0x3FF0000000000000) folded from the offset basis.
+        assert_eq!(
+            fnv1a_u64(FNV_OFFSET, 1.0_f64.to_bits()),
+            0xaab1_6932_29ba_1db8
+        );
+        // Chained fold is order-sensitive.
+        let a = fnv1a_u64(fnv1a_u64(FNV_OFFSET, 1), 2);
+        let b = fnv1a_u64(fnv1a_u64(FNV_OFFSET, 2), 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn trace_push_saturates() {
+        let mut tr = AlignTrace::new();
+        for i in 0..(MAX_TRACE_PASSES + 3) {
+            let mut p = PassTrace::new();
+            p.points = i as u64;
+            tr.push(p);
+        }
+        assert_eq!(tr.len, MAX_TRACE_PASSES + 3);
+        assert_eq!(
+            tr.passes[MAX_TRACE_PASSES - 1].points,
+            (MAX_TRACE_PASSES - 1) as u64
+        );
+    }
+}

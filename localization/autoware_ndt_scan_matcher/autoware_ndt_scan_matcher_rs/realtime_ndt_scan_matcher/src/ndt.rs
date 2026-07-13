@@ -67,6 +67,10 @@ pub struct AlignWorkspace {
     /// Algorithmic-cost counters for the current/last [`align`] (reset at each align start).
     #[cfg(feature = "wcet-count")]
     pub counters: crate::wcet::WcetCounters,
+    /// Per-pass trace records for the C1 cross-language trace certificate (reset per align;
+    /// serial backend only — the parallel backend poisons it).
+    #[cfg(feature = "wcet-trace")]
+    pub trace: crate::wcet::AlignTrace,
 }
 
 impl AlignWorkspace {
@@ -81,6 +85,8 @@ impl AlignWorkspace {
             contribs: Vec::new(),
             #[cfg(feature = "wcet-count")]
             counters: crate::wcet::WcetCounters::new(),
+            #[cfg(feature = "wcet-trace")]
+            trace: crate::wcet::AlignTrace::new(),
         }
     }
 
@@ -96,6 +102,8 @@ impl AlignWorkspace {
             contribs: Vec::with_capacity(max_points),
             #[cfg(feature = "wcet-count")]
             counters: crate::wcet::WcetCounters::new(),
+            #[cfg(feature = "wcet-trace")]
+            trace: crate::wcet::AlignTrace::new(),
         }
     }
 }
@@ -365,6 +373,8 @@ pub fn compute_derivatives(
     {
         ws.counters.derivative_passes = ws.counters.derivative_passes.saturating_add(1);
     }
+    #[cfg(feature = "wcet-trace")]
+    let mut pass = crate::wcet::PassTrace::new();
     // Per-point-local contributions, folded in point-index order (zip stops at the shorter cloud).
     for (&tp, &sp) in trans_cloud.iter().zip(source.iter()) {
         let c = point_contribution(map, sp, tp, &ad, cfg, &mut ws.neighbor_idx);
@@ -376,9 +386,58 @@ pub fn compute_derivatives(
             ws.counters.kd_nodes_visited = ws.counters.kd_nodes_visited.saturating_add(c.kd_nodes);
             ws.counters.max_neighbors = ws.counters.max_neighbors.max(k);
         }
+        #[cfg(feature = "wcet-trace")]
+        {
+            pass.points = pass.points.saturating_add(1);
+            pass.neighbors = pass
+                .neighbors
+                .saturating_add(u64::try_from(c.neighborhood).unwrap_or(u64::MAX));
+            pass.kd_nodes = pass.kd_nodes.saturating_add(c.kd_nodes);
+            // The scratch still holds this point's neighbor list. The per-point neighbor-set
+            // hash is ORDER-INSENSITIVE (XOR of per-leaf hashes): pcl/FLANN returns each
+            // point's neighbors distance-sorted while this engine's kd walk returns them in
+            // visit order, so within-point order legitimately differs between the engines.
+            let mut set_hash: u64 = 0;
+            for &li in &ws.neighbor_idx {
+                if let Some(leaf) = map.leaf(li) {
+                    let mut leaf_hash = crate::wcet::FNV_OFFSET;
+                    for m in &leaf.mean {
+                        leaf_hash = crate::wcet::fnv1a_u64(leaf_hash, m.to_bits());
+                    }
+                    set_hash ^= leaf_hash;
+                }
+            }
+            pass.nbr_hash = crate::wcet::fnv1a_u64(pass.nbr_hash, set_hash);
+        }
         red.add(&c);
     }
-    finalize(red, p, cfg, source.len())
+    let d = finalize(red, p, cfg, source.len());
+    #[cfg(feature = "wcet-trace")]
+    {
+        trace_pass_tail(&mut pass, &d);
+        ws.trace.push(pass);
+    }
+    d
+}
+
+/// Close a pass record with the values handed to the Newton step (mirrors the C++
+/// `ndt_trace::pass_end`): the score bits plus FNV-1a folds of the gradient (index order) and
+/// Hessian (row-major (r, c) order) f64 bit patterns.
+#[cfg(feature = "wcet-trace")]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "fixed-size nalgebra Vector6/Matrix6 indexing with constant-bounded loops"
+)]
+fn trace_pass_tail(pass: &mut crate::wcet::PassTrace, d: &Derivatives) {
+    pass.score_bits = d.score.to_bits();
+    for r in 0..6 {
+        pass.grad_hash = crate::wcet::fnv1a_u64(pass.grad_hash, d.gradient[r].to_bits());
+    }
+    for r in 0..6 {
+        for c in 0..6 {
+            pass.hess_hash = crate::wcet::fnv1a_u64(pass.hess_hash, d.hessian[(r, c)].to_bits());
+        }
+    }
 }
 
 /// **Parallel** (rayon) backend for [`compute_derivatives`] — bit-identical to the serial version
@@ -438,6 +497,12 @@ pub fn compute_derivatives_parallel(
             .kd_nodes_visited
             .saturating_add(pass.kd_nodes_visited);
         ws.counters.max_neighbors = ws.counters.max_neighbors.max(pass.max_neighbors);
+    }
+    #[cfg(feature = "wcet-trace")]
+    {
+        // The trace certificate is defined on the serial backend only (per-pass neighbor-order
+        // hashing); mark any align that went through here as non-certifiable.
+        ws.trace.poisoned = true;
     }
     finalize(red, p, cfg, source.len())
 }
@@ -647,6 +712,9 @@ pub struct AlignResult {
     /// Algorithmic-cost counters of this align (WCET analysis; serial + parallel backends).
     #[cfg(feature = "wcet-count")]
     pub counters: crate::wcet::WcetCounters,
+    /// Per-pass trace of this align (C1 trace certificate; serial backend only).
+    #[cfg(feature = "wcet-trace")]
+    pub trace: crate::wcet::AlignTrace,
 }
 
 /// Solve `H · delta = -gradient` via SVD (mirrors the C++ `JacobiSVD(ComputeFullU|ComputeFullV)`).
@@ -775,6 +843,10 @@ pub fn align(
     {
         ws.counters = crate::wcet::WcetCounters::new();
     }
+    #[cfg(feature = "wcet-trace")]
+    {
+        ws.trace = crate::wcet::AlignTrace::new();
+    }
     // Use the rayon backend when the caller asks for >1 thread (bit-identical to serial; ignored
     // when the `parallel` feature is off).
     let parallel = params.num_threads > 1;
@@ -878,6 +950,10 @@ pub fn align(
     #[cfg(feature = "wcet-count")]
     {
         out.counters = ws.counters;
+    }
+    #[cfg(feature = "wcet-trace")]
+    {
+        out.trace = ws.trace;
     }
 }
 

@@ -37,6 +37,12 @@ include_directories(${PCL_INCLUDE_DIRS})
 # symbol clash.
 option(NDT_USE_RUST "Build the node from the Rust port instead of the original C++" OFF)
 
+# C1 analysis build (plan/paper_fix2.md C1): builds a TRACED COPY of the C++ engine from
+# bench/traced/ (per-pass trace + FLANN-work counter; upstream sources stay byte-identical) and a
+# traced replay that certifies equal work per input against the Rust engine's mirrored trace.
+# Analysis only -- never shipped, never a timing configuration.
+option(NDT_BUILD_TRACED "Build the traced analysis engine + replay (requires NDT_BUILD_BENCH)" OFF)
+
 if(NDT_USE_RUST)
   # Corrosion is fetched at configure time; for offline builds switch GIT_* to a local SOURCE_DIR.
   include(FetchContent)
@@ -47,9 +53,14 @@ if(NDT_USE_RUST)
   FetchContent_MakeAvailable(Corrosion)
   # The `ros` feature builds the bindgen ROS-message bindings (geometry_msgs Pose) used by the
   # zero-copy FFI shims; bindgen needs the rosidl C headers, so pass geometry_msgs' include dir.
+  set(NDT_RS_FEATURES ros)
+  if(NDT_BUILD_TRACED)
+    # Mirrored per-pass trace on the Rust side (realtime_ndt_scan_matcher `wcet-trace`).
+    list(APPEND NDT_RS_FEATURES wcet-trace)
+  endif()
   corrosion_import_crate(MANIFEST_PATH
     ${CMAKE_CURRENT_SOURCE_DIR}/autoware_ndt_scan_matcher_rs/Cargo.toml
-    FEATURES ros
+    FEATURES ${NDT_RS_FEATURES}
   )
   find_package(geometry_msgs REQUIRED)
   string(JOIN ":" NDT_ROS_INCLUDE_DIRS ${geometry_msgs_INCLUDE_DIRS})
@@ -143,6 +154,37 @@ if(NDT_BUILD_BENCH)
   target_include_directories(ndt_bench_replay PRIVATE include ${PCL_INCLUDE_DIRS})
   target_link_libraries(ndt_bench_replay
     multigrid_ndt_omp ${PCL_LIBRARIES} autoware_ndt_scan_matcher_rs)
+endif()
+
+if(NDT_BUILD_TRACED)
+  if(NOT NDT_BUILD_BENCH)
+    message(FATAL_ERROR "NDT_BUILD_TRACED requires NDT_BUILD_BENCH=ON")
+  endif()
+  # Traced engine: compiled from the instrumented copies in bench/traced/ (the align loops are
+  # header-template code, so a separate library is required -- the stock libmultigrid_ndt_omp
+  # already contains the uninstrumented instantiations). BEFORE-include shadows the one traced
+  # header (multi_voxel_grid_covariance_omp.h) over the stock include tree.
+  add_library(multigrid_ndt_omp_traced SHARED
+    bench/traced/src/multi_voxel_grid_covariance_omp.cpp
+    bench/traced/src/multigrid_ndt_omp.cpp
+  )
+  target_include_directories(multigrid_ndt_omp_traced BEFORE PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/bench/traced/include)
+  target_include_directories(multigrid_ndt_omp_traced PRIVATE include ${PCL_INCLUDE_DIRS})
+  target_link_libraries(multigrid_ndt_omp_traced ${PCL_LIBRARIES})
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(multigrid_ndt_omp_traced OpenMP::OpenMP_CXX)
+  endif()
+
+  # Traced replay: the same replay source with the NDT_TRACE comparison sections enabled,
+  # linked against the traced engine (never the stock one -- ODR).
+  add_executable(ndt_bench_replay_traced bench/ndt_bench_replay.cpp)
+  target_compile_definitions(ndt_bench_replay_traced PRIVATE NDT_TRACE)
+  target_include_directories(ndt_bench_replay_traced BEFORE PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/bench/traced/include)
+  target_include_directories(ndt_bench_replay_traced PRIVATE include ${PCL_INCLUDE_DIRS})
+  target_link_libraries(ndt_bench_replay_traced
+    multigrid_ndt_omp_traced ${PCL_LIBRARIES} autoware_ndt_scan_matcher_rs)
 endif()
 
 # L1 node-level end-to-end benchmark (bench/l1a_node_frame_bench.cpp). Opt-in and off by default so

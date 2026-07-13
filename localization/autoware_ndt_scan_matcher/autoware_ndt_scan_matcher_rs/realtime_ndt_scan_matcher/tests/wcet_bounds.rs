@@ -35,10 +35,12 @@
     reason = "test code"
 )]
 
-use realtime_ndt_scan_matcher::nalgebra::Matrix4;
-use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, MAX_NEIGHBORS, NdtParams, align};
-use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 use proptest::prelude::*;
+use realtime_ndt_scan_matcher::nalgebra::Matrix4;
+use realtime_ndt_scan_matcher::ndt::{
+    AlignResult, AlignWorkspace, MAX_NEIGHBORS, NdtParams, align,
+};
+use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 
 /// Build a voxel-grid map from clustered points: `clusters` cluster centers on a coarse grid, each
 /// with 8 points so the voxel passes the min-points filter.

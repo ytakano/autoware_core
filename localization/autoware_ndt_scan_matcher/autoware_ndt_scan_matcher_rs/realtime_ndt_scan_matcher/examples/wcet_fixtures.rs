@@ -50,10 +50,10 @@
 
 use std::path::{Path, PathBuf};
 
+use nalgebra::Matrix4;
 use realtime_ndt_scan_matcher::fixture::Fixture;
 use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
 use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
-use nalgebra::Matrix4;
 
 /// Deterministic LCG (no rand dependency).
 struct Lcg(u64);

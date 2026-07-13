@@ -33,9 +33,11 @@
     reason = "example code: synthetic data construction + nalgebra fixed-index reads + prints"
 )]
 
-use realtime_ndt_scan_matcher::host::{Clock, MapDelta, MapSource, MapTile, MatchResult, OutputSink};
-use realtime_ndt_scan_matcher::scan_matcher::{MatchScratch, ScanMatcher};
 use nalgebra::Matrix4;
+use realtime_ndt_scan_matcher::host::{
+    Clock, MapDelta, MapSource, MapTile, MatchResult, OutputSink,
+};
+use realtime_ndt_scan_matcher::scan_matcher::{MatchScratch, ScanMatcher};
 
 /// A deterministic dense cluster around `(cx, cy, cz)` (>min_points, non-degenerate covariance, all
 /// within one ~2 m voxel), keyed by `id`.

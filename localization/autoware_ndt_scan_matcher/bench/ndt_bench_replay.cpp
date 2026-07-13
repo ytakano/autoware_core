@@ -45,6 +45,16 @@
 
 #include "autoware_ndt_scan_matcher_rs.h"
 
+#ifdef NDT_TRACE
+// C1 trace certificate (plan/paper_fix2.md): per-pass trace comparison between the traced C++
+// engine (bench/traced/, ndt_trace.hpp) and the Rust engine's mirrored `wcet-trace` records.
+#include <ndt_trace.hpp>
+
+// The Rust trace FFI (struct AwNdtPassTrace + ..._ndt_engine_get_trace) comes from the
+// cbindgen-generated header above; the symbol itself exists only in `wcet-trace` builds,
+// which NDT_BUILD_TRACED enables.
+#endif
+
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
@@ -255,6 +265,162 @@ void evict_caches(std::vector<char> & buf)
   (void)sink;
 }
 
+#ifdef NDT_TRACE
+// Snapshot of one engine's per-align trace, normalized for comparison.
+struct TraceSnap
+{
+  uint64_t passes = 0;
+  uint64_t line_search_loops = 0;  // C++ only
+  uint64_t kd_a = 0;               // C++: FLANN distance evals | Rust: own kd counter
+  uint64_t kd_b = 0;               // C++: FLANN accum_dist evals | Rust: 0
+  bool poisoned = false;
+  size_t stored = 0;
+  ndt_trace::PassTrace pass[ndt_trace::kMaxPasses];
+};
+
+TraceSnap snap_cpp()
+{
+  const ndt_trace::TraceState & s = ndt_trace::state();
+  TraceSnap out;
+  out.passes = s.passes;
+  out.line_search_loops = s.line_search_loops;
+  out.kd_a = s.kd_dist_total;
+  out.kd_b = s.kd_accum_total;
+  out.poisoned = s.poisoned;
+  out.stored = static_cast<size_t>(std::min<uint64_t>(s.passes, ndt_trace::kMaxPasses));
+  for (size_t i = 0; i < out.stored; ++i) out.pass[i] = s.pass[i];
+  return out;
+}
+
+TraceSnap snap_rust(struct AwNdtEngine * eng)
+{
+  TraceSnap out;
+  std::array<AwNdtPassTrace, ndt_trace::kMaxPasses> buf{};
+  uint64_t total = 0;
+  const bool ok = autoware_ndt_scan_matcher_rs_ndt_engine_get_trace(
+    eng, buf.data(), buf.size(), &total);
+  out.passes = total;
+  out.poisoned = !ok;
+  out.stored = static_cast<size_t>(std::min<uint64_t>(total, ndt_trace::kMaxPasses));
+  for (size_t i = 0; i < out.stored; ++i) {
+    out.pass[i].points = buf[i].points;
+    out.pass[i].neighbors = buf[i].neighbors;
+    out.pass[i].kd_dist = buf[i].kd_nodes;
+    out.pass[i].kd_accum = 0;
+    out.pass[i].nbr_hash = buf[i].nbr_hash;
+    out.pass[i].score_bits = buf[i].score_bits;
+    out.pass[i].grad_hash = buf[i].grad_hash;
+    out.pass[i].hess_hash = buf[i].hess_hash;
+    out.kd_a += buf[i].kd_nodes;
+  }
+  return out;
+}
+
+// Per-leg comparison result. Structural legs (pass count, per-pass points/neighbors and the
+// neighbor-identity hash) certify equal work; the numeric legs (score/gradient/Hessian bits)
+// certify the operand stream. kd counters are engine-own metrics, recorded but never compared.
+struct TraceCert
+{
+  bool valid = false;        // both traces present, unpoisoned
+  bool structural = false;
+  bool score = false;
+  bool grad = false;
+  bool hess = false;
+  uint64_t score_max_ulp = 0;  // max per-pass score ULP distance (0 == bit-identical)
+  int first_div_pass = -1;   // first pass where any compared leg diverges
+  const char * first_div_leg = "";
+};
+
+// ULP distance between two f64 bit patterns (IEEE-754 total order via sign-magnitude flip).
+uint64_t ulp_delta_f64(uint64_t a, uint64_t b)
+{
+  const auto key = [](uint64_t x) -> uint64_t {
+    return (x & 0x8000000000000000ULL) != 0 ? ~x : (x | 0x8000000000000000ULL);
+  };
+  const uint64_t ka = key(a);
+  const uint64_t kb = key(b);
+  return ka > kb ? ka - kb : kb - ka;
+}
+
+TraceCert compare_traces(const TraceSnap & c, const TraceSnap & r)
+{
+  TraceCert out;
+  out.valid = !c.poisoned && !r.poisoned;
+  if (!out.valid) return out;
+  out.structural = (c.passes == r.passes);
+  out.score = out.structural;
+  out.grad = out.structural;
+  out.hess = out.structural;
+  if (!out.structural) {
+    out.first_div_pass = static_cast<int>(std::min(c.passes, r.passes));
+    out.first_div_leg = "passes";
+    return out;
+  }
+  const size_t n = std::min(c.stored, r.stored);
+  for (size_t i = 0; i < n; ++i) {
+    const auto & a = c.pass[i];
+    const auto & b = r.pass[i];
+    const char * leg = nullptr;
+    if (a.points != b.points) leg = "points";
+    else if (a.neighbors != b.neighbors) leg = "neighbors";
+    else if (a.nbr_hash != b.nbr_hash) leg = "nbr_hash";
+    if (leg != nullptr) {
+      out.structural = out.score = out.grad = out.hess = false;
+      out.first_div_pass = static_cast<int>(i);
+      out.first_div_leg = leg;
+      return out;
+    }
+    if (a.score_bits != b.score_bits) {
+      out.score_max_ulp = std::max(out.score_max_ulp, ulp_delta_f64(a.score_bits, b.score_bits));
+      if (out.score) {
+        out.score = false;
+        if (out.first_div_pass < 0) { out.first_div_pass = static_cast<int>(i); out.first_div_leg = "score"; }
+      }
+    }
+    if (out.grad && a.grad_hash != b.grad_hash) {
+      out.grad = false;
+      if (out.first_div_pass < 0) { out.first_div_pass = static_cast<int>(i); out.first_div_leg = "grad"; }
+    }
+    if (out.hess && a.hess_hash != b.hess_hash) {
+      out.hess = false;
+      if (out.first_div_pass < 0) { out.first_div_pass = static_cast<int>(i); out.first_div_leg = "hess"; }
+    }
+  }
+  return out;
+}
+
+void write_trace_json(FILE * f, const TraceSnap & c, const TraceSnap & r, const TraceCert & t)
+{
+  std::fprintf(f,
+    "\"trace\": { \"valid\": %s, \"passes_cpp\": %llu, \"passes_rust\": %llu, "
+    "\"structural_match\": %s, \"score_match\": %s, \"grad_match\": %s, "
+    "\"hess_match\": %s, \"first_div_pass\": %d, \"first_div_leg\": \"%s\", "
+    "\"line_search_loops\": %llu, \"cpp_kd_dist\": %llu, \"cpp_kd_accum\": %llu, "
+    "\"rust_kd\": %llu, \"score_max_ulp\": %llu }",
+    t.valid ? "true" : "false", static_cast<unsigned long long>(c.passes),
+    static_cast<unsigned long long>(r.passes), t.structural ? "true" : "false",
+    t.score ? "true" : "false", t.grad ? "true" : "false", t.hess ? "true" : "false",
+    t.first_div_pass, t.first_div_leg, static_cast<unsigned long long>(c.line_search_loops),
+    static_cast<unsigned long long>(c.kd_a), static_cast<unsigned long long>(c.kd_b),
+    static_cast<unsigned long long>(r.kd_a), static_cast<unsigned long long>(t.score_max_ulp));
+}
+
+// Startup self-test: the C++ FNV-1a mirror must reproduce the Rust crate's shared vectors
+// (realtime_ndt_scan_matcher::wcet trace_tests).
+bool trace_selftest()
+{
+  using ndt_trace::fnv1a_u64;
+  using ndt_trace::kFnvOffset;
+  bool ok = fnv1a_u64(kFnvOffset, 0) == 0xa8c7f832281a39c5ULL;
+  double one = 1.0;
+  uint64_t bits = 0;
+  std::memcpy(&bits, &one, 8);
+  ok = ok && fnv1a_u64(kFnvOffset, bits) == 0xaab1693229ba1db8ULL;
+  if (!ok) std::fprintf(stderr, "trace: FNV-1a self-test FAILED (C++/Rust mirror broken)\n");
+  return ok;
+}
+#endif
+
 int run_fixture_mode(const std::string & out_path, const std::vector<std::string> & paths)
 {
   const int iters = std::getenv("WCET_ITERS") ? std::atoi(std::getenv("WCET_ITERS")) : 100;
@@ -330,6 +496,12 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     long long cpp_allocs = -1;
     int cpp_iter = -1;
     pclomp::NdtResult cpp_res{};
+#ifdef NDT_TRACE
+    TraceSnap trace_cpp{};
+    TraceSnap trace_rust{};
+    bool have_trace_cpp = false;
+    bool have_trace_rust = false;
+#endif
     if (run_cpp) {
       pclomp::NdtParams params{};
       params.trans_epsilon = fx.trans_epsilon;
@@ -365,6 +537,12 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
       }
       cpp_res = ndt.getResult();
       cpp_iter = cpp_res.iteration_num;
+#ifdef NDT_TRACE
+      ndt_trace::reset();
+      ndt.align(*aligned, guess, source);
+      trace_cpp = snap_cpp();
+      have_trace_cpp = true;
+#endif
     }
 
     // ---- Rust engine (over the C ABI) ----
@@ -408,6 +586,10 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
       rout.transform_probability = &rs_tp;
       rout.nearest_voxel_likelihood = &rs_nvtl;
       autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &rout);
+#ifdef NDT_TRACE
+      trace_rust = snap_rust(eng);
+      have_trace_rust = true;
+#endif
       autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
     }
     const bool both = run_cpp && run_rust;
@@ -472,6 +654,29 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
         "      \"cert\": { \"pose_match\": %s, \"trans_delta_m\": %.3e, \"rot_delta\": %.3e, "
         "\"tp_delta\": %.3e, \"nvtl_delta\": %.3e },\n",
         pose_match ? "true" : "false", trans_delta, rot_delta, tp_delta, nvtl_delta);
+#ifdef NDT_TRACE
+      if (have_trace_cpp && have_trace_rust) {
+        const TraceCert tc = compare_traces(trace_cpp, trace_rust);
+        std::fprintf(f, "      ");
+        write_trace_json(f, trace_cpp, trace_rust, tc);
+        std::fprintf(f, ",\n");
+        std::fprintf(stderr,
+          "trace: %-18s passes %llu/%llu structural %s score %s grad %s hess %s ls=%llu "
+          "kd_cpp=%llu+%llu kd_rust=%llu%s%s\n",
+          fixture_stem(path).c_str(), static_cast<unsigned long long>(trace_cpp.passes),
+          static_cast<unsigned long long>(trace_rust.passes), tc.structural ? "OK" : "DIVERGE",
+          tc.score ? "OK" : "DIVERGE", tc.grad ? "OK" : "DIVERGE", tc.hess ? "OK" : "DIVERGE",
+          static_cast<unsigned long long>(trace_cpp.line_search_loops),
+          static_cast<unsigned long long>(trace_cpp.kd_a),
+          static_cast<unsigned long long>(trace_cpp.kd_b),
+          static_cast<unsigned long long>(trace_rust.kd_a),
+          tc.first_div_pass >= 0 ? " first_div=" : "",
+          tc.first_div_pass >= 0 ? tc.first_div_leg : "");
+        std::fprintf(stderr, "trace: %-18s score_max_ulp=%llu\n", fixture_stem(path).c_str(),
+          static_cast<unsigned long long>(tc.score_max_ulp));
+        if (!tc.structural) rc = 1;
+      }
+#endif
     }
     bool first_engine = true;
     if (run_cpp) {
@@ -882,6 +1087,9 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     cpp_ms_v.reserve(static_cast<size_t>(repeats));
     rs_ms_v.reserve(static_cast<size_t>(repeats));
     for (int k = 0; k < repeats; ++k) {
+#ifdef NDT_TRACE
+      ndt_trace::reset();
+#endif
       const auto t0 = Clock::now();
       ndt->align(*aligned, guess, source);
       cpp_ms_v.push_back(ms_since(t0));
@@ -964,9 +1172,28 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
 
     std::fprintf(f,
       "%s    { \"seq\": %zu, \"n_source\": %zu, \"n_tiles\": %zu, \"cpp_ms\": %.4f, "
-      "\"rust_ms\": %.4f, \"iter_cpp\": %d, \"iter_rust\": %d, \"match\": %s }",
+      "\"rust_ms\": %.4f, \"iter_cpp\": %d, \"iter_rust\": %d, \"match\": %s",
       (first ? "" : ",\n"), fi, n_src, fr.ids.size(), cpp_ms_v[cpp_ms_v.size() / 2],
       rs_ms_v[rs_ms_v.size() / 2], cpp_iter, rs_iter, match ? "true" : "false");
+#ifdef NDT_TRACE
+    {
+      const TraceSnap tc_cpp = snap_cpp();
+      const TraceSnap tc_rust = snap_rust(eng);
+      const TraceCert tc = compare_traces(tc_cpp, tc_rust);
+      std::fprintf(f, ", ");
+      write_trace_json(f, tc_cpp, tc_rust, tc);
+      // Pose/score deltas of the divergent frames (C2 rider): cheap, so emit per frame.
+      double dtrans = 0.0;
+      const auto res = ndt->getResult();
+      for (int r = 0; r < 3; ++r) {
+        const double dt = static_cast<double>(res.pose(r, 3)) -
+                          static_cast<double>(rs_pose[(static_cast<size_t>(r) * 4) + 3]);
+        dtrans += dt * dt;
+      }
+      std::fprintf(f, ", \"trans_delta_m\": %.3e", std::sqrt(dtrans));
+    }
+#endif
+    std::fprintf(f, " }");
     first = false;
   }
   if (eng != nullptr) autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
@@ -980,6 +1207,9 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
 
 int main(int argc, char ** argv)
 {
+#ifdef NDT_TRACE
+  if (!trace_selftest()) return 2;
+#endif
   // WCET fixture mode: ndt_bench_replay --fixture out.json fix1.ndtfix [fix2.ndtfix ...]
   if (argc >= 4 && std::strcmp(argv[1], "--fixture") == 0) {
     std::vector<std::string> paths(argv + 3, argv + argc);

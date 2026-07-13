@@ -215,7 +215,10 @@ mod tests {
                 out.as_mut_ptr(),
             );
         }
-        assert_eq!(out, realtime_ndt_scan_matcher::helper::rotate_covariance(&src, &rot));
+        assert_eq!(
+            out,
+            realtime_ndt_scan_matcher::helper::rotate_covariance(&src, &rot)
+        );
     }
 
     #[test]

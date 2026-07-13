@@ -1170,3 +1170,67 @@ mod tests {
         assert_eq!(c2, 99);
     }
 }
+
+/// One per-pass record of the C1 trace certificate (`wcet-trace` analysis builds only).
+/// Field semantics mirror `realtime_ndt_scan_matcher::wcet::PassTrace`: structural work
+/// (`points`, `neighbors`, this engine's own `kd_nodes`), the neighbor-identity hash, and the
+/// pass-final score/gradient/Hessian bit hashes (FNV-1a, shared constants with the C++ mirror).
+#[cfg(feature = "wcet-trace")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct AwNdtPassTrace {
+    pub points: u64,
+    pub neighbors: u64,
+    pub kd_nodes: u64,
+    pub nbr_hash: u64,
+    pub score_bits: u64,
+    pub grad_hash: u64,
+    pub hess_hash: u64,
+}
+
+/// Copy the last align's per-pass trace into `out` (up to `cap` records) and write the TOTAL
+/// pass count through `total_out` (it may exceed `cap`; the stored records are the first
+/// `min(total, MAX_TRACE_PASSES)`). Returns `false` when the trace is unavailable (null handle)
+/// or poisoned (the parallel backend ran, so per-pass order is not certificate-valid).
+///
+/// # Safety
+/// `engine` is a valid handle (or null → returns `false`); `out` addresses `cap` records or is
+/// null; `total_out` is a valid pointer or null.
+#[cfg(feature = "wcet-trace")]
+#[expect(
+    unsafe_code,
+    reason = "C ABI boundary; writes caller-owned output buffers"
+)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_trace(
+    engine: *const NdtEngine,
+    out: *mut AwNdtPassTrace,
+    cap: u64,
+    total_out: *mut u64,
+) -> bool {
+    use realtime_ndt_scan_matcher::wcet::MAX_TRACE_PASSES;
+
+    let e = ffi_ref!(engine, else return false);
+    let trace = e.result().trace;
+    let total = u64::try_from(trace.len).unwrap_or(u64::MAX);
+    let stored = trace.len.min(MAX_TRACE_PASSES);
+    // SAFETY: each non-null output pointer addresses its documented length; the derefs are
+    // audited in ffi_ptr (null → skipped).
+    unsafe {
+        ffi_ptr::write_out(total_out, total);
+        if let Some(slice) = ffi_ptr::opt_slice_mut(out, usize::try_from(cap).unwrap_or(0)) {
+            for (dst, src) in slice.iter_mut().zip(trace.passes.iter().take(stored)) {
+                *dst = AwNdtPassTrace {
+                    points: src.points,
+                    neighbors: src.neighbors,
+                    kd_nodes: src.kd_nodes,
+                    nbr_hash: src.nbr_hash,
+                    score_bits: src.score_bits,
+                    grad_hash: src.grad_hash,
+                    hess_hash: src.hess_hash,
+                };
+            }
+        }
+    }
+    !trace.poisoned
+}
