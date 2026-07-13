@@ -356,7 +356,7 @@ def build_manifest(cfg, root, session_id, series, cell=None, env_snap=None, env_
             (ln.split(":", 1)[1].strip() for ln in
              pathlib.Path("/proc/cpuinfo").read_text().splitlines()
              if ln.startswith("microcode")), None),
-        "kernel_version": " ".join(platform.uname()[:3]),
+        "kernel_version": f"{platform.uname()[0]} {platform.uname()[2]}",
         "governor": (env_snap or {}).get("governor"),
         "isolated_cpus": (env_snap or {}).get("isolated_cpus"),
         "benchmark_cpu": cfg["benchmark_cpu"],
