@@ -48,12 +48,12 @@
  },
  "abort": {
   "min_freq_frac": 0.9,
-  "nominal_khz": 3300000,
+  "nominal_khz": 3200000,
   "max_temp_c": 85,
-  "nominal_note": "Ryzen 9 5900HX base clock; amd-pstate exposes no sysfs base_frequency -- set per host",
+  "nominal_note": "frequency pinned by the operator: scaling_min_freq = scaling_max_freq = 3.2 GHz on the benchmark CPU (session-1 calibration 320.2 ms reproduces under the pin, so session 1 is in the same speed regime)",
   "max_calib_slowdown": 1.1
  },
  "sessions": 3,
  "output_dir": "campaign_runs",
- "note": "Profile B campaign per plan/ndt_timing_measurement_policy.md; sample tiers per the paper_fix.md budget matrix (1000+ only for tail-claim fixtures; co-runners on union-worst + legal-worst only)."
+ "note": "Profile B campaign per plan/ndt_timing_measurement_policy.md; sample tiers per the paper_fix.md budget matrix (1000+ only for tail-claim fixtures; co-runners on union-worst + legal-worst only). Frequency pinned at 3.2 GHz from session 1 onward."
 }
