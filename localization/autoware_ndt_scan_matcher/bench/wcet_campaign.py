@@ -237,6 +237,22 @@ def verify_environment(cfg):
     fmax = read_max_freq_khz(cpu)
     snap["cur_freq_khz"] = freq
     snap["max_freq_khz"] = fmax
+    # Frequency pin (min == max == abort.nominal_khz): keeps every session in one speed
+    # regime and shuts out platform boost/EC policy moves; resets on reboot -- warn so the
+    # post-reboot checklist is fully automated.
+    fmin_s = read_sys(cpu_sys(cpu, "cpufreq/scaling_min_freq"))
+    fmax_s = read_sys(cpu_sys(cpu, "cpufreq/scaling_max_freq"))
+    snap["scaling_min_khz"] = int(fmin_s) if fmin_s and fmin_s.isdigit() else None
+    snap["scaling_max_khz"] = int(fmax_s) if fmax_s and fmax_s.isdigit() else None
+    nominal = cfg["abort"].get("nominal_khz")
+    if nominal and (snap["scaling_min_khz"] != nominal or snap["scaling_max_khz"] != nominal):
+        warnings.append(
+            f"frequency not pinned at nominal {nominal} kHz "
+            f"(min={snap['scaling_min_khz']}, max={snap['scaling_max_khz']}; "
+            f"fix: echo {nominal} | sudo tee "
+            f"{cpu_sys(cpu, 'cpufreq/scaling_min_freq')} "
+            f"{cpu_sys(cpu, 'cpufreq/scaling_max_freq')})"
+        )
     snap["temps_c"] = read_temps_c()
     return failures, warnings, snap
 
