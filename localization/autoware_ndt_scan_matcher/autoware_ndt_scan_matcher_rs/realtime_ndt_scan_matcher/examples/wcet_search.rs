@@ -33,6 +33,17 @@
 //! (default `OUT_DIR`: `../../bench/fixtures`). Env: `WCET_SEARCH_GENS` (default 20),
 //! `WCET_SEARCH_POP` (default 6), `WCET_SEARCH_TOPK` (default 2), `WCET_SEARCH_SEED`.
 //! Deterministic for a fixed seed. Emits `search_00.ndtfix`, `search_01.ndtfix`, ….
+//!
+//! Ablation controls (plan/paper_fix.md B4; the defaults leave the original behavior
+//! byte-identical):
+//! - `WCET_SEARCH_MODE=hill|random` — `random` evaluates the same budget (pop + gens×pop)
+//!   of freshly sampled genomes (budget-matched baseline).
+//! - `WCET_SEARCH_FITNESS=counters|time` — `time` uses the measured align wall time as the
+//!   fitness (demonstrates noise/irreproducibility; counter runs are bit-reproducible).
+//! - `WCET_SEARCH_JSON=path` — machine-readable run summary (best, saturation evaluation,
+//!   best-so-far trajectory, Pareto archive).
+//! - `WCET_SEARCH_PARETO_DIR=path` — freeze the non-dominated (iter, Σnbr, kd) archive as
+//!   `pareto_NN.ndtfix` there (never written by default).
 
 #![allow(
     clippy::unwrap_used,
@@ -52,10 +63,10 @@
 
 use std::path::{Path, PathBuf};
 
-use realtime_ndt_scan_matcher::fixture::Fixture;
-use realtime_ndt_scan_matcher::ndt::{AlignResult, AlignWorkspace, NdtParams, align};
-use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 use nalgebra::Matrix4;
+use realtime_ndt_scan_matcher::fixture::Fixture;
+use realtime_ndt_scan_matcher::ndt::{align, AlignResult, AlignWorkspace, NdtParams};
+use realtime_ndt_scan_matcher::voxel_grid::VoxelGridMap;
 
 /// Fixed source point count: `P` is the node's responsibility (downsample cap), not a search
 /// freedom — searching it would trivially saturate at the cap and hide the interesting terms.
@@ -136,19 +147,24 @@ impl Genome {
         });
         // Rest: random.
         while v.len() < pop {
-            v.push(Genome {
-                n_tiles: rng.range_u(1, 8),
-                blocks: rng.range_u(3, 10),
-                hug: rng.range_f32(0.002, 0.02),
-                rough: rng.next_f32(),
-                corner_frac: rng.next_f32(),
-                guess_dx: rng.range_f32(-1.0, 1.0),
-                guess_dy: rng.range_f32(-1.0, 1.0),
-                eps_log: rng.range_f32(-10.0, -2.0),
-                seed: rng.next_u64(),
-            });
+            v.push(Genome::random(rng));
         }
         v
+    }
+
+    /// A uniformly random genome (used by seeding and by the random-search baseline).
+    fn random(rng: &mut Lcg) -> Genome {
+        Genome {
+            n_tiles: rng.range_u(1, 8),
+            blocks: rng.range_u(3, 10),
+            hug: rng.range_f32(0.002, 0.02),
+            rough: rng.next_f32(),
+            corner_frac: rng.next_f32(),
+            guess_dx: rng.range_f32(-1.0, 1.0),
+            guess_dy: rng.range_f32(-1.0, 1.0),
+            eps_log: rng.range_f32(-10.0, -2.0),
+            seed: rng.next_u64(),
+        }
     }
 
     /// Mutate 1–2 fields (hill-climb neighborhood).
@@ -257,7 +273,9 @@ impl Genome {
 /// Lexicographic fitness: `(iterations, sum_neighbors, kd_nodes_visited)`.
 type Fitness = (u64, u64, u64);
 
-fn evaluate(fx: &Fixture) -> Fitness {
+/// Counted align; also returns the align wall time (used only by the `time` fitness
+/// ablation — the counter fitness never reads it, so determinism is unaffected).
+fn evaluate(fx: &Fixture) -> (Fitness, u128) {
     let mut map = VoxelGridMap::new([fx.params.resolution; 3], 6, 0.01);
     for (id, tile) in fx.tiles.iter().enumerate() {
         map.add_target(tile, id as u64);
@@ -265,12 +283,78 @@ fn evaluate(fx: &Fixture) -> Fitness {
     map.create_kdtree();
     let mut ws = AlignWorkspace::with_capacity(fx.source.len());
     let mut out = AlignResult::default();
+    let t0 = std::time::Instant::now();
     align(&map, &fx.source, &fx.guess, &fx.params, &mut ws, &mut out);
+    let ns = t0.elapsed().as_nanos();
     let c = out.counters;
     (
-        u64::try_from(out.iteration_num.max(0)).unwrap_or(0),
-        c.sum_neighbors,
-        c.kd_nodes_visited,
+        (
+            u64::try_from(out.iteration_num.max(0)).unwrap_or(0),
+            c.sum_neighbors,
+            c.kd_nodes_visited,
+        ),
+        ns,
+    )
+}
+
+/// Non-dominated archive over (iter, Σnbr, kd) maximization + best-so-far trace.
+struct Recorder {
+    archive: Vec<(Genome, Fitness)>,
+    trace: Vec<(usize, Fitness)>,
+    best: Option<Fitness>,
+    evals: usize,
+}
+
+impl Recorder {
+    fn new() -> Recorder {
+        Recorder {
+            archive: Vec::new(),
+            trace: Vec::new(),
+            best: None,
+            evals: 0,
+        }
+    }
+
+    fn record(&mut self, g: &Genome, f: Fitness) {
+        self.evals += 1;
+        if self.best.is_none_or(|b| f > b) {
+            self.best = Some(f);
+            self.trace.push((self.evals, f));
+        }
+        let dominated_by_existing = self
+            .archive
+            .iter()
+            .any(|(_, a)| a.0 >= f.0 && a.1 >= f.1 && a.2 >= f.2);
+        if !dominated_by_existing {
+            self.archive
+                .retain(|(_, a)| !(f.0 >= a.0 && f.1 >= a.1 && f.2 >= a.2));
+            self.archive.push((g.clone(), f));
+        }
+    }
+
+    /// First evaluation whose best-so-far (iter, Σnbr) equals the final best pair.
+    fn saturation_eval(&self) -> usize {
+        let Some(best) = self.best else { return 0 };
+        self.trace
+            .iter()
+            .find(|(_, f)| (f.0, f.1) == (best.0, best.1))
+            .map_or(0, |(e, _)| *e)
+    }
+}
+
+fn genome_json(g: &Genome) -> String {
+    format!(
+        "{{\"n_tiles\":{},\"blocks\":{},\"hug\":{:.4},\"rough\":{:.3},\"corner_frac\":{:.3},\
+         \"guess_dx\":{:.3},\"guess_dy\":{:.3},\"eps_log\":{:.2},\"seed\":{}}}",
+        g.n_tiles,
+        g.blocks,
+        g.hug,
+        g.rough,
+        g.corner_frac,
+        g.guess_dx,
+        g.guess_dy,
+        g.eps_log,
+        g.seed
     )
 }
 
@@ -296,34 +380,143 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0x5EED_5EED_u64);
 
+    let mode = std::env::var("WCET_SEARCH_MODE").unwrap_or_else(|_| "hill".into());
+    let fit_time = std::env::var("WCET_SEARCH_FITNESS").is_ok_and(|v| v == "time");
+    let json_path = std::env::var("WCET_SEARCH_JSON").ok();
+    let pareto_dir = std::env::var("WCET_SEARCH_PARETO_DIR").ok();
+    let mut rec = Recorder::new();
+
     let mut rng = Lcg(seed);
-    let mut pop: Vec<(Genome, Fitness)> = Genome::seed_population(&mut rng, pop_n)
+    // The random-search baseline must not inherit the hand-built domain-knowledge seeds --
+    // its initial population is fully random (budget stays identical).
+    let initial = if mode == "random" {
+        (0..pop_n)
+            .map(|_| Genome::random(&mut rng))
+            .collect::<Vec<_>>()
+    } else {
+        Genome::seed_population(&mut rng, pop_n)
+    };
+    let mut pop: Vec<(Genome, Fitness, u128)> = initial
         .into_iter()
         .map(|g| {
-            let f = evaluate(&g.build());
-            (g, f)
+            let (f, ns) = evaluate(&g.build());
+            rec.record(&g, f);
+            (g, f, ns)
         })
         .collect();
-    println!("wcet_search: pop={pop_n} gens={gens} seed={seed:#x} (fitness: iter, Σnbr, kd)");
-
-    for generation in 0..gens {
-        for i in 0..pop.len() {
-            let cand = pop[i].0.mutate(&mut rng);
-            let f = evaluate(&cand.build());
-            if f > pop[i].1 {
-                pop[i] = (cand, f);
-            }
+    println!(
+        "wcet_search: mode={mode} pop={pop_n} gens={gens} seed={seed:#x} (fitness: {})",
+        if fit_time {
+            "align wall time"
+        } else {
+            "iter, Σnbr, kd"
         }
-        let best = pop.iter().map(|(_, f)| *f).max().unwrap();
-        println!(
-            "  gen {generation:>3}: best iter={} Σnbr={} kd={}",
-            best.0, best.1, best.2
-        );
+    );
+
+    if mode == "random" {
+        // Budget-matched random-search baseline: gens x pop fresh genomes.
+        for generation in 0..gens {
+            for i in 0..pop.len() {
+                let cand = Genome::random(&mut rng);
+                let (f, ns) = evaluate(&cand.build());
+                rec.record(&cand, f);
+                let better = if fit_time {
+                    ns > pop[i].2
+                } else {
+                    f > pop[i].1
+                };
+                if better {
+                    pop[i] = (cand, f, ns);
+                }
+            }
+            let best = pop.iter().map(|(_, f, _)| *f).max().unwrap();
+            println!(
+                "  gen {generation:>3}: best iter={} Σnbr={} kd={}",
+                best.0, best.1, best.2
+            );
+        }
+    } else {
+        for generation in 0..gens {
+            for i in 0..pop.len() {
+                let cand = pop[i].0.mutate(&mut rng);
+                let (f, ns) = evaluate(&cand.build());
+                rec.record(&cand, f);
+                let better = if fit_time {
+                    ns > pop[i].2
+                } else {
+                    f > pop[i].1
+                };
+                if better {
+                    pop[i] = (cand, f, ns);
+                }
+            }
+            let best = pop.iter().map(|(_, f, _)| *f).max().unwrap();
+            println!(
+                "  gen {generation:>3}: best iter={} Σnbr={} kd={}",
+                best.0, best.1, best.2
+            );
+        }
     }
 
-    pop.sort_by_key(|(_, f)| std::cmp::Reverse(*f));
+    if let Some(dir) = &pareto_dir {
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).expect("create pareto dir");
+        let mut frontier = rec.archive.clone();
+        frontier.sort_by_key(|(_, f)| std::cmp::Reverse(*f));
+        println!(
+            "pareto archive ({} non-dominated) -> {}",
+            frontier.len(),
+            dir.display()
+        );
+        for (i, (g, f)) in frontier.iter().enumerate() {
+            let path = dir.join(format!("pareto_{i:02}.ndtfix"));
+            g.build().write(&path).expect("write pareto fixture");
+            println!("  pareto_{i:02}: iter={} Σnbr={} kd={}", f.0, f.1, f.2);
+        }
+    }
+
+    if let Some(path) = &json_path {
+        let best = rec.best.unwrap_or((0, 0, 0));
+        let trace: Vec<String> = rec
+            .trace
+            .iter()
+            .map(|(e, f)| format!("[{},{},{},{}]", e, f.0, f.1, f.2))
+            .collect();
+        let archive: Vec<String> = rec
+            .archive
+            .iter()
+            .map(|(g, f)| {
+                format!(
+                    "{{\"iter\":{},\"nbr\":{},\"kd\":{},\"genome\":{}}}",
+                    f.0,
+                    f.1,
+                    f.2,
+                    genome_json(g)
+                )
+            })
+            .collect();
+        let champ_ns = pop.iter().map(|(_, _, ns)| *ns).max().unwrap_or(0);
+        let json = format!(
+            "{{\n \"mode\": \"{mode}\",\n \"fitness\": \"{}\",\n \"seed\": {seed},\n \
+             \"budget\": {},\n \"best\": {{\"iter\": {}, \"nbr\": {}, \"kd\": {}}},\n \
+             \"saturation_eval\": {},\n \"champion_align_ns\": {champ_ns},\n \
+             \"trace\": [{}],\n \"pareto\": [{}]\n}}\n",
+            if fit_time { "time" } else { "counters" },
+            rec.evals,
+            best.0,
+            best.1,
+            best.2,
+            rec.saturation_eval(),
+            trace.join(","),
+            archive.join(",")
+        );
+        std::fs::write(path, json).expect("write WCET_SEARCH_JSON");
+        println!("summary -> {path}");
+    }
+
+    pop.sort_by_key(|(_, f, _)| std::cmp::Reverse(*f));
     println!("top-{top_k} frozen -> {}", out_dir.display());
-    for (rank, (g, f)) in pop.iter().take(top_k).enumerate() {
+    for (rank, (g, f, _)) in pop.iter().take(top_k).enumerate() {
         let fx = g.build();
         let path = out_dir.join(format!("search_{rank:02}.ndtfix"));
         fx.write(&path).expect("write fixture");
