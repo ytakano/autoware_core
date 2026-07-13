@@ -175,8 +175,14 @@ def irqs_allowed_on(cpu):
 
 
 def verify_environment(cfg):
-    """Return (failures, warnings, snapshot). Failures abort a real run."""
+    """Return (failures, warnings, snapshot). Failures abort a real run.
+
+    Profile B (controlled): isolation/SMT-off/IRQ-moved/pin expected.
+    Profile A (production-representative): performance governor only; isolation must be
+    ABSENT (CFS + normal system interference are the object of measurement, not noise).
+    """
     cpu = cfg["benchmark_cpu"]
+    profile_a = cfg.get("profile") == "A"
     failures, warnings = [], []
     snap = {}
 
@@ -198,7 +204,13 @@ def verify_environment(cfg):
                 iso_set.update(range(int(lo), int(hi) + 1))
         elif part.isdigit():
             iso_set.add(int(part))
-    if cpu not in iso_set:
+    if profile_a:
+        if iso_set:
+            failures.append(
+                f"CPU isolation present ({isolated}) -- Profile A requires the normal CFS "
+                "environment (remove isolcpus/nohz_full/rcu_nocbs from GRUB and reboot)"
+            )
+    elif cpu not in iso_set:
         warnings.append(
             f"cpu{cpu} not in /sys/devices/system/cpu/isolated ('{isolated or 'empty'}'); "
             "use isolcpus= or cset shield, or record the alternative mechanism in notes"
@@ -218,16 +230,23 @@ def verify_environment(cfg):
         online = read_sys(cpu_sys(sib, "online"))
         if online == "0":
             snap[f"smt_sibling_{sib}"] = "offline"
+            if profile_a:
+                warnings.append(
+                    f"SMT sibling cpu{sib} is offline under Profile A "
+                    f"(production keeps SMT on; fix: echo 1 | sudo tee {cpu_sys(sib, 'online')})"
+                )
         else:
-            warnings.append(
-                f"SMT sibling cpu{sib} of cpu{cpu} is online "
-                f"(fix: echo 0 | sudo tee {cpu_sys(sib, 'online')}; or keep it idle and note it)"
-            )
             snap[f"smt_sibling_{sib}"] = "online"
+            if not profile_a:
+                warnings.append(
+                    f"SMT sibling cpu{sib} of cpu{cpu} is online "
+                    f"(fix: echo 0 | sudo tee {cpu_sys(sib, 'online')}; "
+                    "or keep it idle and note it)"
+                )
 
     n_irqs = irqs_allowed_on(cpu)
     snap["irqs_allowed_on_benchmark_cpu"] = n_irqs
-    if n_irqs is not None and n_irqs > 8:
+    if not profile_a and n_irqs is not None and n_irqs > 8:
         warnings.append(
             f"{n_irqs} IRQs may fire on cpu{cpu} "
             "(fix: move IRQ affinities away via /proc/irq/*/smp_affinity_list)"
@@ -245,7 +264,8 @@ def verify_environment(cfg):
     snap["scaling_min_khz"] = int(fmin_s) if fmin_s and fmin_s.isdigit() else None
     snap["scaling_max_khz"] = int(fmax_s) if fmax_s and fmax_s.isdigit() else None
     nominal = cfg["abort"].get("nominal_khz")
-    if nominal and (snap["scaling_min_khz"] != nominal or snap["scaling_max_khz"] != nominal):
+    if (not profile_a and nominal
+            and (snap["scaling_min_khz"] != nominal or snap["scaling_max_khz"] != nominal)):
         warnings.append(
             f"frequency not pinned at nominal {nominal} kHz "
             f"(min={snap['scaling_min_khz']}, max={snap['scaling_max_khz']}; "
@@ -360,7 +380,8 @@ def build_manifest(cfg, root, session_id, series, cell=None, env_snap=None, env_
         "governor": (env_snap or {}).get("governor"),
         "isolated_cpus": (env_snap or {}).get("isolated_cpus"),
         "benchmark_cpu": cfg["benchmark_cpu"],
-        "affinity_mask": f"taskset -c {cfg['benchmark_cpu']}",
+        "affinity_mask": ("none (CFS placement)" if cfg.get("profile") == "A"
+                          else f"taskset -c {cfg['benchmark_cpu']}"),
         "irq_configuration": {
             "irqs_allowed_on_benchmark_cpu":
                 (env_snap or {}).get("irqs_allowed_on_benchmark_cpu")},
@@ -560,8 +581,10 @@ def cmd_run(cfg, args):
             "WCET_ENGINE": cell["engine"],
             "WCET_EVICT_BYTES": str(cell["evict_bytes"]),
         })
-        argv = ["taskset", "-c", str(cfg["benchmark_cpu"]), str(exe),
-                "--fixture", str(out_json), str(fixture_path)]
+        # Profile A: no pinning -- the production node runs under normal CFS placement.
+        pin = ([] if cfg.get("profile") == "A"
+               else ["taskset", "-c", str(cfg["benchmark_cpu"])])
+        argv = pin + [str(exe), "--fixture", str(out_json), str(fixture_path)]
         print(f"[{i}/{len(cells)}] {cell['series']} {cell['fixture']} {cell['engine']} "
               f"n={cell['samples']}")
         # Poll the effective frequency + temperatures while the replay runs (policy:
@@ -590,6 +613,16 @@ def cmd_run(cfg, args):
                 problems.append(
                     f"{cell['series']}/{cell['fixture']}: calibration spin x{slowdown:.2f} "
                     "slower than the session baseline -- throttling?")
+        demoted = []
+        if cfg.get("profile") == "A" and problems:
+            # Profile A measures the interference; frequency/calibration excursions are data,
+            # not aborts (the thermal ceiling and replay failures below still abort).
+            keep = []
+            for p in problems:
+                (keep if "temperature" in p else demoted).append(p)
+            for p in demoted:
+                print(f"NOTE (profile A, recorded): {p}", file=sys.stderr)
+            problems = keep
         if proc_rc != 0:
             problems.append(f"replay exited {proc_rc}")
         freq_samples = [f for f, _ in during if f]
@@ -613,6 +646,7 @@ def cmd_run(cfg, args):
                 if (calib_base_ns and calib_ns) else None,
             },
             "problems": problems,
+            "profile_a_recorded_excursions": demoted,
             "manifest": build_manifest(cfg, root, session_id, cell["series"],
                                        cell=f"{cell['fixture']}__{cell['engine']}",
                                        env_snap=snap0, env_mode=env_mode),

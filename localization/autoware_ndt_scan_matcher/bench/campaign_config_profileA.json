@@ -1,0 +1,39 @@
+{
+ "profile": "A",
+ "benchmark_cpu": 2,
+ "corunner_cpu": 4,
+ "fixtures_dir": "fixtures",
+ "tiers": {
+  "bridge": {
+   "fixtures": [
+    "search_00",
+    "legal_worst",
+    "legal_osc",
+    "real_slowest",
+    "real_median"
+   ],
+   "samples": 100
+  }
+ },
+ "warmup": 10,
+ "cold": {
+  "samples": 0,
+  "warmup": 0,
+  "evict_mib": 0
+ },
+ "corunner": {
+  "fixtures": [],
+  "modes": [],
+  "samples": 0,
+  "mib": {}
+ },
+ "abort": {
+  "min_freq_frac": 0.9,
+  "nominal_khz": 3200000,
+  "max_temp_c": 85,
+  "max_calib_slowdown": 1.1
+ },
+ "sessions": 1,
+ "output_dir": "campaign_runs/profileA",
+ "note": "Profile A (production-representative) bridge leg per plan/ndt_timing_measurement_policy.md: normal CFS, no isolation, no pinning, SMT on, performance governor; frequency kept pinned at 3.2 GHz so the A/B bridge ratios isolate scheduling/interference, not speed-regime changes. Offline fixture replay (A2 staging); the full-ROS-node run remains the A1 stretch."
+}

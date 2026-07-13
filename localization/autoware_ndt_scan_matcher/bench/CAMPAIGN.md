@@ -1,4 +1,4 @@
-# WCET Measurement Campaign (Profile B)
+# WCET Measurement Campaign (Profiles A/B)
 
 Orchestrates the controlled-engine measurement campaign of
 `plan/ndt_timing_measurement_policy.md` around `ndt_bench_replay --fixture`:
@@ -60,3 +60,21 @@ plus the existing `WCET_ITERS` / `WCET_WARMUP`.
 Dev smoke test (container, unprepared host): `run --allow-env-mismatch --max-cells N` with a
 reduced config — the override is recorded in the manifest as `env_check: "overridden"` and
 such data must never feed the paper.
+
+## Profile A (production-representative) and the bridge experiment
+
+`campaign_config_profileA.json` sets `"profile": "A"`: verify-env then *inverts* the
+isolation checks (isolation must be **absent**, SMT online; a present `isolcpus` is a
+failure), cells run **unpinned** under normal CFS, and frequency/calibration excursions are
+recorded in the `.cell.json` sidecar (`profile_a_recorded_excursions`) instead of aborting
+(the thermal ceiling and replay failures still abort). The manifest carries
+`measurement_profile: "A"` and `affinity_mask: none (CFS placement)`. Keep the same
+frequency pin as Profile B so A/B ratios isolate scheduling, not speed regimes.
+
+The bridge legs (policy: Bridge Experiment) are assembled into `paper/data/bridge.json` by
+`paper/scripts/assemble_bridge.py <b_leg_warm.json>`; the two real-drive inputs are frozen
+from the archived capture via the engine example
+(`wcet_frame --freeze <capture_dir> <seq> <guess_track.bin> <out.ndtfix>`; capture archived
+at `~/autoware_ista_data/`). Watch for transient EC/firmware clamps around the 4.65M-point
+map builds of the real fixtures — the calibration guard aborts the series; wait until the
+fixed-work spin returns to the session baseline and re-run (a gated retry loop suffices).
