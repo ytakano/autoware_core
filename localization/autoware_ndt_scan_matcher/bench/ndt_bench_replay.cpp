@@ -273,6 +273,7 @@ struct TraceSnap
   uint64_t line_search_loops = 0;  // C++ only
   uint64_t kd_a = 0;               // C++: FLANN distance evals | Rust: own kd counter
   uint64_t kd_b = 0;               // C++: FLANN accum_dist evals | Rust: 0
+  uint64_t nbr_total = 0;          // Sigma_nbr over stored passes (equal-work magnitude)
   bool poisoned = false;
   size_t stored = 0;
   ndt_trace::PassTrace pass[ndt_trace::kMaxPasses];
@@ -288,7 +289,10 @@ TraceSnap snap_cpp()
   out.kd_b = s.kd_accum_total;
   out.poisoned = s.poisoned;
   out.stored = static_cast<size_t>(std::min<uint64_t>(s.passes, ndt_trace::kMaxPasses));
-  for (size_t i = 0; i < out.stored; ++i) out.pass[i] = s.pass[i];
+  for (size_t i = 0; i < out.stored; ++i) {
+    out.pass[i] = s.pass[i];
+    out.nbr_total += s.pass[i].neighbors;
+  }
   return out;
 }
 
@@ -312,6 +316,7 @@ TraceSnap snap_rust(struct AwNdtEngine * eng)
     out.pass[i].grad_hash = buf[i].grad_hash;
     out.pass[i].hess_hash = buf[i].hess_hash;
     out.kd_a += buf[i].kd_nodes;
+    out.nbr_total += buf[i].neighbors;
   }
   return out;
 }
@@ -396,13 +401,14 @@ void write_trace_json(FILE * f, const TraceSnap & c, const TraceSnap & r, const 
     "\"structural_match\": %s, \"score_match\": %s, \"grad_match\": %s, "
     "\"hess_match\": %s, \"first_div_pass\": %d, \"first_div_leg\": \"%s\", "
     "\"line_search_loops\": %llu, \"cpp_kd_dist\": %llu, \"cpp_kd_accum\": %llu, "
-    "\"rust_kd\": %llu, \"score_max_ulp\": %llu }",
+    "\"rust_kd\": %llu, \"score_max_ulp\": %llu, \"cpp_nbr\": %llu, \"rust_nbr\": %llu }",
     t.valid ? "true" : "false", static_cast<unsigned long long>(c.passes),
     static_cast<unsigned long long>(r.passes), t.structural ? "true" : "false",
     t.score ? "true" : "false", t.grad ? "true" : "false", t.hess ? "true" : "false",
     t.first_div_pass, t.first_div_leg, static_cast<unsigned long long>(c.line_search_loops),
     static_cast<unsigned long long>(c.kd_a), static_cast<unsigned long long>(c.kd_b),
-    static_cast<unsigned long long>(r.kd_a), static_cast<unsigned long long>(t.score_max_ulp));
+    static_cast<unsigned long long>(r.kd_a), static_cast<unsigned long long>(t.score_max_ulp),
+    static_cast<unsigned long long>(c.nbr_total), static_cast<unsigned long long>(r.nbr_total));
 }
 
 // Startup self-test: the C++ FNV-1a mirror must reproduce the Rust crate's shared vectors
