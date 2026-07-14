@@ -280,6 +280,14 @@ fn cache_hostile() -> Fixture {
 /// (d) Tight clusters (σ ≈ 0.05 → icov ≈ 360 per axis) with the source on a ~1.99 m shell:
 /// `exp(-d²·icov/2)` lands around e^{-710..-745} — the f64 subnormal band (FP-assist hazard).
 fn subnormal() -> Fixture {
+    subnormal_shell(1.99)
+}
+
+/// A/B control for `subnormal` (C5, plan/paper_fix2.md): the identical geometry with the source
+/// on a `shell`-metre ring. At 1.99 m the kernel `exp` lands in the f64 subnormal band; at
+/// 1.69 m every result leaves that band, all else equal — the controlled null test that
+/// isolates whether subnormal operands (vs. the per-point search overhead) drive the timing.
+fn subnormal_shell(shell: f32) -> Fixture {
     let mut rng = Lcg(0x5B40_2417);
     let mut map = Vec::new();
     let n = 10_i32;
@@ -296,14 +304,14 @@ fn subnormal() -> Fixture {
             }
         }
     }
-    // Source on a 1.99 m ring around each cluster (still inside the 2.0 m search radius).
+    // Source on a `shell` m ring around each cluster (still inside the 2.0 m search radius).
     let mut src = Vec::new();
     for i in 0..1000_i32 {
         let k = i % (n * n);
         let cx = (k % n) as f32 * 4.0 + 1.0;
         let cy = (k / n) as f32 * 4.0 + 1.0;
         let ang = i as f32 * 0.618;
-        src.push([cx + 1.99 * ang.cos(), cy + 1.99 * ang.sin(), 1.0]);
+        src.push([cx + shell * ang.cos(), cy + shell * ang.sin(), 1.0]);
     }
     Fixture {
         tiles: vec![map],
@@ -380,11 +388,14 @@ fn main() {
     );
     std::fs::create_dir_all(&out_dir).expect("create fixture dir");
 
-    let fixtures: [(&str, Fixture); 5] = [
+    let fixtures: [(&str, Fixture); 6] = [
         ("dense_neighbors", dense_neighbors()),
         ("max_iterations", max_iterations()),
         ("cache_hostile", cache_hostile()),
         ("subnormal", subnormal()),
+        // A/B control for `subnormal`: identical geometry, source shell out of the f64
+        // subnormal band (1.69 m vs 1.99 m); the C5 null test (plan/paper_fix2.md).
+        ("subnormal_ctrl", subnormal_shell(1.69)),
         ("legal_worst", legal_worst()),
     ];
     println!("adversarial WCET fixtures -> {}", out_dir.display());
