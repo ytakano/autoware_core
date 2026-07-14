@@ -2,7 +2,8 @@
 # C8 parallel-feasibility campaign: {search_00, legal_worst, legal_osc} x k{1,2,4} x {cpp,rust},
 # each engine in a SEPARATE process invocation (avoids libgomp pinning the main thread and
 # contaminating a subsequent rayon run). Isolated cores 2,4,6,8; per-worker pinning: OpenMP via
-# GOMP_CPU_AFFINITY, rayon via NDT_PIN_RAYON_WORKERS (+init_thread_pool). Randomized cell order,
+# GOMP_CPU_AFFINITY, rayon via NDT_RAYON_CPU_AFFINITY (the equivalent env var; +init_thread_pool).
+# Randomized cell order,
 # bracketed by a fixed-work calibration spin (throttle guard).
 set -u
 B=/autoware_workspace/build/autoware_ndt_scan_matcher
@@ -24,7 +25,7 @@ cell() { # fixture k engine
   local fx=$1 k=$2 e=$3 mask aff
   case $k in 1) mask=2; aff="2";; 2) mask=2,4; aff="2 4";; 4) mask=2,4,6,8; aff="2 4 6 8";; esac
   if [ "$e" = rust ]; then
-    RAYON_NUM_THREADS=$k NDT_PIN_RAYON_WORKERS=1 WCET_ENGINE=rust \
+    RAYON_NUM_THREADS=$k NDT_RAYON_CPU_AFFINITY="$aff" WCET_ENGINE=rust \
       WCET_ITERS=$ITERS WCET_WARMUP=$WARMUP WCET_THREADS=$k \
       taskset -c $mask "$B/ndt_bench_replay" --fixture "$OUT/${fx}_k${k}_${e}.json" \
         "$PKG/bench/fixtures/${fx}.ndtfix" >>"$OUT/run.log" 2>&1
