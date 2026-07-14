@@ -33,7 +33,7 @@ mt = ["dep:awkernel_sync"]
 # identical to serial (per-point-local contributions reduced in point-index order), so it is a pure
 # performance option — the serial backend stays the predictable WCET baseline. Note `parallel`
 # implies `std`, so `mt` + `parallel` resolves to the std backend (mt is ignored).
-parallel = ["std", "dep:rayon"]
+parallel = ["std", "dep:rayon", "dep:libc"]
 # `wcet-count`: deterministic algorithmic-cost counters on the align path (iterations, neighbors,
 # kd-tree nodes visited) — the worst-input search fitness of plan/ndt_wcet.md. Counters are valid
 # for the SERIAL backend (the WCET baseline); compiled out entirely when the feature is off, so the
@@ -66,6 +66,11 @@ nalgebra = { version = "0.33", default-features = false, features = ["libm"] }
 # Data-parallel reduction backend (the `parallel` feature; std-only). Order-preserving
 # `collect_into_vec` keeps the parallel reduce bit-identical to serial.
 rayon = { version = "1", optional = true }
+# Per-worker CPU pinning for the `parallel` pool (Linux `sched_setaffinity`), enabled at
+# runtime by NDT_PIN_RAYON_WORKERS. Needed so an isolated-core deployment (isolcpus disables
+# the scheduler's auto load-balancer) spreads rayon workers one-per-core, as OpenMP does with
+# GOMP_CPU_AFFINITY. Pulled in only by the std-only `parallel` feature.
+libc = { version = "0.2", optional = true }
 # Lock-free engine-state double-buffer (the `std` feature). `load()` is lock-free — the read
 # (align) path takes no lock; map-update publishes a fresh state with an atomic store.
 arc-swap = { version = "1", optional = true }

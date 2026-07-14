@@ -567,6 +567,7 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "awkernel_sync",
+ "libc",
  "libm",
  "nalgebra",
  "proptest",

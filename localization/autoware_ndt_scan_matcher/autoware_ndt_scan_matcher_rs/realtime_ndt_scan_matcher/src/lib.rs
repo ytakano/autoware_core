@@ -140,12 +140,67 @@ pub fn add(left: u64, right: u64) -> u64 {
 #[cfg(feature = "parallel")]
 #[must_use]
 pub fn init_thread_pool(num_threads: usize) -> bool {
-    num_threads != 0
-        && rayon::ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build_global()
-            .is_ok()
+    if num_threads == 0 {
+        return false;
+    }
+    // Opt-in per-worker CPU pinning (NDT_PIN_RAYON_WORKERS): worker `idx` is pinned to the
+    // idx-th CPU allowed in the process's current affinity mask. On isolated cores
+    // (isolcpus disables the scheduler's automatic load balancing) unpinned rayon workers
+    // pile onto a single core; pinning spreads them one-per-core, matching how OpenMP is
+    // deployed with GOMP_CPU_AFFINITY. Default (unset) preserves the prior behavior.
+    let pin = std::env::var_os("NDT_PIN_RAYON_WORKERS").is_some();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .start_handler(move |idx| {
+            if pin {
+                pin_worker_to_cpuset(idx);
+            }
+        })
+        .build_global()
+        .is_ok()
 }
+
+/// Pin the calling (rayon worker) thread to the `idx`-th CPU allowed in the process's current
+/// affinity mask. Best-effort: any failure leaves the thread unpinned (the scheduler default),
+/// which is safe. Linux-only; a no-op elsewhere.
+#[cfg(all(feature = "parallel", target_os = "linux"))]
+#[expect(
+    unsafe_code,
+    reason = "libc sched_*affinity + CPU_* macros; best-effort worker pinning at pool init"
+)]
+fn pin_worker_to_cpuset(idx: usize) {
+    // SAFETY: `cpu_set_t` is a plain bitmask POD; `sched_getaffinity`/`sched_setaffinity` take a
+    // valid pointer and the struct size per sched_setaffinity(2), and `CPU_ISSET`/`CPU_SET`
+    // index the local set. No Rust aliasing or lifetime invariant crosses the C boundary.
+    unsafe {
+        let sz = core::mem::size_of::<libc::cpu_set_t>();
+        let mut allowed: libc::cpu_set_t = core::mem::zeroed();
+        if libc::sched_getaffinity(0, sz, &raw mut allowed) != 0 {
+            return;
+        }
+        #[expect(
+            clippy::as_conversions,
+            reason = "libc::CPU_SETSIZE is a small positive c_int bound"
+        )]
+        let setsize = libc::CPU_SETSIZE as usize;
+        let mut seen: usize = 0;
+        for cpu in 0..setsize {
+            if libc::CPU_ISSET(cpu, &allowed) {
+                if seen == idx {
+                    let mut one: libc::cpu_set_t = core::mem::zeroed();
+                    libc::CPU_SET(cpu, &mut one);
+                    let _ = libc::sched_setaffinity(0, sz, &raw const one);
+                    return;
+                }
+                seen = seen.saturating_add(1);
+            }
+        }
+    }
+}
+
+/// Non-Linux fallback: pinning is unavailable, so this is a no-op.
+#[cfg(all(feature = "parallel", not(target_os = "linux")))]
+fn pin_worker_to_cpuset(_idx: usize) {}
 
 #[cfg(test)]
 mod tests {

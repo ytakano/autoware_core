@@ -82,6 +82,16 @@ namespace
 using Ndt = pclomp::MultiGridNormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ>;
 using Clock = std::chrono::steady_clock;
 
+// C8 parallel-feasibility cells: engine thread count for BOTH engines in fixture mode
+// (default 1 = the serial baseline every other experiment uses). Pool pinning is the
+// driver's job (taskset + GOMP_CPU_AFFINITY / RAYON_NUM_THREADS).
+int wcet_threads()
+{
+  const char * e = std::getenv("WCET_THREADS");
+  const int k = (e != nullptr) ? std::atoi(e) : 1;
+  return k > 0 ? k : 1;
+}
+
 // Three orthogonal planes over [0, length] at `interval` spacing — the standard-sequence fixture
 // geometry. Fills both a PCL cloud (C++ engine) and the flat xyz buffer (Rust FFI) from identical
 // points.
@@ -431,6 +441,13 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
 {
   const int iters = std::getenv("WCET_ITERS") ? std::atoi(std::getenv("WCET_ITERS")) : 100;
   const int warmup = std::getenv("WCET_WARMUP") ? std::atoi(std::getenv("WCET_WARMUP")) : 10;
+  // C8: size the Rust rayon pool exactly as the production node does (node_handle.rs calls
+  // init_thread_pool). The engine C-ABI does not size it implicitly, so a bare
+  // RAYON_NUM_THREADS leaves the global pool's work on the calling thread; this mirrors the
+  // deployed configuration. (C++ OpenMP is sized by params_.num_threads / OMP_NUM_THREADS.)
+  if (wcet_threads() > 1) {
+    autoware_ndt_scan_matcher_rs_init_thread_pool(static_cast<size_t>(wcet_threads()));
+  }
   // Campaign controls (plan/ndt_timing_measurement_policy.md): engine selection so the
   // orchestrator can randomize C++/Rust order across invocations, and between-sample cache
   // eviction for the cold series. Defaults preserve the original both-engines/warm behavior.
@@ -458,7 +475,7 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
   std::fprintf(f, "  \"meta\": {\n");
   std::fprintf(f, "    \"iters\": %d,\n", iters);
   std::fprintf(f, "    \"warmup\": %d,\n", warmup);
-  std::fprintf(f, "    \"num_threads\": 1,\n");
+  std::fprintf(f, "    \"num_threads\": %d,\n", wcet_threads());
   std::fprintf(f, "    \"clock\": \"steady_clock\",\n");
   std::fprintf(f, "    \"unit\": \"ms\",\n");
   std::fprintf(
@@ -515,7 +532,7 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
       params.resolution = static_cast<float>(fx.resolution);
       params.max_iterations = fx.max_iterations;
       params.search_method = pclomp::KDTREE;
-      params.num_threads = 1;  // serial baseline (matches the fixture contract)
+      params.num_threads = wcet_threads();  // serial baseline unless WCET_THREADS set (C8)
       params.regularization_scale_factor = 0.0F;
       params.use_line_search = false;
 
@@ -563,7 +580,7 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
         autoware_ndt_scan_matcher_rs_ndt_engine_new(fx.resolution, 6, 0.01);
       autoware_ndt_scan_matcher_rs_ndt_engine_set_params(
         eng, fx.trans_epsilon, fx.step_size, fx.resolution, fx.max_iterations, fx.outlier_ratio,
-        1);
+        wcet_threads());
       for (size_t t = 0; t < fx.tiles.size(); ++t) {
         autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
           eng, fx.tiles[t].data(), fx.tiles[t].size() / 3, t);
