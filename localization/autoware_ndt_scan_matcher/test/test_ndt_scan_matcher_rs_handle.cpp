@@ -30,6 +30,8 @@ namespace
 AwNdtParams make_minimal_params(const std::vector<double> & ox, const std::vector<double> & oy)
 {
   AwNdtParams p{};
+  p.max_source_points = 2000;
+  p.max_active_leaves = 418000;
   p.resolution = 2.0;
   p.min_points = 6;
   p.eig_mult = 0.01;

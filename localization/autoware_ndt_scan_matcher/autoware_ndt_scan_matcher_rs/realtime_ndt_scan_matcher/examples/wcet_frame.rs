@@ -77,12 +77,12 @@ impl Stats {
     ) -> Self {
         // Warmup (JIT-free, but page/cache/branch warmup + buffer growth).
         for _ in 0..(frames / 20).clamp(10, 100) {
-            align(map, source, guess, params, ws, out);
+            align(map, source, guess, params, ws, out).expect("warmup align");
         }
         let mut nanos: Vec<u128> = Vec::with_capacity(frames);
         for _ in 0..frames {
             let t = Instant::now();
-            align(map, source, guess, params, ws, out);
+            align(map, source, guess, params, ws, out).expect("timed align");
             nanos.push(t.elapsed().as_nanos());
         }
         nanos.sort_unstable();
@@ -127,7 +127,7 @@ fn run_synthetic() {
 
     let mut map = VoxelGridMap::new([2.0, 2.0, 2.0], 6, 0.01);
     map.add_target(&map_points, 0);
-    map.create_kdtree();
+    map.create_kdtree().expect("build synthetic map");
 
     let params = NdtParams {
         trans_epsilon: 0.01,
@@ -139,8 +139,9 @@ fn run_synthetic() {
         num_threads: 1,
     };
     let guess = Matrix4::identity();
-    let mut ws = AlignWorkspace::with_capacity(source.len());
-    let mut out = AlignResult::default();
+    let mut ws =
+        AlignWorkspace::try_with_capacity(source.len()).expect("reserve synthetic workspace");
+    let mut out = AlignResult::try_with_capacity(30).expect("reserve synthetic result");
 
     let s = Stats::measure(frames, &map, &source, &guess, &params, &mut ws, &mut out);
     let n = s.nanos.len();
@@ -174,9 +175,11 @@ fn run_fixtures(paths: &[String]) {
         for (id, tile) in fx.tiles.iter().enumerate() {
             map.add_target(tile, id as u64);
         }
-        map.create_kdtree();
-        let mut ws = AlignWorkspace::with_capacity(fx.source.len());
-        let mut out = AlignResult::default();
+        map.create_kdtree().expect("build fixture map");
+        let mut ws =
+            AlignWorkspace::try_with_capacity(fx.source.len()).expect("reserve fixture workspace");
+        let mut out = AlignResult::try_with_capacity(fx.params.max_iterations as usize)
+            .expect("reserve fixture result");
         let s = Stats::measure(
             frames, &map, &fx.source, &fx.guess, &fx.params, &mut ws, &mut out,
         );
@@ -339,8 +342,13 @@ fn run_capture(dir: &std::path::Path) {
     use realtime_ndt_scan_matcher::capture;
 
     let params = capture::read_params(dir).expect("read params.bin");
-    let frame_paths = capture::list_frames(dir).expect("list frames");
+    let mut frame_paths = capture::list_frames(dir).expect("list frames");
     let repeats = frames_from_env(5);
+    if let Ok(limit) = std::env::var("WCET_CAPTURE_LIMIT")
+        && let Ok(limit) = limit.parse::<usize>()
+    {
+        frame_paths.truncate(limit);
+    }
     // Chain mode (WCET_CHAIN=1): guess = the previous frame's result pose (frame 0 from
     // WCET_CHAIN_SEED="x,y,z,qx,qy,qz,qw") -- deterministic offline re-localization replay.
     let chain = std::env::var_os("WCET_CHAIN").is_some();
@@ -378,9 +386,11 @@ fn run_capture(dir: &std::path::Path) {
 
     let mut cur_ids: Option<Vec<Vec<u8>>> = None;
     let mut map = VoxelGridMap::new([params.resolution; 3], 6, 0.01);
-    let mut ws = AlignWorkspace::new();
-    let mut out = AlignResult::default();
+    let mut out = AlignResult::try_with_capacity(params.max_iterations as usize)
+        .expect("reserve capture result");
     let mut epochs = 0_u32;
+    let mut neighbor_limit_frames = 0_usize;
+    let mut neighbor_limit_queries = 0_u64;
 
     for (fi, fp) in frame_paths.iter().enumerate() {
         let fr = capture::read_frame(fp).expect("read frame");
@@ -391,17 +401,25 @@ fn run_capture(dir: &std::path::Path) {
                 let tile = capture::read_tile(dir, &capture::hex_id(id)).expect("read tile");
                 map.add_target(&tile, i as u64);
             }
-            map.create_kdtree();
+            map.create_kdtree().expect("build capture map");
             cur_ids = Some(fr.ids.clone());
             epochs += 1;
         }
         let guess = if chain { chain_guess } else { fr.guess };
         // Timing: median of `repeats` runs (first run also yields the counters).
+        let mut ws =
+            AlignWorkspace::try_with_capacity(fr.source.len()).expect("reserve capture workspace");
         let mut times: Vec<u128> = Vec::with_capacity(repeats);
+        let mut diagnostics = realtime_ndt_scan_matcher::ndt::AlignDiagnostics::default();
         for _ in 0..repeats {
             let t = Instant::now();
-            align(&map, &fr.source, &guess, &params, &mut ws, &mut out);
+            diagnostics =
+                align(&map, &fr.source, &guess, &params, &mut ws, &mut out).expect("capture align");
             times.push(t.elapsed().as_nanos());
+        }
+        if diagnostics.neighbor_limit_exceeded {
+            neighbor_limit_frames += 1;
+            neighbor_limit_queries += diagnostics.neighbor_limit_exceeded_queries;
         }
         if chain {
             // Constant-velocity extrapolation (the EKF prediction step's stand-in):
@@ -434,10 +452,12 @@ fn run_capture(dir: &std::path::Path) {
         first = false;
         let _ = write!(
             json,
-            "    {{ \"seq\": {fi}, \"n_source\": {}, \"n_tiles\": {}, \"iteration_num\": {}, \
+            "    {{ \"seq\": {fi}, \"n_source\": {}, \"n_tiles\": {}, \"n_leaves\": {}, \
+             \"iteration_num\": {}, \
              \"ms\": {med_ms:.4}",
             fr.source.len(),
             fr.ids.len(),
+            map.num_leaves(),
             out.iteration_num
         );
         #[cfg(feature = "wcet-count")]
@@ -458,6 +478,10 @@ fn run_capture(dir: &std::path::Path) {
     }
     json.push_str("\n  ]\n}\n");
     println!("epochs: {epochs}");
+    println!(
+        "neighbor-limit diagnostics: {neighbor_limit_frames} frames, \
+         {neighbor_limit_queries} queries"
+    );
     if let Ok(path) = std::env::var("WCET_JSON") {
         std::fs::write(&path, json).expect("write WCET_JSON");
         eprintln!("wcet_frame: wrote {path}");

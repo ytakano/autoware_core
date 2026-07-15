@@ -22,6 +22,11 @@
 //! into a Rust-owned `MapDelta` via [`autoware_ndt_scan_matcher_rs_map_delta_add`] /
 //! `..._map_delta_remove`. The `async` `load` is therefore ready after one poll, so the FFI drives it
 //! with a trivial noop-waker `block_on` — "callbacks `block_on` the async node fns" with no real suspend.
+//!
+//! Map publication is staged. If the resulting active map exceeds the engine's configured `Lmax`,
+//! or tree construction otherwise fails, the staged state is discarded and the previously
+//! published map remains available. The legacy void C ABI below does not report that failure to its
+//! caller; status-returning object-level entry points should be used when rejection must be observed.
 
 use core::ffi::c_void;
 use core::future::Future;
@@ -149,8 +154,10 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_map_delta_remove(
 
 /// Load the map around `(cx, cy)` (radius `radius`) from `source` and publish it into `engine` via the
 /// portable [`apply_map_update`] (staging engine + `commit_from`). `rebuild != 0` starts staging empty
-/// (drops the current tiles — the C++ `need_rebuild`); otherwise it is incremental. No-op if any pointer
-/// is null.
+/// (drops the current tiles in the staging engine); otherwise it is incremental. A staged map that
+/// exceeds `Lmax`, or cannot be built, is not committed, so the currently published map remains
+/// unchanged. This compatibility function has no status return and therefore does not expose the
+/// rejection to C++. It is a no-op if either pointer is null.
 ///
 /// # Safety
 /// `engine` is a valid, live `NdtEngine` handle (or null → no-op); it is reborrowed as `&NdtEngine` (the
@@ -172,5 +179,5 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_update_map(
     let eng = ffi_ref!(engine, else return);
     let src = ffi_ref!(source, else return);
     let host = FfiHost { src };
-    block_on(apply_map_update(eng, &host, [cx, cy], radius, rebuild));
+    let _completed = block_on(apply_map_update(eng, &host, [cx, cy], radius, rebuild)).is_ok();
 }

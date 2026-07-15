@@ -15,21 +15,28 @@
 //! C-ABI node shell for the Autoware `autoware_ndt_scan_matcher` NDT localization core.
 //!
 //! This crate is the **ROS-node C ABI**: it wraps the pure-Rust engine crate
-//! [`realtime_ndt_scan_matcher`](realtime_ndt_scan_matcher) with `extern "C"` shims (the `autoware_ndt_scan_matcher_rs_*`
+//! [`realtime_ndt_scan_matcher`] with `extern "C"` shims (the `autoware_ndt_scan_matcher_rs_*`
 //! symbols the C++ package links against) plus the ROS-node callback glue. All numeric kernels and
 //! the portable engine API live in `realtime_ndt_scan_matcher`; this crate only validates the FFI boundary
 //! (per rust-c-ffi-safety) and marshals data to/from the engine's public Rust API.
+//!
+//! At node construction, C++ supplies an immutable runtime work envelope through
+//! `node_handle::AwNdtParams`: maximum source points (`Pmax`), maximum published active leaves
+//! (`Lmax`), and maximum iterations (`Imax`, `0..=30`). Rust validates the envelope, preallocates
+//! callback scratch, and rejects oversized scans or maps without growing real-time buffers. Finding
+//! a 65th neighbor is non-fatal: the first 64 are retained, the result is forced non-converged, and
+//! the sensor callback emits a warning.
 //!
 //! The crate is always `std` (it is the ROS-node shell). The only build knob is the `ros` feature,
 //! which turns on the rosidl bindgen bindings (`ros_msgs`) and the `Pose`-pointer FFI shims.
 //!
 //! # Layout
 //!
-//! - [`ffi_engine`], [`ffi_ndt`], [`ffi_voxel_grid`], [`ffi_tpe`], [`ffi_covariance`],
-//!   [`ffi_cov_estimate`] — the C-ABI shims over the matching `realtime_ndt_scan_matcher` modules.
-//! - [`ffi`] / [`ffi_host`] — the panic-safe boundary (`catch_unwind`) and the ROS side-effects host
-//!   vtable.
-//! - [`node`], [`node_handle`], [`node_map_update`], [`node_align_service`], [`sensor_points`] — the
+//! - `ffi_engine`, `ffi_ndt`, `ffi_voxel_grid`, `ffi_tpe`, `ffi_covariance`, and `ffi_cov_estimate`
+//!   are the C-ABI shims over the matching `realtime_ndt_scan_matcher` modules.
+//! - `ffi` and `ffi_host` provide the panic-safe boundary (`catch_unwind`) and the ROS side-effects
+//!   host vtable.
+//! - `node`, `node_handle`, `node_map_update`, `node_align_service`, and `sensor_points` contain the
 //!   ROS-node callback glue.
 //! - [`ffi_ptr`] — audited C-ABI pointer helpers + guard macros (the single home for raw-pointer
 //!   dereferences at the FFI boundary).

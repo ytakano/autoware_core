@@ -37,28 +37,84 @@ use nalgebra::{Matrix3, Matrix4, Matrix6, SVD, Vector3, Vector6};
 use crate::derivatives::{
     AngleDerivatives, compute_angle_derivatives, compute_point_derivatives, update_derivatives,
 };
+use crate::kdtree::KdSearchError;
 use crate::transform::{
     GaussConstants, gauss_constants, matrix_to_euler, se3_matrix_f32, transform_cloud_by_matrix,
     transform_cloud_f32,
 };
 use crate::voxel_grid::VoxelGridMap;
 
-/// Per-point neighbor cap for the RT-critical `radius_search` (WCET bound on `K`). The kd-tree stops
-/// collecting once `MAX_NEIGHBORS` are found, bounding both the result size and the traversal. Chosen
-/// well above the physical worst case (a radius == `leaf_size` voxel neighborhood is ≤ 27 voxels), so
-/// it does not truncate for real maps — if it ever does, the result deviates from the unbounded C++
-/// `radiusSearch` (first-N in traversal order), which should be treated as a misconfiguration.
-/// Per-point cap on the neighbor-search result (`radius_search`'s `max_nn`): the `K` of the WCET
-/// decomposition `T ≤ N_iter × Σ_p (T_search + K·T_kernel)` — see `plan/ndt_wcet.md`.
+/// Per-point neighbor cap for the RT-critical radius search and the `K` term of the structural work
+/// envelope. The first 64 in traversal order are retained. Search continues only until it finds a
+/// 65th in-radius leaf, then returns a non-fatal diagnostic; the engine forces that alignment to
+/// non-converged. The cap bounds kernel evaluations, not kd traversal, whose per-query bound is the
+/// configured active-leaf limit.
 pub const MAX_NEIGHBORS: usize = 64;
 
-/// Reusable scratch buffers for the per-frame derivative pass and the align loop. Hold one per engine
-/// and reuse across frames; the buffers `clear()` (keep capacity) per call, so after warmup the hot
-/// loop performs no heap allocation.
+/// Fatal failure of the bounded alignment kernel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AlignError {
+    /// A checked integer operation or work-counter product overflowed.
+    ArithmeticOverflow,
+    /// The balanced tree or iterative search exceeded its fixed 64-entry stack contract.
+    KdStackCapacityExceeded,
+    /// A parameter, guess, source point, or result contained NaN or infinity.
+    NonFiniteValue,
+    /// Active alignment parameters exceeded the configured `Imax` or the hard limit of 30.
+    IterationLimitExceeded,
+    /// A work envelope had a zero point/leaf bound or an iteration bound outside `0..=30`.
+    InvalidLimits,
+    /// The source cloud exceeded the engine's configured `Pmax`.
+    SourcePointLimitExceeded,
+    /// Allocation or kd-tree construction failed while finalizing a staged map.
+    MapBuildFailed,
+    /// A staged or committed map exceeded the engine's configured `Lmax`.
+    MapLeafLimitExceeded,
+    /// Caller-owned scratch was undersized or could not be reserved.
+    WorkspaceCapacityExceeded,
+}
+
+const fn map_kd_search_error(error: KdSearchError) -> AlignError {
+    match error {
+        KdSearchError::ArithmeticOverflow => AlignError::ArithmeticOverflow,
+        KdSearchError::AllocationFailed | KdSearchError::StackCapacityExceeded => {
+            AlignError::KdStackCapacityExceeded
+        }
+    }
+}
+
+/// Non-fatal observations collected without allocation or logging in the align kernel.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AlignDiagnostics {
+    /// Whether any point query found a 65th in-radius leaf after retaining 64.
+    pub neighbor_limit_exceeded: bool,
+    /// Number of point queries in this alignment that exceeded the neighbor cap.
+    pub neighbor_limit_exceeded_queries: u64,
+}
+
+impl AlignDiagnostics {
+    fn record_neighbor_limit_exceeded(&mut self) -> Result<(), AlignError> {
+        self.neighbor_limit_exceeded = true;
+        self.neighbor_limit_exceeded_queries = self
+            .neighbor_limit_exceeded_queries
+            .checked_add(1)
+            .ok_or(AlignError::ArithmeticOverflow)?;
+        Ok(())
+    }
+}
+
+/// Reusable scratch buffers for the per-frame derivative pass and align loop. Hold one per concurrent
+/// alignment and reuse it across frames. Construct it with [`AlignWorkspace::try_with_capacity`]
+/// before entering the real-time path; alignment rejects rather than grows undersized scratch. The
+/// serial backend is allocation-free inside a correctly sized workspace. The parallel backend may
+/// allocate worker-local buffers and is outside that claim.
 #[derive(Debug, Default)]
 pub struct AlignWorkspace {
     neighbor_idx: Vec<usize>,
     trans_cloud: Vec<[f32; 3]>,
+    max_points: usize,
+    /// Diagnostics for the current/last align.
+    pub diagnostics: AlignDiagnostics,
     /// Per-point contributions for the parallel backend (reused across frames; order-preserving
     /// `collect_into_vec` fills it). Only the `parallel` feature touches it — the serial backend
     /// stays allocation-free.
@@ -74,13 +130,18 @@ pub struct AlignWorkspace {
 }
 
 impl AlignWorkspace {
-    /// An empty workspace. Its buffers grow on the first [`align`] and are reused thereafter, so keep
-    /// one per align session and pass it back in to stay allocation-free after warmup.
+    /// Empty compatibility workspace. Any non-empty alignment requires
+    /// [`Self::try_with_capacity`]; the kernel rejects rather than grows this workspace.
     #[must_use]
     pub const fn new() -> Self {
         Self {
             neighbor_idx: Vec::new(),
             trans_cloud: Vec::new(),
+            max_points: 0,
+            diagnostics: AlignDiagnostics {
+                neighbor_limit_exceeded: false,
+                neighbor_limit_exceeded_queries: 0,
+            },
             #[cfg(feature = "parallel")]
             contribs: Vec::new(),
             #[cfg(feature = "wcet-count")]
@@ -90,21 +151,68 @@ impl AlignWorkspace {
         }
     }
 
-    /// A workspace pre-reserved for clouds of up to `max_points` — the WCET "hard zero" variant
-    /// (`plan/ndt_wcet.md`): with it, **no** frame allocates, including the very first (a growth
-    /// event is a WCET spike, so the amortized [`Self::new`] warmup is not enough for a bound).
-    #[must_use]
-    pub fn with_capacity(max_points: usize) -> Self {
-        Self {
-            neighbor_idx: Vec::with_capacity(MAX_NEIGHBORS),
-            trans_cloud: Vec::with_capacity(max_points),
+    /// A workspace pre-reserved for clouds of up to `max_points`. In the serial backend, no frame
+    /// allocates, including the first; [`Self::new`] is only an empty compatibility workspace.
+    /// # Errors
+    /// Returns [`AlignError::WorkspaceCapacityExceeded`] if a reservation fails.
+    pub fn try_with_capacity(max_points: usize) -> Result<Self, AlignError> {
+        let mut neighbor_idx = Vec::new();
+        neighbor_idx
+            .try_reserve_exact(MAX_NEIGHBORS)
+            .map_err(|_| AlignError::WorkspaceCapacityExceeded)?;
+        let mut trans_cloud = Vec::new();
+        trans_cloud
+            .try_reserve_exact(max_points)
+            .map_err(|_| AlignError::WorkspaceCapacityExceeded)?;
+        #[cfg(feature = "parallel")]
+        let mut contribs = Vec::new();
+        #[cfg(feature = "parallel")]
+        contribs
+            .try_reserve_exact(max_points)
+            .map_err(|_| AlignError::WorkspaceCapacityExceeded)?;
+        Ok(Self {
+            neighbor_idx,
+            trans_cloud,
+            max_points,
+            diagnostics: AlignDiagnostics::default(),
             #[cfg(feature = "parallel")]
-            contribs: Vec::with_capacity(max_points),
+            contribs,
             #[cfg(feature = "wcet-count")]
             counters: crate::wcet::WcetCounters::new(),
             #[cfg(feature = "wcet-trace")]
             trace: crate::wcet::AlignTrace::new(),
+        })
+    }
+
+    /// Heap payload bytes reserved by this workspace (allocator metadata excluded).
+    /// # Errors
+    /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
+    pub fn allocated_payload_bytes(&self) -> Result<usize, AlignError> {
+        let mut bytes = self
+            .neighbor_idx
+            .capacity()
+            .checked_mul(core::mem::size_of::<usize>())
+            .ok_or(AlignError::ArithmeticOverflow)?;
+        bytes = bytes
+            .checked_add(
+                self.trans_cloud
+                    .capacity()
+                    .checked_mul(core::mem::size_of::<[f32; 3]>())
+                    .ok_or(AlignError::ArithmeticOverflow)?,
+            )
+            .ok_or(AlignError::ArithmeticOverflow)?;
+        #[cfg(feature = "parallel")]
+        {
+            bytes = bytes
+                .checked_add(
+                    self.contribs
+                        .capacity()
+                        .checked_mul(core::mem::size_of::<PointContribution>())
+                        .ok_or(AlignError::ArithmeticOverflow)?,
+                )
+                .ok_or(AlignError::ArithmeticOverflow)?;
         }
+        Ok(bytes)
     }
 }
 
@@ -176,6 +284,7 @@ struct PointContribution {
     nearest: f64,
     neighborhood: usize,
     found: bool,
+    neighbor_limit_exceeded: bool,
     /// kd-tree nodes visited by this point's neighbor search (WCET traversal counter).
     #[cfg(feature = "wcet-count")]
     kd_nodes: u64,
@@ -197,23 +306,28 @@ fn point_contribution(
     ad: &AngleDerivatives,
     cfg: &ScoreConfig,
     nbr: &mut Vec<usize>,
-) -> PointContribution {
+) -> Result<PointContribution, AlignError> {
     nbr.clear();
     #[cfg(feature = "wcet-count")]
-    let kd_nodes = map.radius_search_counted(tp, cfg.resolution, MAX_NEIGHBORS, nbr);
+    let search = map
+        .radius_search_counted(tp, cfg.resolution, MAX_NEIGHBORS, nbr)
+        .map_err(map_kd_search_error)?;
     #[cfg(not(feature = "wcet-count"))]
-    map.radius_search(tp, cfg.resolution, MAX_NEIGHBORS, nbr);
+    let search = map
+        .radius_search(tp, cfg.resolution, MAX_NEIGHBORS, nbr)
+        .map_err(map_kd_search_error)?;
     if nbr.is_empty() {
-        return PointContribution {
+        return Ok(PointContribution {
             score: 0.0,
             gradient: Vector6::zeros(),
             hessian: Matrix6::zeros(),
             nearest: 0.0,
             neighborhood: 0,
             found: false,
+            neighbor_limit_exceeded: search.result_limit_exceeded,
             #[cfg(feature = "wcet-count")]
-            kd_nodes,
-        };
+            kd_nodes: search.nodes_visited,
+        });
     }
     let pd = compute_point_derivatives(&vec3(sp), ad);
     let x_trans = vec3(tp);
@@ -239,16 +353,17 @@ fn point_contribution(
             }
         }
     }
-    PointContribution {
+    Ok(PointContribution {
         score,
         gradient,
         hessian,
         nearest,
         neighborhood: nbr.len(),
         found: true,
+        neighbor_limit_exceeded: search.result_limit_exceeded,
         #[cfg(feature = "wcet-count")]
-        kd_nodes,
-    }
+        kd_nodes: search.nodes_visited,
+    })
 }
 
 /// Running reduction of per-point contributions (the C++ thread accumulators). Both backends fold
@@ -358,7 +473,8 @@ fn finalize(
 /// `O(P · K)` where `P` = source points (caller-bounded by downsampling) and `K` = neighbors/point ≤
 /// `MAX_NEIGHBORS` (the `radius_search` cap); reuses `ws.neighbor_idx` → **no allocation** (measured);
 /// no panic/block/logging; per-point math is fixed-size `O(1)`. The map is read-only.
-#[must_use]
+/// # Errors
+/// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
 pub fn compute_derivatives(
     map: &VoxelGridMap,
     source: &[[f32; 3]],
@@ -366,7 +482,7 @@ pub fn compute_derivatives(
     p: &Vector6<f64>,
     cfg: &ScoreConfig,
     ws: &mut AlignWorkspace,
-) -> Derivatives {
+) -> Result<Derivatives, AlignError> {
     let ad = compute_angle_derivatives(p);
     let mut red = Reduction::new();
     #[cfg(feature = "wcet-count")]
@@ -377,7 +493,10 @@ pub fn compute_derivatives(
     let mut pass = crate::wcet::PassTrace::new();
     // Per-point-local contributions, folded in point-index order (zip stops at the shorter cloud).
     for (&tp, &sp) in trans_cloud.iter().zip(source.iter()) {
-        let c = point_contribution(map, sp, tp, &ad, cfg, &mut ws.neighbor_idx);
+        let c = point_contribution(map, sp, tp, &ad, cfg, &mut ws.neighbor_idx)?;
+        if c.neighbor_limit_exceeded {
+            ws.diagnostics.record_neighbor_limit_exceeded()?;
+        }
         #[cfg(feature = "wcet-count")]
         {
             let k = u64::try_from(c.neighborhood).unwrap_or(u64::MAX);
@@ -403,7 +522,7 @@ pub fn compute_derivatives(
         trace_pass_tail(&mut pass, &d);
         ws.trace.push(pass);
     }
-    d
+    Ok(d)
 }
 
 #[cfg(feature = "wcet-trace")]
@@ -491,7 +610,8 @@ fn trace_pass_tail(pass: &mut crate::wcet::PassTrace, d: &Derivatives) {
 /// runs on rayon's **process-global** thread pool; the pool's worker count is set separately (see
 /// [`crate::init_thread_pool`] or `RAYON_NUM_THREADS`), not by `num_threads`.
 #[cfg(feature = "parallel")]
-#[must_use]
+/// # Errors
+/// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
 pub fn compute_derivatives_parallel(
     map: &VoxelGridMap,
     source: &[[f32; 3]],
@@ -499,25 +619,29 @@ pub fn compute_derivatives_parallel(
     p: &Vector6<f64>,
     cfg: &ScoreConfig,
     ws: &mut AlignWorkspace,
-) -> Derivatives {
+) -> Result<Derivatives, AlignError> {
     use rayon::prelude::*;
 
     let ad = compute_angle_derivatives(p);
     // `IndexedParallelIterator` preserves order, so `contribs` is in point-index order and the fold
     // below matches the serial backend bit-for-bit. `map_init` gives each worker a reusable buffer.
-    trans_cloud
+    let contributions: Result<Vec<PointContribution>, AlignError> = trans_cloud
         .par_iter()
         .zip(source.par_iter())
         .map_init(
             || Vec::<usize>::with_capacity(MAX_NEIGHBORS),
             |nbr, (&tp, &sp)| point_contribution(map, sp, tp, &ad, cfg, nbr),
         )
-        .collect_into_vec(&mut ws.contribs);
+        .collect();
+    ws.contribs = contributions?;
 
     let mut red = Reduction::new();
     #[cfg(feature = "wcet-count")]
     let mut pass = crate::wcet::WcetCounters::new();
     for c in &ws.contribs {
+        if c.neighbor_limit_exceeded {
+            ws.diagnostics.record_neighbor_limit_exceeded()?;
+        }
         #[cfg(feature = "wcet-count")]
         {
             let k = u64::try_from(c.neighborhood).unwrap_or(u64::MAX);
@@ -548,7 +672,7 @@ pub fn compute_derivatives_parallel(
         // hashing); mark any align that went through here as invalid for comparison.
         ws.trace.poisoned = true;
     }
-    finalize(red, p, cfg, source.len())
+    Ok(finalize(red, p, cfg, source.len()))
 }
 
 /// Score-only transformation probability: sum over all neighbor cells of the per-cell score,
@@ -560,18 +684,24 @@ pub fn compute_derivatives_parallel(
     clippy::allow_attributes,
     reason = "nalgebra f64 vector math; the score/len average is a deliberate usize->f64 cast"
 )]
-#[must_use]
+/// # Errors
+/// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
 pub fn transformation_probability(
     map: &VoxelGridMap,
     trans_cloud: &[[f32; 3]],
     resolution: f64,
     gauss: &GaussConstants,
     ws: &mut AlignWorkspace,
-) -> f64 {
+) -> Result<f64, AlignError> {
     let mut score = 0.0_f64;
     for &tp in trans_cloud {
         ws.neighbor_idx.clear();
-        map.radius_search(tp, resolution, MAX_NEIGHBORS, &mut ws.neighbor_idx);
+        let search = map
+            .radius_search(tp, resolution, MAX_NEIGHBORS, &mut ws.neighbor_idx)
+            .map_err(map_kd_search_error)?;
+        if search.result_limit_exceeded {
+            ws.diagnostics.record_neighbor_limit_exceeded()?;
+        }
         if ws.neighbor_idx.is_empty() {
             continue;
         }
@@ -587,11 +717,11 @@ pub fn transformation_probability(
         }
         score += pt;
     }
-    if trans_cloud.is_empty() {
+    Ok(if trans_cloud.is_empty() {
         0.0
     } else {
         score / trans_cloud.len() as f64
-    }
+    })
 }
 
 /// Per-point maximum cell score, averaged over points that found a neighbor
@@ -603,19 +733,25 @@ pub fn transformation_probability(
     clippy::allow_attributes,
     reason = "nalgebra f64 vector math; the score/found average is a deliberate usize->f64 cast"
 )]
-#[must_use]
+/// # Errors
+/// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
 pub fn nearest_voxel_transformation_likelihood(
     map: &VoxelGridMap,
     trans_cloud: &[[f32; 3]],
     resolution: f64,
     gauss: &GaussConstants,
     ws: &mut AlignWorkspace,
-) -> f64 {
+) -> Result<f64, AlignError> {
     let mut nearest_voxel_score = 0.0_f64;
     let mut found: usize = 0;
     for &tp in trans_cloud {
         ws.neighbor_idx.clear();
-        map.radius_search(tp, resolution, MAX_NEIGHBORS, &mut ws.neighbor_idx);
+        let search = map
+            .radius_search(tp, resolution, MAX_NEIGHBORS, &mut ws.neighbor_idx)
+            .map_err(map_kd_search_error)?;
+        if search.result_limit_exceeded {
+            ws.diagnostics.record_neighbor_limit_exceeded()?;
+        }
         if ws.neighbor_idx.is_empty() {
             continue;
         }
@@ -631,13 +767,13 @@ pub fn nearest_voxel_transformation_likelihood(
             }
         }
         nearest_voxel_score += nearest_pt;
-        found = found.saturating_add(1);
+        found = found.checked_add(1).ok_or(AlignError::ArithmeticOverflow)?;
     }
-    if found != 0 {
+    Ok(if found != 0 {
         nearest_voxel_score / found as f64
     } else {
         0.0
-    }
+    })
 }
 
 /// Per-point nearest-voxel score (the C++ `calculateNearestVoxelScoreEachPoint` intensity): for each
@@ -652,6 +788,8 @@ pub fn nearest_voxel_transformation_likelihood(
     clippy::allow_attributes,
     reason = "nalgebra f64 vector math; the per-point score is narrowed f64->f32 for the output"
 )]
+/// # Errors
+/// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
 pub fn nearest_voxel_score_each_point(
     map: &VoxelGridMap,
     trans_cloud: &[[f32; 3]],
@@ -659,12 +797,18 @@ pub fn nearest_voxel_score_each_point(
     gauss: &GaussConstants,
     ws: &mut AlignWorkspace,
     out: &mut Vec<f32>,
-) {
+) -> Result<(), AlignError> {
     out.clear();
-    out.reserve(trans_cloud.len());
+    out.try_reserve_exact(trans_cloud.len())
+        .map_err(|_| AlignError::WorkspaceCapacityExceeded)?;
     for &tp in trans_cloud {
         ws.neighbor_idx.clear();
-        map.radius_search(tp, resolution, MAX_NEIGHBORS, &mut ws.neighbor_idx);
+        let search = map
+            .radius_search(tp, resolution, MAX_NEIGHBORS, &mut ws.neighbor_idx)
+            .map_err(map_kd_search_error)?;
+        if search.result_limit_exceeded {
+            ws.diagnostics.record_neighbor_limit_exceeded()?;
+        }
         let mut nearest_pt = 0.0_f64;
         if !ws.neighbor_idx.is_empty() {
             let x_trans = vec3(tp);
@@ -680,6 +824,7 @@ pub fn nearest_voxel_score_each_point(
         }
         out.push(nearest_pt as f32);
     }
+    Ok(())
 }
 
 /// NDT parameters (`NdtParams` + the `outlier_ratio_` member, default 0.55).
@@ -761,6 +906,31 @@ pub struct AlignResult {
     pub trace: crate::wcet::AlignTrace,
 }
 
+impl AlignResult {
+    /// Allocate the per-pass result traces for an iteration cap.
+    /// # Errors
+    /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
+    pub fn try_with_capacity(max_iterations: usize) -> Result<Self, AlignError> {
+        let cap = max_iterations
+            .checked_add(1)
+            .ok_or(AlignError::ArithmeticOverflow)?;
+        let mut result = Self::default();
+        result
+            .transformation_array
+            .try_reserve_exact(cap)
+            .map_err(|_| AlignError::WorkspaceCapacityExceeded)?;
+        result
+            .transform_probability_array
+            .try_reserve_exact(cap)
+            .map_err(|_| AlignError::WorkspaceCapacityExceeded)?;
+        result
+            .nearest_voxel_likelihood_array
+            .try_reserve_exact(cap)
+            .map_err(|_| AlignError::WorkspaceCapacityExceeded)?;
+        Ok(result)
+    }
+}
+
 /// Solve `H · delta = -gradient` via SVD (mirrors the C++ `JacobiSVD(ComputeFullU|ComputeFullV)`).
 /// Returns `None` if the solve fails (singular / non-finite).
 fn svd_solve(hessian: &Matrix6<f64>, neg_gradient: &Vector6<f64>) -> Option<Vector6<f64>> {
@@ -779,7 +949,7 @@ fn derivatives_at(
     cfg: &ScoreConfig,
     ws: &mut AlignWorkspace,
     parallel: bool,
-) -> Derivatives {
+) -> Result<Derivatives, AlignError> {
     let mut trans = core::mem::take(&mut ws.trans_cloud);
     transform_cloud_f32(p, source, &mut trans);
     let d = derivatives_from(map, source, &trans, p, cfg, ws, parallel);
@@ -797,7 +967,7 @@ fn derivatives_from(
     cfg: &ScoreConfig,
     ws: &mut AlignWorkspace,
     parallel: bool,
-) -> Derivatives {
+) -> Result<Derivatives, AlignError> {
     // `parallel` selects the rayon backend (bit-identical to serial) when the feature is built.
     #[cfg(feature = "parallel")]
     let d = if parallel {
@@ -813,6 +983,45 @@ fn derivatives_from(
     d
 }
 
+fn validate_align_inputs(
+    source: &[[f32; 3]],
+    guess: &Matrix4<f32>,
+    params: &NdtParams,
+    ws: &AlignWorkspace,
+    out: &AlignResult,
+) -> Result<(), AlignError> {
+    if source.len() > ws.max_points {
+        return Err(AlignError::SourcePointLimitExceeded);
+    }
+    if !(0..=30).contains(&params.max_iterations) {
+        return Err(AlignError::IterationLimitExceeded);
+    }
+    let iterations =
+        usize::try_from(params.max_iterations).map_err(|_| AlignError::ArithmeticOverflow)?;
+    let result_capacity = iterations
+        .checked_add(1)
+        .ok_or(AlignError::ArithmeticOverflow)?;
+    if ws.neighbor_idx.capacity() < MAX_NEIGHBORS
+        || ws.trans_cloud.capacity() < source.len()
+        || out.transformation_array.capacity() < result_capacity
+        || out.transform_probability_array.capacity() < result_capacity
+        || out.nearest_voxel_likelihood_array.capacity() < result_capacity
+    {
+        return Err(AlignError::WorkspaceCapacityExceeded);
+    }
+    let params_finite = params.trans_epsilon.is_finite()
+        && params.step_size.is_finite()
+        && params.resolution.is_finite()
+        && params.outlier_ratio.is_finite();
+    if !params_finite
+        || !guess.iter().all(|value| value.is_finite())
+        || !source.iter().flatten().all(|value| value.is_finite())
+    {
+        return Err(AlignError::NonFiniteValue);
+    }
+    Ok(())
+}
+
 /// NDT alignment (`align` / `computeTransformation` + the default-path `computeStepLengthMT`,
 /// `use_line_search = false`). `guess` is the initial pose (the C++ `Matrix4f` guess); `source` is
 /// the original cloud. Fills `out` (its `Vec`s are reused). The per-iteration cloud transform is f32
@@ -822,14 +1031,17 @@ fn derivatives_from(
 /// - Outer loop runs at most `params.max_iterations` times (static cap).
 /// - Each iteration does one `compute_derivatives` pass (`O(P · K)`: `P` = source points,
 ///   `K` = neighbors/point) + one 6×6 SVD solve + one f32 cloud transform (`O(P)`).
-/// - `K` (neighbors/point) ≤ `MAX_NEIGHBORS` (the `radius_search` cap); `P` must be bounded by the
-///   caller (downsample). The kd-tree traversal is worst-case `O(N_leaves)` for adversarial point
-///   distributions — an **accepted residual** (benign for physical, roughly-uniform voxel maps).
+/// - `K` (evaluated neighbors/point) ≤ [`MAX_NEIGHBORS`]. The caller bounds `P` through workspace
+///   capacity; the engine additionally enforces its configured `Pmax`. Kd traversal is bounded by
+///   the active map's leaf count, which the engine constrains with `Lmax` before publication.
 /// - No panic (the crate's deny-`unwrap`/`expect`/`panic`/`indexing_slicing` lints); no blocking; no
 ///   logging/formatting; no user callbacks. Only fixed-width float math.
-/// - **Zero allocation** per frame after warmup — all buffers (result `Vec`s, `trans_cloud`,
-///   `neighbor_idx` bounded by `MAX_NEIGHBORS`) are pre-reserved + reused, and the fixed-size 6×6 SVD
-///   is stack-only (measured: `tests/zero_alloc.rs`).
+/// - The serial kernel performs **zero allocation** from the first frame when workspace and result
+///   capacities cover the declared envelope; undersized buffers return
+///   [`AlignError::WorkspaceCapacityExceeded`] (measured in
+///   `tests/zero_alloc.rs`).
+/// - A query that finds a 65th in-radius leaf retains the first 64 and records an
+///   [`AlignDiagnostics`] event. The engine-level verdict wrapper turns this into non-convergence.
 /// - rt-core (this runtime path) vs control-plane (map build/update) — the map is read-only here.
 ///
 /// # Arguments
@@ -837,7 +1049,7 @@ fn derivatives_from(
 /// * `source` — the sensor cloud to align, in the `base_link` frame (`[x, y, z]`, metres).
 /// * `guess` — initial pose estimate as a 4×4 homogeneous transform (the C++ `Matrix4f` guess).
 /// * `params` — alignment parameters (resolution, epsilon, step size, iteration cap, …).
-/// * `ws` — reused per-align workspace (see [`AlignWorkspace::new`]).
+/// * `ws` — caller-owned workspace preallocated with [`AlignWorkspace::try_with_capacity`].
 /// * `out` — result slot; its `Vec` fields are cleared and refilled each call.
 ///
 /// # Examples
@@ -850,12 +1062,12 @@ fn derivatives_from(
 /// let mut map = VoxelGridMap::new([2.0; 3], 6, 0.01);
 /// let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
 /// map.add_target(&target, 0);
-/// map.create_kdtree();
+/// map.create_kdtree().expect("build kd-tree");
 ///
-/// let params = NdtParams { resolution: 2.0, ..NdtParams::default() };
-/// let mut ws = AlignWorkspace::new();
-/// let mut out = AlignResult::default();
-/// align(&map, &target, &Matrix4::identity(), &params, &mut ws, &mut out);
+/// let params = NdtParams { resolution: 2.0, max_iterations: 30, ..NdtParams::default() };
+/// let mut ws = AlignWorkspace::try_with_capacity(target.len()).expect("reserve workspace");
+/// let mut out = AlignResult::try_with_capacity(30).expect("reserve result");
+/// align(&map, &target, &Matrix4::identity(), &params, &mut ws, &mut out).expect("align");
 /// assert!(out.iteration_num >= 0);
 /// ```
 #[allow(
@@ -868,6 +1080,12 @@ fn derivatives_from(
     clippy::allow_attributes,
     reason = "numeric kernel: nalgebra fixed-size math + deliberate C++-parity f32/usize<->int casts"
 )]
+/// # Errors
+/// Returns [`AlignError::SourcePointLimitExceeded`] or [`AlignError::WorkspaceCapacityExceeded`]
+/// for undersized scratch, [`AlignError::IterationLimitExceeded`] outside `0..=30`,
+/// [`AlignError::NonFiniteValue`] for non-finite inputs/results, and checked arithmetic or kd-stack
+/// errors encountered by the bounded kernel. Singular Newton systems remain ordinary
+/// non-convergence rather than errors.
 pub fn align(
     map: &VoxelGridMap,
     source: &[[f32; 3]],
@@ -875,7 +1093,9 @@ pub fn align(
     params: &NdtParams,
     ws: &mut AlignWorkspace,
     out: &mut AlignResult,
-) {
+) -> Result<AlignDiagnostics, AlignError> {
+    validate_align_inputs(source, guess, params, ws, out)?;
+    ws.diagnostics = AlignDiagnostics::default();
     let gauss = gauss_constants(params.outlier_ratio, params.resolution);
     let reg = params.regularization.as_ref();
     let cfg = ScoreConfig {
@@ -896,19 +1116,10 @@ pub fn align(
     let parallel = params.num_threads > 1;
     let len = source.len();
 
-    // Pre-reserve the per-iteration result buffers so no growth occurs after warmup (at most
-    // max_iterations+1 entries). These `reserve`s follow `clear()` (len == 0), so they reserve the
-    // full capacity and are no-ops once warm. (`ws.trans_cloud` is reserved inside
-    // `transform_cloud_f32` after its own clear; `ws.neighbor_idx` is bounded by MAX_NEIGHBORS via
-    // `radius_search` and warms on the first frame — reserving here would over-reserve a non-empty
-    // buffer.)
-    let cap = (params.max_iterations.max(0) as usize).saturating_add(1);
+    // Capacities were validated above; clearing retains them for this frame.
     out.transformation_array.clear();
     out.transform_probability_array.clear();
     out.nearest_voxel_likelihood_array.clear();
-    out.transformation_array.reserve(cap);
-    out.transform_probability_array.reserve(cap);
-    out.nearest_voxel_likelihood_array.reserve(cap);
 
     // Initial guess -> 6-vector (matches the C++ eulerAngles(0,1,2) extraction for non-gimbal angles).
     let guess_f64 = guess.map(f64::from);
@@ -928,7 +1139,7 @@ pub fn align(
         let d = derivatives_from(map, source, &trans, &p, &cfg, ws, parallel);
         ws.trans_cloud = trans;
         d
-    };
+    }?;
     out.transform_probability_array
         .push(d.transform_probability as f32);
     out.nearest_voxel_likelihood_array
@@ -965,7 +1176,7 @@ pub fn align(
         let a_t = delta_norm.min(params.step_size).max(step_min);
 
         let x_t = p + dir * a_t;
-        d = derivatives_at(map, source, &x_t, &cfg, ws, parallel);
+        d = derivatives_at(map, source, &x_t, &cfg, ws, parallel)?;
         out.transform_probability_array
             .push(d.transform_probability as f32);
         out.nearest_voxel_likelihood_array
@@ -999,12 +1210,20 @@ pub fn align(
     {
         out.trace = ws.trace;
     }
+    let result_finite = out.pose.iter().all(|value| value.is_finite())
+        && out.transform_probability.is_finite()
+        && out.nearest_voxel_likelihood.is_finite()
+        && out.hessian.iter().all(|value| value.is_finite());
+    if !result_finite {
+        return Err(AlignError::NonFiniteValue);
+    }
+    Ok(ws.diagnostics)
 }
 
 #[cfg(test)]
 #[allow(
-    clippy::float_cmp,
     clippy::expect_used,
+    clippy::float_cmp,
     clippy::unwrap_used,
     clippy::unreadable_literal,
     clippy::needless_range_loop,
@@ -1037,7 +1256,7 @@ mod tests {
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
         map.add_target(&dense_cluster(0.5, 0.5, 0.5), 0);
         map.add_target(&dense_cluster(2.5, 0.5, 0.5), 1);
-        map.create_kdtree();
+        map.create_kdtree().expect("build kd-tree");
         map
     }
 
@@ -1071,7 +1290,8 @@ mod tests {
             let xt = transform_point(p, &vec3(sp));
             let q = [xt[0] as f32, xt[1] as f32, xt[2] as f32];
             ws.neighbor_idx.clear();
-            map.radius_search(q, 1.0, 0, &mut ws.neighbor_idx);
+            map.radius_search(q, 1.0, 0, &mut ws.neighbor_idx)
+                .expect("radius search");
             for &li in &ws.neighbor_idx {
                 if let Some(leaf) = map.leaf(li) {
                     let mean = Vector3::new(leaf.mean[0], leaf.mean[1], leaf.mean[2]);
@@ -1106,7 +1326,8 @@ mod tests {
                 reg: None,
             },
             &mut ws,
-        );
+        )
+        .expect("derivative computation");
         assert!(d.score > 0.0, "score should be positive for a near match");
 
         // gradient vs central FD of the score.
@@ -1182,16 +1403,19 @@ mod tests {
                 reg: None,
             },
             &mut ws,
-        );
+        )
+        .expect("derivative computation");
 
-        let tp = transformation_probability(&map, &trans, 1.0, &g, &mut ws);
+        let tp = transformation_probability(&map, &trans, 1.0, &g, &mut ws)
+            .expect("transformation probability");
         assert!(
             (tp - d.transform_probability).abs() < 1e-12,
             "{tp} vs {}",
             d.transform_probability
         );
 
-        let nvl = nearest_voxel_transformation_likelihood(&map, &trans, 1.0, &g, &mut ws);
+        let nvl = nearest_voxel_transformation_likelihood(&map, &trans, 1.0, &g, &mut ws)
+            .expect("nearest voxel likelihood");
         assert!(
             (nvl - d.nearest_voxel_likelihood).abs() < 1e-12,
             "{nvl} vs {}",
@@ -1218,7 +1442,8 @@ mod tests {
                 reg: None,
             },
             &mut ws,
-        );
+        )
+        .expect("derivative computation");
         assert_eq!(d.score, 0.0);
         assert_eq!(d.transform_probability, 0.0);
         assert_eq!(d.nearest_voxel_likelihood, 0.0);
@@ -1237,24 +1462,28 @@ mod tests {
                 reg: None,
             },
             &mut ws,
-        );
+        )
+        .expect("derivative computation");
         assert_eq!(d2.score, 0.0);
         assert_eq!(d2.gradient, Vector6::zeros());
         assert_eq!(d2.nearest_voxel_likelihood, 0.0);
 
         // The standalone score-only loops honor the same empty / no-neighbor contract (0.0).
-        assert_eq!(transformation_probability(&map, &[], 1.0, &g, &mut ws), 0.0);
+        assert_eq!(
+            transformation_probability(&map, &[], 1.0, &g, &mut ws),
+            Ok(0.0)
+        );
         assert_eq!(
             nearest_voxel_transformation_likelihood(&map, &[], 1.0, &g, &mut ws),
-            0.0
+            Ok(0.0)
         );
         assert_eq!(
             transformation_probability(&map, &source, 1.0, &g, &mut ws),
-            0.0
+            Ok(0.0)
         );
         assert_eq!(
             nearest_voxel_transformation_likelihood(&map, &source, 1.0, &g, &mut ws),
-            0.0
+            Ok(0.0)
         );
     }
 
@@ -1279,7 +1508,8 @@ mod tests {
                 reg: None,
             },
             &mut ws,
-        );
+        )
+        .expect("derivative computation");
         let reg = Regularization {
             pose_xy: [0.0, 0.0],
             scale_factor: 0.0,
@@ -1295,7 +1525,8 @@ mod tests {
                 reg: Some(&reg),
             },
             &mut ws,
-        );
+        )
+        .expect("derivative computation");
         assert_eq!(d_none.score, d_zero.score);
         assert_eq!(d_none.gradient, d_zero.gradient);
         assert_eq!(d_none.hessian, d_zero.hessian);
@@ -1323,7 +1554,8 @@ mod tests {
                 reg: None,
             },
             &mut ws,
-        );
+        )
+        .expect("derivative computation");
         let reg = Regularization {
             pose_xy: [5.0, 5.0],
             scale_factor: 1.0,
@@ -1339,7 +1571,8 @@ mod tests {
                 reg: Some(&reg),
             },
             &mut ws,
-        );
+        )
+        .expect("derivative computation");
         assert!(
             (d_reg.score - d_none.score).abs() > 1e-9,
             "reg must change the score"
@@ -1367,7 +1600,7 @@ mod tests {
         }
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
         map.add_target(&pts, 0);
-        map.create_kdtree();
+        map.create_kdtree().expect("build kd-tree");
         (map, pts)
     }
 
@@ -1376,7 +1609,7 @@ mod tests {
             trans_epsilon: 1e-3,
             step_size: 0.2,
             resolution: 1.0,
-            max_iterations: 50,
+            max_iterations: 30,
             outlier_ratio: 0.55,
             regularization: None,
             num_threads: 1,
@@ -1393,8 +1626,8 @@ mod tests {
         params.step_size = 0.01;
         params.trans_epsilon = 1.0; // step_min = 0.5 > step_size
         params.max_iterations = 5;
-        let mut ws = AlignWorkspace::new();
-        let mut result = AlignResult::default();
+        let mut ws = AlignWorkspace::try_with_capacity(source.len()).expect("reserve workspace");
+        let mut result = AlignResult::try_with_capacity(5).expect("reserve result");
         align(
             &map,
             &source,
@@ -1402,7 +1635,8 @@ mod tests {
             &params,
             &mut ws,
             &mut result,
-        );
+        )
+        .expect("align");
         for v in result.pose.iter() {
             assert!(v.is_finite());
         }
@@ -1422,9 +1656,11 @@ mod tests {
             gauss: &g,
             reg: None,
         };
-        let mut ws = AlignWorkspace::new();
-        let s = compute_derivatives(&map, &source, &trans, &p, &cfg, &mut ws);
-        let par = compute_derivatives_parallel(&map, &source, &trans, &p, &cfg, &mut ws);
+        let mut ws = AlignWorkspace::try_with_capacity(source.len()).expect("reserve workspace");
+        let s = compute_derivatives(&map, &source, &trans, &p, &cfg, &mut ws)
+            .expect("derivative computation");
+        let par = compute_derivatives_parallel(&map, &source, &trans, &p, &cfg, &mut ws)
+            .expect("derivative computation");
 
         assert_eq!(s.score, par.score, "score");
         assert_eq!(s.transform_probability, par.transform_probability, "tp");
@@ -1458,9 +1694,10 @@ mod tests {
         let run = |num_threads: usize| {
             let mut params = tight_params();
             params.num_threads = num_threads;
-            let mut ws = AlignWorkspace::new();
-            let mut out = AlignResult::default();
-            align(&map, &source, &guess, &params, &mut ws, &mut out);
+            let mut ws =
+                AlignWorkspace::try_with_capacity(source.len()).expect("reserve workspace");
+            let mut out = AlignResult::try_with_capacity(30).expect("reserve result");
+            align(&map, &source, &guess, &params, &mut ws, &mut out).expect("align");
             out
         };
         let serial = run(1);
@@ -1490,8 +1727,8 @@ mod tests {
             .map(|p| [p[0] + t[0], p[1] + t[1], p[2] + t[2]])
             .collect();
 
-        let mut ws = AlignWorkspace::new();
-        let mut out = AlignResult::default();
+        let mut ws = AlignWorkspace::try_with_capacity(source.len()).expect("reserve workspace");
+        let mut out = AlignResult::try_with_capacity(30).expect("reserve result");
         align(
             &map,
             &source,
@@ -1499,10 +1736,11 @@ mod tests {
             &tight_params(),
             &mut ws,
             &mut out,
-        );
+        )
+        .expect("align");
 
         assert!(
-            out.iteration_num <= 50,
+            out.iteration_num <= 30,
             "did not stop within max_iterations"
         );
         // Final translation ≈ -t.
@@ -1544,8 +1782,8 @@ mod tests {
     #[test]
     fn align_identity_when_already_aligned() {
         let (map, target) = spread_target();
-        let mut ws = AlignWorkspace::new();
-        let mut out = AlignResult::default();
+        let mut ws = AlignWorkspace::try_with_capacity(target.len()).expect("reserve workspace");
+        let mut out = AlignResult::try_with_capacity(30).expect("reserve result");
         align(
             &map,
             &target,
@@ -1553,7 +1791,8 @@ mod tests {
             &tight_params(),
             &mut ws,
             &mut out,
-        );
+        )
+        .expect("align");
         for i in 0..3 {
             assert!(
                 out.pose[(i, 3)].abs() < 2e-2,

@@ -21,7 +21,8 @@
 //! external lock. The lifecycle shims (`new`/`free`/`clone`) own/reclaim the `Box`.
 
 use realtime_ndt_scan_matcher::engine::{
-    ConvergenceParams, CovEstimationParams, NdtEngine, estimate_pose_covariance, run_align,
+    ConvergenceParams, CovEstimationParams, MatchScratch, NdtEngine, estimate_pose_covariance,
+    run_align,
 };
 use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 
@@ -64,6 +65,10 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_clone(
     unsafe { ffi_ptr::clone_handle(engine) }
 }
 
+/// Build the staged map's kd-tree using the engine's configured `Lmax`. On rejection, the map state
+/// is left unchanged. This compatibility ABI has no status return; object-level APIs should be used
+/// when the caller must distinguish a limit violation from a build failure.
+///
 /// # Safety
 /// `engine` is a valid handle (or null → no-op).
 #[expect(unsafe_code, reason = "C ABI boundary; dereferences a shared handle")]
@@ -243,7 +248,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_current_map
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(
     engine: *const NdtEngine,
 ) {
-    ffi_ref!(engine, else return).create_kdtree();
+    let _completed = ffi_ref!(engine, else return).create_kdtree().is_ok();
 }
 
 /// Atomically publish `src`'s map state into `dst` (the map-update commit). No-op if either is null.
@@ -260,7 +265,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_commit_from(
 ) {
     let d = ffi_ref!(dst, else return);
     let s = ffi_ref!(src, else return);
-    d.commit_from(s);
+    let _completed = d.commit_from(s).is_ok();
 }
 
 /// # Safety
@@ -283,8 +288,10 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_max_iterations(
     ffi_ref!(engine, else return 0).max_iterations()
 }
 
-/// Align `source` (`3 * n` `f32`) from `guess` (16 row-major `f32`), storing the result in the
-/// thread-local scratch (retrieve with `..._get_result`).
+/// Align `source` (`3 * n` `f32`) from `guess` (16 row-major `f32`), storing the result in
+/// compatibility thread-local scratch for retrieval with `..._get_result`. The scratch may allocate
+/// on this call. A `Pmax` or `Imax` violation, or another alignment failure, is not reported by this
+/// void ABI; the object-level status-returning path with explicit scratch is the deployment API.
 /// # Safety
 /// `engine` is a valid handle (or null → no-op); `guess` addresses 16 `f32`, `source` `3 * n` `f32`.
 #[expect(
@@ -301,7 +308,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_align(
     let e = ffi_ref!(engine, else return);
     let guess_buf = ffi_slice!(guess, 16, else return);
     let src = ffi_slice!(source, n, [f32; 3], else return);
-    e.align(&matrix4_from_row_major(guess_buf), src);
+    let _completed = e.align(&matrix4_from_row_major(guess_buf), src).is_ok();
 }
 
 /// Score `cloud` (`3 * n` `f32`) without aligning.
@@ -316,7 +323,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_calc_transforma
 ) -> f64 {
     let e = ffi_ref!(engine, else return 0.0);
     let c = ffi_slice!(cloud, n, [f32; 3], else return 0.0);
-    e.calc_transformation_probability(c)
+    e.calc_transformation_probability(c).unwrap_or(f64::NAN)
 }
 
 /// Nearest-voxel likelihood of `cloud` (`3 * n` `f32`) without aligning.
@@ -331,7 +338,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_calc_nearest_vo
 ) -> f64 {
     let e = ffi_ref!(engine, else return 0.0);
     let c = ffi_slice!(cloud, n, [f32; 3], else return 0.0);
-    e.calc_nearest_voxel_likelihood(c)
+    e.calc_nearest_voxel_likelihood(c).unwrap_or(f64::NAN)
 }
 
 /// Write the last align result into the C output buffers (same shape/contract as the `ndt_align`
@@ -406,7 +413,9 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_calc_nearest_vo
     let c = ffi_slice!(cloud, n, [f32; 3], else return);
     let out = ffi_mut_slice!(out_scores, n, else return);
     let mut scores = alloc::vec::Vec::new();
-    e.nearest_voxel_score_each_point(c, &mut scores);
+    if e.nearest_voxel_score_each_point(c, &mut scores).is_err() {
+        return;
+    }
     out.copy_from_slice(&scores);
 }
 
@@ -510,7 +519,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_run_align(
             &*params,
         )
     };
-    let outcome = run_align(
+    let Ok(outcome) = run_align(
         eng,
         &matrix4_from_row_major(guess_buf),
         src,
@@ -520,7 +529,9 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_run_align(
             converged_param_nearest_voxel_transformation_likelihood: prm
                 .converged_param_nearest_voxel_transformation_likelihood,
         },
-    );
+    ) else {
+        return;
+    };
     let mat = &outcome.pose;
     // Row-major 4x4 as an explicit literal (nalgebra `(r,c)` indexing; no array computed-index).
     let pose = [
@@ -644,27 +655,34 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_estimate_pose_covaria
             core::slice::from_raw_parts(inp.offset_y, inp.n_offsets),
         )
     };
-    let result = eng.with_scratch(|scr| {
-        estimate_pose_covariance(
-            eng,
-            &matrix4_from_row_major(&inp.result_pose),
-            &inp.hessian,
-            &matrix4_from_row_major(&inp.initial_pose),
-            source,
-            ox,
-            oy,
-            &CovEstimationParams {
-                estimation_type: inp.estimation_type,
-                scale_factor: inp.scale_factor,
-                temperature: inp.temperature,
-                main_nvtl: inp.main_nvtl,
-                output_pose_covariance: inp.output_pose_covariance,
-                map_to_base_link_rot3x3: inp.map_to_base_link_rot3x3,
-            },
-            scr,
-        )
-    });
+    let Ok(max_iterations) = usize::try_from(eng.max_iterations()) else {
+        return;
+    };
+    let Ok(mut scratch) = MatchScratch::try_with_capacity(source.len(), max_iterations) else {
+        return;
+    };
+    let result = estimate_pose_covariance(
+        eng,
+        &matrix4_from_row_major(&inp.result_pose),
+        &inp.hessian,
+        &matrix4_from_row_major(&inp.initial_pose),
+        source,
+        ox,
+        oy,
+        &CovEstimationParams {
+            estimation_type: inp.estimation_type,
+            scale_factor: inp.scale_factor,
+            temperature: inp.temperature,
+            main_nvtl: inp.main_nvtl,
+            output_pose_covariance: inp.output_pose_covariance,
+            map_to_base_link_rot3x3: inp.map_to_base_link_rot3x3,
+        },
+        &mut scratch,
+    );
     // SAFETY: `output` is non-null per the check and a writable AwCovEstimationOutput per the contract.
+    let Ok(result) = result else {
+        return;
+    };
     let out = unsafe { &mut *output };
     out.ndt_covariance = result.ndt_covariance;
     out.publish_kind = result.publish_kind;
@@ -707,6 +725,7 @@ pub(crate) unsafe fn fill_pose_buffer(buf: *mut f32, cap: usize, poses: &[Matrix
 
 #[cfg(test)]
 #[allow(
+    clippy::expect_used,
     unsafe_code,
     clippy::float_cmp,
     clippy::indexing_slicing,
@@ -752,7 +771,7 @@ mod tests {
         configured(&mut engine);
         engine.add_target(&tile_a, 0);
         engine.add_target(&tile_b, 1);
-        engine.create_kdtree();
+        engine.create_kdtree().expect("build kd-tree");
         (engine, source)
     }
 
@@ -767,7 +786,7 @@ mod tests {
     fn ffi_run_align_matches_pure() {
         let (engine, source) = two_tile_engine();
         let guess = Matrix4::<f32>::identity();
-        let pure = run_align(&engine, &guess, &source, &TP_PARAMS);
+        let pure = run_align(&engine, &guess, &source, &TP_PARAMS).expect("pure align");
 
         let (ffi_engine, ffi_source) = two_tile_engine();
         let guess16 = [
@@ -860,8 +879,11 @@ mod tests {
     // Align an engine once and return (engine, source, result_pose) for the cov tests.
     fn aligned_engine() -> (NdtEngine, Vec<[f32; 3]>, Matrix4<f32>) {
         let (engine, source) = two_tile_engine();
-        let mut scratch = MatchScratch::new();
-        engine.align_with(&Matrix4::<f32>::identity(), &source, &mut scratch);
+        let mut scratch =
+            MatchScratch::try_with_capacity(source.len(), 30).expect("reserve align scratch");
+        engine
+            .align_with(&Matrix4::<f32>::identity(), &source, &mut scratch)
+            .expect("align");
         let pose = scratch.result().pose;
         (engine, source, pose)
     }
@@ -869,6 +891,8 @@ mod tests {
     #[test]
     fn ffi_estimate_cov_matches_pure() {
         let (engine, source, result_pose) = aligned_engine();
+        let mut pure_scratch =
+            MatchScratch::try_with_capacity(source.len(), 30).expect("reserve covariance scratch");
         let pure = estimate_pose_covariance(
             &engine,
             &result_pose,
@@ -878,8 +902,9 @@ mod tests {
             &COV_OX,
             &COV_OY,
             &cov_params(2, 2.0),
-            &mut MatchScratch::new(),
-        );
+            &mut pure_scratch,
+        )
+        .expect("pure covariance estimate");
 
         let (ffi_engine, ffi_source) = two_tile_engine();
         let mut pose16 = [0.0_f32; 16];
@@ -980,14 +1005,20 @@ mod tests {
         let mut pure = NdtEngine::new(1.0, 6, 0.01);
         configured(&mut pure);
         pure.add_target(&tile, 0);
-        pure.create_kdtree();
-        pure.align(&matrix4_from_row_major(&guess16), &source);
+        pure.create_kdtree().expect("build kd-tree");
+        pure.align(&matrix4_from_row_major(&guess16), &source)
+            .expect("align");
         let want = pure.result().clone();
-        let want_tp_score = pure.calc_transformation_probability(&source);
-        let want_nvl_score = pure.calc_nearest_voxel_likelihood(&source);
+        let want_tp_score = pure
+            .calc_transformation_probability(&source)
+            .expect("pure transformation probability");
+        let want_nvl_score = pure
+            .calc_nearest_voxel_likelihood(&source)
+            .expect("pure nearest-voxel likelihood");
         let want_maxit = pure.max_iterations();
         let mut want_scores = Vec::new();
-        pure.nearest_voxel_score_each_point(&source, &mut want_scores);
+        pure.nearest_voxel_score_each_point(&source, &mut want_scores)
+            .expect("point scores");
         let (want_tp_arr, want_nvl_arr) = {
             let (a, b) = pure.score_arrays();
             (a.clone(), b.clone())

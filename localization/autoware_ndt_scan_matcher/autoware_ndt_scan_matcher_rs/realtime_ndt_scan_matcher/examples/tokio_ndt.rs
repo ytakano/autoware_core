@@ -23,6 +23,7 @@
 //! Run: `cargo run --example tokio_ndt`
 
 #![allow(
+    clippy::expect_used,
     clippy::as_conversions,
     clippy::cast_precision_loss,
     clippy::indexing_slicing,
@@ -125,7 +126,10 @@ async fn main() {
     matcher.set_covariance_config(2, 1.0, 1.0, output_cov, &offset_x, &offset_y);
 
     // Load the map from the host (async), then confirm it landed.
-    matcher.update_map(&host, [0.0, 0.0], 50.0).await;
+    matcher
+        .update_map(&host, [0.0, 0.0], 50.0)
+        .await
+        .expect("map update");
     assert!(
         matcher.has_target(),
         "map should be loaded after update_map"
@@ -141,9 +145,11 @@ async fn main() {
     }
 
     // Caller-owned scratch: one per task, reused across frames (the `mt` usage model).
-    let mut scratch = MatchScratch::new();
-    let (result, cov) =
-        matcher.match_scan_with_covariance(&Matrix4::<f32>::identity(), &scan, &mut scratch);
+    let mut scratch =
+        MatchScratch::try_with_capacity(scan.len(), 30).expect("reserve task scratch");
+    let (result, cov) = matcher
+        .match_scan_with_covariance(&Matrix4::<f32>::identity(), &scan, &mut scratch)
+        .expect("match scan with covariance");
     host.publish_result(&result);
     println!(
         "covariance xy block: [{:.5}, {:.5}; {:.5}, {:.5}]",

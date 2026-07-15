@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::ffi::{Error, ffi_boundary_ptr};
 use crate::ffi_ptr::{self, ffi_mut, ffi_mut_slice, ffi_ref};
 use crate::node::{MapUpdateInput, evaluate_map_update};
-use realtime_ndt_scan_matcher::engine::NdtEngine;
+use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine};
 use realtime_ndt_scan_matcher::pose_buffer::{InterpolateResult, PoseBuffer, TimedPoseWithCov};
 
 /// The validated, Rust-owned parameters the node needs (the union of the engine's `set_params` /
@@ -51,6 +51,12 @@ pub struct Params {
     pub converged_param_type: i32,
     pub converged_param_transform_probability: f64,
     pub converged_param_nearest_voxel_transformation_likelihood: f64,
+    // Runtime work envelope (fixed when the engine is constructed).
+    /// Maximum accepted source points per align. Also sizes caller-owned align scratch.
+    pub max_source_points: usize,
+    /// Maximum active Gaussian leaves in a published map. This is an admission bound, not a
+    /// reservation of this many leaves.
+    pub max_active_leaves: usize,
     // Covariance (`set_covariance_config`).
     pub covariance_estimation_type: i32,
     pub covariance_scale_factor: f64,
@@ -74,8 +80,15 @@ pub struct Params {
 }
 
 impl Params {
-    fn make_engine(&self) -> NdtEngine {
-        let engine = NdtEngine::new(self.resolution, self.min_points, self.eig_mult);
+    fn make_engine(&self) -> Result<NdtEngine, Error> {
+        let engine = NdtEngine::new_with_limits(
+            self.resolution,
+            self.min_points,
+            self.eig_mult,
+            self.max_source_points,
+            self.max_active_leaves,
+            self.max_iterations,
+        )?;
         engine.set_params(
             self.trans_epsilon,
             self.step_size,
@@ -97,7 +110,7 @@ impl Params {
             &self.initial_pose_offset_model_x,
             &self.initial_pose_offset_model_y,
         );
-        engine
+        Ok(engine)
     }
 }
 
@@ -116,11 +129,15 @@ pub struct MapUpdateState {
 /// The opaque node object C++ holds (as `AwNdtScanMatcher *`). Owns the validated params, node-state
 /// scaffolding, and the live Rust NDT engine. Accessed through a shared `*const` from concurrent
 /// ROS callbacks, so mutable node state uses interior locking (`Mutex`) — separate from, and finer
-/// than, the lock-free engine.
+/// than, the lock-free engine. Construction validates `Pmax`, `Lmax`, and `Imax` and reserves the
+/// serial align-plus-verdict scratch before any callback can run.
 pub struct NdtScanMatcherRs {
     pub params: Params,
     /// `is_activated_` (the C++ `std::atomic<bool>`): read by every callback gate, set by the trigger.
     is_activated: AtomicBool,
+    /// Preallocated align-plus-verdict workspace reused by mutually exclusive callbacks. With the
+    /// serial backend, this removes first-frame and steady-state allocation from that path.
+    align_scratch: Mutex<MatchScratch>,
     /// `latest_ekf_position_` (x, y, z), set by `on_initial_pose`, read by the map-update timer.
     latest_ekf_position: Mutex<Option<[f64; 3]>>,
     /// The initial-pose interpolation buffer (always present).
@@ -137,7 +154,7 @@ pub struct NdtScanMatcherRs {
 }
 
 impl NdtScanMatcherRs {
-    fn new(params: Params) -> Self {
+    fn new(params: Params) -> Result<Self, Error> {
         // Size rayon's process-global worker pool once from the configured `num_threads` (the
         // `parallel` build only). Best-effort: a no-op if the pool is already initialized, and it
         // runs before any align since the handle is built at node startup. The returned bool is
@@ -145,7 +162,8 @@ impl NdtScanMatcherRs {
         let _pool_sized = params.num_threads > 1
             && realtime_ndt_scan_matcher::init_thread_pool(params.num_threads);
 
-        let engine = params.make_engine();
+        let engine = params.make_engine()?;
+        let align_scratch = Mutex::new(MatchScratch::try_for_limits(engine.limits())?);
         let regularization_buffer = if params.regularization_enable {
             Some(Mutex::new(PoseBuffer::new(
                 params.regularization_pose_timeout_sec,
@@ -158,7 +176,7 @@ impl NdtScanMatcherRs {
             params.initial_pose_timeout_sec,
             params.initial_pose_distance_tolerance_m,
         ));
-        Self {
+        Ok(Self {
             params,
             is_activated: AtomicBool::new(false),
             latest_ekf_position: Mutex::new(None),
@@ -166,14 +184,20 @@ impl NdtScanMatcherRs {
             regularization_buffer,
             engine,
             map_update_state: Mutex::new(MapUpdateState::default()),
+            align_scratch,
             latest_sensor_points_base_link: Mutex::new(Vec::new()),
-        }
+        })
     }
 
     /// Borrow the live Rust-owned NDT engine. The returned reference must not outlive `self`.
     #[must_use]
     pub(crate) fn engine(&self) -> &NdtEngine {
         &self.engine
+    }
+
+    /// Exclusively borrow the preallocated align scratch for one callback.
+    pub(crate) fn lock_align_scratch(&self) -> Option<std::sync::MutexGuard<'_, MatchScratch>> {
+        self.align_scratch.lock().ok()
     }
 
     /// Read the activation flag (the C++ `is_activated_`). Relaxed: each callback reads/writes it
@@ -357,7 +381,8 @@ impl NdtScanMatcherRs {
 
 /// C ABI mirror of the node's parameters. Scalars cross by value; the variable-length covariance
 /// offset models cross as `(ptr, len)` borrowed for the duration of the `_new` call only (Rust copies
-/// them). `#[repr(C)]` fixes the layout.
+/// them). `#[repr(C)]` fixes the layout. Construction requires positive `max_source_points` and
+/// `max_active_leaves`, `max_iterations` in `0..=30`, and work-counter products that fit `u64`.
 #[repr(C)]
 pub struct AwNdtParams {
     pub resolution: f64,
@@ -365,7 +390,12 @@ pub struct AwNdtParams {
     pub eig_mult: f64,
     pub trans_epsilon: f64,
     pub step_size: f64,
+    /// `Imax`: maximum Newton iterations, in `0..=30`.
     pub max_iterations: i32,
+    /// `Pmax`: maximum source points accepted by an align and reserved in scratch.
+    pub max_source_points: usize,
+    /// `Lmax`: maximum active leaves accepted for publication; no `Lmax`-sized reservation occurs.
+    pub max_active_leaves: usize,
     pub outlier_ratio: f64,
     pub num_threads: i32,
     pub converged_param_type: i32,
@@ -520,6 +550,8 @@ impl Params {
             trans_epsilon: p.trans_epsilon,
             step_size: p.step_size,
             max_iterations: p.max_iterations,
+            max_source_points: p.max_source_points,
+            max_active_leaves: p.max_active_leaves,
             outlier_ratio: p.outlier_ratio,
             num_threads,
             converged_param_type: p.converged_param_type,
@@ -563,7 +595,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_new(
         let p = ffi_ref!(params, or Error::NullPtr)?;
         // SAFETY: the offset-model pointers in `p` are valid for their stated lengths per the contract.
         let params = unsafe { Params::try_from_ffi(p) }?;
-        Ok(ffi_ptr::into_handle(NdtScanMatcherRs::new(params)))
+        Ok(ffi_ptr::into_handle(NdtScanMatcherRs::new(params)?))
     })
 }
 
@@ -845,6 +877,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_map_update_out_of_range(
 
 #[cfg(test)]
 #[allow(
+    clippy::expect_used,
     unsafe_code,
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -866,6 +899,8 @@ mod tests {
             trans_epsilon: 0.01,
             step_size: 0.1,
             max_iterations: 30,
+            max_source_points: 2_000,
+            max_active_leaves: 418_000,
             outlier_ratio: 0.55,
             num_threads: 4,
             converged_param_type: 1,

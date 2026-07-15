@@ -24,7 +24,8 @@ use nalgebra::{Matrix2, Matrix4, Vector2};
 
 use crate::covariance::{calc_weight_vec, calculate_weighted_mean_and_cov};
 use crate::ndt::{
-    AlignResult, AlignWorkspace, NdtParams, align, nearest_voxel_transformation_likelihood,
+    AlignError, AlignResult, AlignWorkspace, NdtParams, align,
+    nearest_voxel_transformation_likelihood,
 };
 use crate::transform::{gauss_constants, transform_cloud_by_matrix};
 use crate::voxel_grid::VoxelGridMap;
@@ -86,7 +87,8 @@ pub fn propose_poses_to_search(
     clippy::allow_attributes,
     reason = "constant indices into a fixed-size Matrix4; n is a small count, the n as f64 average is deliberate"
 )]
-#[must_use]
+/// # Errors
+/// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
 pub fn estimate_xy_covariance_by_multi_ndt(
     main_ndt: &AlignResult,
     poses_to_search: &[Matrix4<f32>],
@@ -94,16 +96,33 @@ pub fn estimate_xy_covariance_by_multi_ndt(
     source: &[[f32; 3]],
     params: &NdtParams,
     ws: &mut AlignWorkspace,
-) -> MultiNdtCovResult {
-    let n = poses_to_search.len().saturating_add(1);
+) -> Result<MultiNdtCovResult, AlignError> {
+    let n = poses_to_search
+        .len()
+        .checked_add(1)
+        .ok_or(AlignError::ArithmeticOverflow)?;
     let mut poses2d: Vec<f64> = Vec::with_capacity(n.saturating_mul(2));
     poses2d.push(f64::from(main_ndt.pose[(0, 3)]));
     poses2d.push(f64::from(main_ndt.pose[(1, 3)]));
 
     let mut candidate_result_poses: Vec<Matrix4<f32>> = Vec::with_capacity(poses_to_search.len());
     let mut out = AlignResult::default();
+    let iterations =
+        usize::try_from(params.max_iterations).map_err(|_| AlignError::IterationLimitExceeded)?;
+    let result_capacity = iterations
+        .checked_add(1)
+        .ok_or(AlignError::ArithmeticOverflow)?;
+    out.transformation_array
+        .try_reserve_exact(result_capacity)
+        .map_err(|_| AlignError::WorkspaceCapacityExceeded)?;
+    out.transform_probability_array
+        .try_reserve_exact(result_capacity)
+        .map_err(|_| AlignError::WorkspaceCapacityExceeded)?;
+    out.nearest_voxel_likelihood_array
+        .try_reserve_exact(result_capacity)
+        .map_err(|_| AlignError::WorkspaceCapacityExceeded)?;
     for cand in poses_to_search {
-        align(map, source, cand, params, ws, &mut out);
+        align(map, source, cand, params, ws, &mut out)?;
         poses2d.push(f64::from(out.pose[(0, 3)]));
         poses2d.push(f64::from(out.pose[(1, 3)]));
         candidate_result_poses.push(out.pose);
@@ -119,11 +138,11 @@ pub fn estimate_xy_covariance_by_multi_ndt(
         cov[2] * factor,
         cov[3] * factor,
     ];
-    MultiNdtCovResult {
+    Ok(MultiNdtCovResult {
         mean,
         covariance,
         candidate_result_poses,
-    }
+    })
 }
 
 /// `MULTI_NDT_SCORE` covariance: for each candidate pose, transform the source by it and score it
@@ -138,7 +157,8 @@ pub fn estimate_xy_covariance_by_multi_ndt(
     clippy::allow_attributes,
     reason = "constant indices into a fixed-size Matrix4; the main result's nvtl is f32 by contract"
 )]
-#[must_use]
+/// # Errors
+/// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
 pub fn estimate_xy_covariance_by_multi_ndt_score(
     main_ndt: &AlignResult,
     poses_to_search: &[Matrix4<f32>],
@@ -147,9 +167,12 @@ pub fn estimate_xy_covariance_by_multi_ndt_score(
     params: &NdtParams,
     temperature: f64,
     ws: &mut AlignWorkspace,
-) -> MultiNdtCovResult {
+) -> Result<MultiNdtCovResult, AlignError> {
     let gauss = gauss_constants(params.outlier_ratio, params.resolution);
-    let n = poses_to_search.len().saturating_add(1);
+    let n = poses_to_search
+        .len()
+        .checked_add(1)
+        .ok_or(AlignError::ArithmeticOverflow)?;
     let mut poses2d: Vec<f64> = Vec::with_capacity(n.saturating_mul(2));
     let mut scores: Vec<f64> = Vec::with_capacity(n);
     poses2d.push(f64::from(main_ndt.pose[(0, 3)]));
@@ -168,22 +191,23 @@ pub fn estimate_xy_covariance_by_multi_ndt_score(
             params.resolution,
             &gauss,
             ws,
-        ));
+        )?);
     }
 
     let mut weights = vec![0.0_f64; n];
     calc_weight_vec(&scores, temperature, &mut weights);
     let (mean, covariance) = calculate_weighted_mean_and_cov(&poses2d, &weights);
     // The score variant does not re-align, so it has no per-candidate result poses.
-    MultiNdtCovResult {
+    Ok(MultiNdtCovResult {
         mean,
         covariance,
         candidate_result_poses: Vec::new(),
-    }
+    })
 }
 
 #[cfg(test)]
 #[allow(
+    clippy::expect_used,
     unsafe_code,
     clippy::float_cmp,
     clippy::indexing_slicing,
@@ -221,7 +245,7 @@ mod tests {
         }
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
         map.add_target(&pts, 0);
-        map.create_kdtree();
+        map.create_kdtree().expect("build kd-tree");
         (map, pts)
     }
 
@@ -230,7 +254,7 @@ mod tests {
             trans_epsilon: 1e-3,
             step_size: 0.2,
             resolution: 1.0,
-            max_iterations: 50,
+            max_iterations: 30,
             outlier_ratio: 0.55,
             regularization: None,
             num_threads: 1,
@@ -278,7 +302,8 @@ mod tests {
         };
         let poses =
             propose_poses_to_search(&main_pose, &[0.2, -0.2, 0.0, 0.0], &[0.0, 0.0, 0.2, -0.2]);
-        let mut ws = AlignWorkspace::new();
+        let mut ws =
+            AlignWorkspace::try_with_capacity(source.len()).expect("reserve covariance workspace");
         let r = estimate_xy_covariance_by_multi_ndt(
             &main_ndt,
             &poses,
@@ -286,7 +311,8 @@ mod tests {
             &source,
             &params(),
             &mut ws,
-        );
+        )
+        .expect("covariance estimate");
 
         // symmetric
         assert!((r.covariance[1] - r.covariance[2]).abs() < 1e-12);
@@ -321,7 +347,8 @@ mod tests {
             &params(),
             0.1,
             &mut ws,
-        );
+        )
+        .expect("covariance estimate");
         assert!((r.covariance[1] - r.covariance[2]).abs() < 1e-12);
         assert!(r.covariance[0] >= 0.0 && r.covariance[3] >= 0.0);
         let det = r.covariance[0] * r.covariance[3] - r.covariance[1] * r.covariance[2];

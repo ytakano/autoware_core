@@ -35,6 +35,8 @@ namespace
 AwNdtScanMatcher * make_handle(const std::string & map_frame)
 {
   AwNdtParams p{};
+  p.max_source_points = 2000;
+  p.max_active_leaves = 418000;
   p.resolution = 1.0;
   p.min_points = 6;
   p.eig_mult = 0.01;

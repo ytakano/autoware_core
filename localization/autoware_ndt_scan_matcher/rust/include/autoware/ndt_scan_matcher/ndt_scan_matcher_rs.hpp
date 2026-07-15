@@ -50,6 +50,8 @@ inline AwNdtParams make_aw_ndt_params(const HyperParameters & p)
   out.trans_epsilon = p.ndt.trans_epsilon;
   out.step_size = p.ndt.step_size;
   out.max_iterations = p.ndt.max_iterations;
+  out.max_source_points = p.ndt_runtime_limits.max_source_points;
+  out.max_active_leaves = p.ndt_runtime_limits.max_active_leaves;
   out.outlier_ratio = 0.55;
   out.num_threads = p.ndt.num_threads;
   out.converged_param_type = static_cast<int32_t>(p.score_estimation.converged_param_type);

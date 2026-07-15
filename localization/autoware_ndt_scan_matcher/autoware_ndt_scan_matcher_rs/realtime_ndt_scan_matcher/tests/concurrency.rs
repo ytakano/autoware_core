@@ -65,7 +65,7 @@ fn configured_two_tile_engine() -> (NdtEngine, Vec<[f32; 3]>) {
     engine.set_params(0.01, 0.1, 1.0, 30, 0.55, 1);
     engine.add_target(&tile_a, 0);
     engine.add_target(&tile_b, 1);
-    engine.create_kdtree();
+    engine.create_kdtree().expect("build kd-tree");
     (engine, source)
 }
 
@@ -90,9 +90,10 @@ fn concurrent_aligns_and_map_commits_stay_consistent() {
         handles.push(thread::spawn(move || {
             // One caller-owned scratch per reader thread (the `mt` usage model; equivalent to the
             // std thread-local).
-            let mut scratch = MatchScratch::new();
+            let mut scratch =
+                MatchScratch::try_with_capacity(src.len(), 30).expect("reserve reader scratch");
             for _ in 0..READER_ITERS {
-                e.align_with(&guess, &src, &mut scratch);
+                e.align_with(&guess, &src, &mut scratch).expect("align");
                 let r = scratch.result();
                 // A complete map always yields a finite pose; a torn/kd-tree-less map would not.
                 assert!(r.pose[(0, 3)].is_finite(), "align saw an inconsistent map");
@@ -114,8 +115,8 @@ fn concurrent_aligns_and_map_commits_stay_consistent() {
                 } else {
                     staging.remove_target(2);
                 }
-                staging.create_kdtree();
-                e.commit_from(&staging);
+                staging.create_kdtree().expect("build staged kd-tree");
+                e.commit_from(&staging).expect("commit staged map");
             }
         }));
     }

@@ -32,7 +32,7 @@ use alloc::vec::Vec;
 
 use nalgebra::{Matrix3, Vector3};
 
-use crate::kdtree::KdTree;
+use crate::kdtree::{KdSearchError, KdSearchOutcome, KdTree};
 
 const DEFAULT_MIN_POINTS_PER_VOXEL: i32 = 6;
 
@@ -109,6 +109,10 @@ fn floor_i64(x: f64) -> i64 {
     clippy::cast_precision_loss,
     clippy::allow_attributes,
     reason = "control-plane map build: nalgebra f64 covariance math and deliberate count casts"
+)]
+#[cfg_attr(
+    not(feature = "wcet-trace"),
+    expect(unused_variables, reason = "voxel id is retained only by trace builds")
 )]
 fn finalize_leaf(id: i64, accumulator: &Accumulator, eig_mult: f64) -> Option<Leaf> {
     let n_f = accumulator.n as f64;
@@ -349,6 +353,24 @@ pub struct VoxelGridMap {
     flat_leaves: Vec<Leaf>,
     kdtree: Option<KdTree>,
 }
+/// Failure while flattening tiles and finalizing a staged map for publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MapBuildError {
+    /// A control-plane vector reservation failed.
+    AllocationFailed,
+    /// The total active-leaf count could not be represented.
+    ArithmeticOverflow,
+    /// Balanced-tree construction failed.
+    KdTree(KdSearchError),
+    /// The staged map contained more active Gaussian leaves than its admission bound.
+    LeafLimitExceeded,
+}
+
+impl From<KdSearchError> for MapBuildError {
+    fn from(value: KdSearchError) -> Self {
+        Self::KdTree(value)
+    }
+}
 
 impl VoxelGridMap {
     /// A map with no tiles.
@@ -424,13 +446,41 @@ impl VoxelGridMap {
         self.flat_leaves.clear();
     }
 
-    /// Flatten all grids' leaves (id order, ↔ C++ `std::map`) and build the kd-tree over centroids.
-    pub fn create_kdtree(&mut self) {
+    /// Flatten all grids' leaves in canonical tile order and build the kd-tree over centroids.
+    ///
+    /// `max_leaves` is an admission check, not a reservation. Temporary vectors reserve the actual
+    /// leaf count only. The flattened leaves and tree are replaced only after every check and build
+    /// step succeeds; engine-level map updates call this on a private staging state and publish that
+    /// state atomically.
+    /// # Errors
+    /// Returns [`MapBuildError::LeafLimitExceeded`] before tree construction when the map exceeds
+    /// `max_leaves`, [`MapBuildError::ArithmeticOverflow`] on checked-count overflow,
+    /// [`MapBuildError::AllocationFailed`] on reservation failure, or [`MapBuildError::KdTree`] for
+    /// balanced-tree construction failures.
+    pub fn try_create_kdtree(&mut self, max_leaves: usize) -> Result<usize, MapBuildError> {
+        let total_leaves = self.grids.values().try_fold(0_usize, |total, grid| {
+            total
+                .checked_add(grid.leaves.len())
+                .ok_or(MapBuildError::ArithmeticOverflow)
+        })?;
+        if total_leaves > max_leaves {
+            return Err(MapBuildError::LeafLimitExceeded);
+        }
         let mut centroids: Vec<[f32; 3]> = Vec::new();
+        centroids
+            .try_reserve_exact(total_leaves)
+            .map_err(|_| MapBuildError::AllocationFailed)?;
         let mut flat: Vec<Leaf> = Vec::new();
+        flat.try_reserve_exact(total_leaves)
+            .map_err(|_| MapBuildError::AllocationFailed)?;
         for (grid_ordinal, grid) in self.grids.values().enumerate() {
             for leaf in &grid.leaves {
+                #[cfg(not(feature = "wcet-trace"))]
+                let _ = grid_ordinal;
                 centroids.push(leaf.centroid);
+                #[cfg(not(feature = "wcet-trace"))]
+                let flat_leaf = leaf.clone();
+                #[cfg(feature = "wcet-trace")]
                 let mut flat_leaf = leaf.clone();
                 #[cfg(feature = "wcet-trace")]
                 {
@@ -439,8 +489,20 @@ impl VoxelGridMap {
                 flat.push(flat_leaf);
             }
         }
-        self.kdtree = Some(KdTree::build(&centroids));
+        let kdtree = KdTree::try_build(&centroids)?;
+        self.kdtree = Some(kdtree);
         self.flat_leaves = flat;
+        Ok(total_leaves)
+    }
+
+    /// Effectively unbounded control-plane compatibility wrapper.
+    ///
+    /// Deployment code uses [`Self::try_create_kdtree`] through an engine with an explicit `Lmax`.
+    /// # Errors
+    /// Returns the errors documented by [`Self::try_create_kdtree`], except that this wrapper does
+    /// not impose a practical leaf-admission limit.
+    pub fn create_kdtree(&mut self) -> Result<usize, MapBuildError> {
+        self.try_create_kdtree(usize::MAX)
     }
 
     /// Flat indices of leaves whose centroid is within `radius` of `point` (needs `create_kdtree`).
@@ -448,28 +510,43 @@ impl VoxelGridMap {
     /// # Arguments
     /// * `point` — query point (`[x, y, z]`, metres).
     /// * `radius` — search radius in metres.
-    /// * `max_nn` — cap on the number of neighbors returned.
-    /// * `out` — cleared and filled with the matching flat leaf indices (index into [`Self::leaf`]);
-    ///   reuse the buffer across calls to avoid reallocation. No-op if the kd-tree is not built.
-    pub fn radius_search(&self, point: [f32; 3], radius: f64, max_nn: usize, out: &mut Vec<usize>) {
-        if let Some(kt) = &self.kdtree {
-            kt.radius_search(&point, radius, max_nn, out);
+    /// * `max_nn` — cap on retained neighbors; a further match sets the returned outcome's
+    ///   `result_limit_exceeded` field. Zero means unlimited.
+    /// * `out` — matching flat leaf indices are appended to this buffer (index into [`Self::leaf`]);
+    ///   clear and pre-reserve it before the call for allocation-free use. No-op if the kd-tree is
+    ///   not built.
+    /// # Errors
+    /// Returns [`MapBuildError::KdTree`] containing `KdSearchError::StackCapacityExceeded` if
+    /// traversal exceeds the fixed stack, or `KdSearchError::ArithmeticOverflow` if a work counter
+    /// cannot be represented.
+    pub fn radius_search(
+        &self,
+        point: [f32; 3],
+        radius: f64,
+        max_nn: usize,
+        out: &mut Vec<usize>,
+    ) -> Result<KdSearchOutcome, KdSearchError> {
+        match &self.kdtree {
+            Some(kt) => kt.radius_search(&point, radius, max_nn, out),
+            None => Ok(KdSearchOutcome::default()),
         }
     }
 
     /// [`Self::radius_search`] that also returns the number of kd-tree nodes visited — the
     /// deterministic traversal-cost counter for the WCET analysis (`plan/ndt_wcet.md`).
     #[cfg(feature = "wcet-count")]
+    /// # Errors
+    /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
     pub fn radius_search_counted(
         &self,
         point: [f32; 3],
         radius: f64,
         max_nn: usize,
         out: &mut Vec<usize>,
-    ) -> u64 {
+    ) -> Result<KdSearchOutcome, KdSearchError> {
         match &self.kdtree {
             Some(kt) => kt.radius_search_counted(&point, radius, max_nn, out),
-            None => 0,
+            None => Ok(KdSearchOutcome::default()),
         }
     }
 
@@ -490,8 +567,8 @@ impl VoxelGridMap {
 
 #[cfg(test)]
 #[allow(
-    clippy::float_cmp,
     clippy::expect_used,
+    clippy::float_cmp,
     clippy::needless_range_loop,
     clippy::unreadable_literal,
     clippy::arithmetic_side_effects,
@@ -653,17 +730,19 @@ mod tests {
         let mut map = VoxelGridMap::new([2.0, 2.0, 2.0], 6, 0.01);
         map.add_target(&dense_cluster(1.0, 1.0, 1.0), 0);
         map.add_target(&dense_cluster(21.0, 1.0, 1.0), 1);
-        map.create_kdtree();
+        map.create_kdtree().expect("build kd-tree");
 
         let mut hits = alloc::vec::Vec::new();
-        map.radius_search([1.0, 1.0, 1.0], 1.5, 0, &mut hits);
+        map.radius_search([1.0, 1.0, 1.0], 1.5, 0, &mut hits)
+            .expect("radius search");
         assert_eq!(hits.len(), 1, "exactly one leaf near cluster A");
         let leaf = map.leaf(hits[0]).expect("leaf");
         assert!((leaf.mean[0] - 1.07).abs() < 0.2 && (leaf.mean[1] - 0.93).abs() < 0.2);
 
         // A query far from every centroid finds nothing.
         let mut none = alloc::vec::Vec::new();
-        map.radius_search([100.0, 100.0, 100.0], 1.5, 0, &mut none);
+        map.radius_search([100.0, 100.0, 100.0], 1.5, 0, &mut none)
+            .expect("radius search");
         assert!(none.is_empty());
     }
 
@@ -673,13 +752,15 @@ mod tests {
         map.add_target(&dense_cluster(1.0, 1.0, 1.0), 0);
         map.add_target(&dense_cluster(21.0, 1.0, 1.0), 1);
         map.remove_target(0);
-        map.create_kdtree();
+        map.create_kdtree().expect("build kd-tree");
 
         let mut a = alloc::vec::Vec::new();
-        map.radius_search([1.0, 1.0, 1.0], 1.5, 0, &mut a);
+        map.radius_search([1.0, 1.0, 1.0], 1.5, 0, &mut a)
+            .expect("radius search");
         assert!(a.is_empty(), "removed grid's leaf must be gone");
         let mut b = alloc::vec::Vec::new();
-        map.radius_search([21.0, 1.0, 1.0], 1.5, 0, &mut b);
+        map.radius_search([21.0, 1.0, 1.0], 1.5, 0, &mut b)
+            .expect("radius search");
         assert_eq!(b.len(), 1, "remaining grid still searchable");
     }
 
@@ -689,7 +770,8 @@ mod tests {
         map.add_target(&dense_cluster(1.0, 1.0, 1.0), 0);
         // No create_kdtree() yet.
         let mut hits = alloc::vec::Vec::new();
-        map.radius_search([1.0, 1.0, 1.0], 1.5, 0, &mut hits);
+        map.radius_search([1.0, 1.0, 1.0], 1.5, 0, &mut hits)
+            .expect("radius search");
         assert!(hits.is_empty());
         assert!(map.leaf(0).is_none(), "no flat leaves before create_kdtree");
     }
@@ -708,7 +790,7 @@ mod tests {
                 id += 1;
             }
         }
-        map.create_kdtree();
+        map.create_kdtree().expect("build kd-tree");
 
         // Deterministic queries spanning the populated region.
         let mut state = 0x9E37_79B9_u64;
@@ -720,7 +802,8 @@ mod tests {
             let radius = 2.5_f64;
 
             let mut got = alloc::vec::Vec::new();
-            map.radius_search([qx, qy, 1.0], radius, 0, &mut got);
+            map.radius_search([qx, qy, 1.0], radius, 0, &mut got)
+                .expect("radius search");
             got.sort_unstable();
 
             let r2 = radius * radius;

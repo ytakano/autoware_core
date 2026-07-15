@@ -34,6 +34,12 @@
       # The number of iterations required to calculate alignment
       max_iterations: 30
 
+      # Replay maximum 1500 points, with 20% margin rounded up to 1000.
+      max_source_points: 2000
+
+      # Full-map replay maximum 347956 active leaves, with the same margin and rounding.
+      max_active_leaves: 418000
+
       # Number of threads used for parallel computing
       num_threads: 4
 

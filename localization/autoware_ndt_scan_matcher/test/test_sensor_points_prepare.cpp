@@ -98,6 +98,8 @@ AwDiagnostics noop_diag()
 AwNdtScanMatcher * make_handle(double required_distance)
 {
   AwNdtParams p{};
+  p.max_source_points = 2000;
+  p.max_active_leaves = 418000;
   p.resolution = 1.0;
   p.min_points = 6;
   p.num_threads = 1;

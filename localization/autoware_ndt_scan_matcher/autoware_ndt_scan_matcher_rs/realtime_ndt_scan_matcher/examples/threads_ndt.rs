@@ -147,7 +147,8 @@ fn main() {
     // Gate convergence on the transform-probability score (type 0); 0.0 is the defensive threshold.
     matcher.set_convergence_params(0, 0.0, 0.0);
     // Initial map (drive the async port with the hand-rolled block_on — no runtime).
-    block_on(matcher.update_map(&ThreadHost { extra: true }, [0.0, 0.0], 50.0));
+    block_on(matcher.update_map(&ThreadHost { extra: true }, [0.0, 0.0], 50.0))
+        .expect("initial map update");
     assert!(matcher.has_target(), "map should be loaded");
 
     let mut handles = Vec::new();
@@ -158,7 +159,7 @@ fn main() {
         handles.push(std::thread::spawn(move || {
             for i in 0..MAP_UPDATES {
                 let host = ThreadHost { extra: i % 2 == 0 };
-                block_on(matcher.update_map(&host, [0.0, 0.0], 50.0));
+                block_on(matcher.update_map(&host, [0.0, 0.0], 50.0)).expect("map update");
             }
         }));
     }
@@ -172,9 +173,12 @@ fn main() {
         handles.push(std::thread::spawn(move || {
             // One caller-owned scratch per worker, reused across its frames — the `mt`
             // (multi-core no_std) usage model, demonstrated on std threads.
-            let mut scratch = MatchScratch::new();
+            let mut scratch =
+                MatchScratch::try_with_capacity(scan.len(), 30).expect("reserve worker scratch");
             for _ in 0..ALIGNS_PER_WORKER {
-                let r = matcher.match_scan(&guess, &scan, &mut scratch);
+                let r = matcher
+                    .match_scan(&guess, &scan, &mut scratch)
+                    .expect("match scan");
                 assert!(r.pose[(0, 3)].is_finite(), "align saw an inconsistent map");
             }
         }));
@@ -186,8 +190,11 @@ fn main() {
     }
 
     // Final deterministic check on the quiesced matcher.
-    let mut scratch = MatchScratch::new();
-    let r = matcher.match_scan(&guess, &scan, &mut scratch);
+    let mut scratch =
+        MatchScratch::try_with_capacity(scan.len(), 30).expect("reserve final scratch");
+    let r = matcher
+        .match_scan(&guess, &scan, &mut scratch)
+        .expect("match scan");
     assert!(matcher.has_target() && r.pose[(0, 3)].is_finite());
     assert!(
         r.converged,

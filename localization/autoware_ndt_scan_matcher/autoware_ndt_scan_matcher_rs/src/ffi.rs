@@ -14,11 +14,11 @@
 
 //! Panic-safe FFI boundary helpers + the status/error types the object-level entry points return.
 //!
-//! A Rust panic that unwinds into C++ is undefined behavior. The crate already *prevents* panics via
-//! the rust-hardening lint gates (no `unwrap`/`expect`/`panic`/indexing in production), but a
-//! defective dependency or an `overflow-checks` integer overflow could still panic. These helpers
-//! *contain* it: a caught unwind becomes [`AwStatus::Panic`] / a null pointer instead of crossing the
-//! boundary.
+//! A Rust panic that unwinds into C++ is undefined behavior. Project-owned integer arithmetic on the
+//! bounded path is checked and reported as [`AwStatus::ExecutionFailed`], and the rust-hardening lint
+//! gates exclude direct `unwrap`, `expect`, `panic`, and unchecked indexing in production code. A
+//! defect in a trusted dependency can still panic. These helpers contain such an unwind: it becomes
+//! [`AwStatus::Panic`] or a null pointer instead of crossing the boundary.
 //!
 //! std-only: `catch_unwind` needs `std`, and these wrap the ROS-node C ABI — the `no_std` kernel
 //! build drives the engine directly and crosses no C ABI here.
@@ -33,6 +33,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 pub enum AwStatus {
     /// The call succeeded.
     Ok = 0,
+    /// A configured `Pmax`, `Lmax`, `Imax`, or preallocated-workspace limit was exceeded.
+    LimitExceeded = 4,
+    /// Checked arithmetic, limit validation, kd-stack, map-build, or finite-value validation failed.
+    ExecutionFailed = 5,
     /// A required pointer argument was null.
     NullPtr = 1,
     /// An argument was structurally invalid (e.g. mismatched offset-model lengths).
@@ -44,6 +48,10 @@ pub enum AwStatus {
 /// A recoverable failure inside an FFI entry point, mapped to an [`AwStatus`] at the boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
+    /// A configured `Pmax`, `Lmax`, `Imax`, or preallocated-workspace limit was exceeded.
+    LimitExceeded,
+    /// Checked arithmetic, limit validation, kd-stack, map-build, or finite-value validation failed.
+    ExecutionFailed,
     /// A required pointer argument was null.
     NullPtr,
     /// A validated argument was structurally invalid.
@@ -55,8 +63,29 @@ impl Error {
     #[must_use]
     pub fn into_status(self) -> AwStatus {
         match self {
+            Error::LimitExceeded => AwStatus::LimitExceeded,
+            Error::ExecutionFailed => AwStatus::ExecutionFailed,
             Error::NullPtr => AwStatus::NullPtr,
             Error::InvalidParam => AwStatus::InvalidParam,
+        }
+    }
+}
+
+/// Preserve the distinction between an admitted envelope violation and a failure while validating
+/// or executing work inside that envelope.
+impl From<realtime_ndt_scan_matcher::ndt::AlignError> for Error {
+    fn from(error: realtime_ndt_scan_matcher::ndt::AlignError) -> Self {
+        use realtime_ndt_scan_matcher::ndt::AlignError;
+        match error {
+            AlignError::IterationLimitExceeded
+            | AlignError::MapLeafLimitExceeded
+            | AlignError::SourcePointLimitExceeded
+            | AlignError::WorkspaceCapacityExceeded => Self::LimitExceeded,
+            AlignError::ArithmeticOverflow
+            | AlignError::InvalidLimits
+            | AlignError::KdStackCapacityExceeded
+            | AlignError::MapBuildFailed
+            | AlignError::NonFiniteValue => Self::ExecutionFailed,
         }
     }
 }
@@ -94,6 +123,7 @@ where
 
 #[cfg(test)]
 #[allow(
+    clippy::expect_used,
     clippy::panic,
     clippy::allow_attributes,
     reason = "test code may freely panic to exercise the boundary"

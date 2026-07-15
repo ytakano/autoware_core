@@ -111,13 +111,13 @@ fn engine_allocations_after_warmup() {
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
         map.add_target(&dense_cluster(0.5, 0.5, 0.5), 0);
         map.add_target(&dense_cluster(2.5, 0.5, 0.5), 1);
-        map.create_kdtree();
+        map.create_kdtree().expect("build kd-tree");
 
         let source: Vec<[f32; 3]> = vec![[0.55, 0.5, 0.5], [0.5, 0.45, 0.52], [2.55, 0.5, 0.5]];
         let p = Vector6::new(0.05, -0.03, 0.02, 0.04, -0.02, 0.03);
         let trans = transform_cloud(&source, &p);
         let gauss = gauss_constants(0.55, 1.0);
-        let mut ws = AlignWorkspace::new();
+        let mut ws = AlignWorkspace::try_with_capacity(source.len()).expect("reserve workspace");
 
         let warm = compute_derivatives(
             &map,
@@ -130,7 +130,8 @@ fn engine_allocations_after_warmup() {
                 reg: None,
             },
             &mut ws,
-        );
+        )
+        .expect("warm derivative computation");
         assert!(
             warm.score > 0.0,
             "fixture should produce a non-trivial score"
@@ -170,7 +171,7 @@ fn engine_allocations_after_warmup() {
     {
         map.add_target(&dense_cluster(cx, cy, cz), id as u64);
     }
-    map.create_kdtree();
+    map.create_kdtree().expect("build kd-tree");
 
     // ~40-point source (8 per cluster) translated by a known offset — large enough that an O(P)
     // per-frame allocation would show up clearly.
@@ -198,11 +199,11 @@ fn engine_allocations_after_warmup() {
     };
     let guess = Matrix4::identity();
 
-    let mut ws = AlignWorkspace::new();
-    let mut out = AlignResult::default();
+    let mut ws = AlignWorkspace::try_with_capacity(source.len()).expect("reserve workspace");
+    let mut out = AlignResult::try_with_capacity(30).expect("reserve result");
 
     // Warm up (grows neighbor_idx + pre-reserves the result/cloud buffers).
-    align(&map, &source, &guess, &params, &mut ws, &mut out);
+    align(&map, &source, &guess, &params, &mut ws, &mut out).expect("warm align");
     // Second align with the same shapes: buffers reused, no growth.
     let allocs = count_allocs(|| align(&map, &source, &guess, &params, &mut ws, &mut out));
 
@@ -228,12 +229,9 @@ fn engine_allocations_after_warmup() {
     // A growth event is a WCET spike, so the amortized warmup above is not enough for a bound:
     // AlignWorkspace::with_capacity + a pre-reserved result must make even the first align
     // allocation-free (plan/ndt_wcet.md, M2).
-    let mut ws2 = AlignWorkspace::with_capacity(source.len());
-    let mut out2 = AlignResult::default();
-    let iter_cap = usize::try_from(params.max_iterations).unwrap() + 1;
-    out2.transformation_array.reserve(iter_cap);
-    out2.transform_probability_array.reserve(iter_cap);
-    out2.nearest_voxel_likelihood_array.reserve(iter_cap);
+    let mut ws2 = AlignWorkspace::try_with_capacity(source.len()).expect("reserve workspace");
+    let iter_cap = usize::try_from(params.max_iterations).unwrap();
+    let mut out2 = AlignResult::try_with_capacity(iter_cap).expect("reserve result");
 
     let first_frame_allocs =
         count_allocs(|| align(&map, &source, &guess, &params, &mut ws2, &mut out2));
@@ -250,18 +248,27 @@ fn engine_allocations_after_warmup() {
     // --- engine path: MatchScratch::with_capacity makes the FIRST engine align allocation-free ---
     // (Same process-global counter, so this stays in the single sequential test.)
     {
-        use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine};
+        use realtime_ndt_scan_matcher::engine::{
+            ConvergenceParams, MatchScratch, NdtEngine, run_align_with,
+        };
         let engine = NdtEngine::new(2.0, 6, 0.01);
         for (id, &(cx, cy, cz)) in centers.iter().enumerate() {
             engine.add_target(&dense_cluster(cx, cy, cz), id as u64);
         }
-        engine.create_kdtree();
+        engine.create_kdtree().expect("build kd-tree");
         let max_iter = usize::try_from(engine.max_iterations()).unwrap();
-        let mut scratch = MatchScratch::with_capacity(source.len(), max_iter);
-        let engine_first_allocs = count_allocs(|| engine.align_with(&guess, &source, &mut scratch));
+        let mut scratch =
+            MatchScratch::try_with_capacity(source.len(), max_iter).expect("reserve scratch");
+        let convergence = ConvergenceParams {
+            converged_param_type: 0,
+            converged_param_transform_probability: 0.0,
+            converged_param_nearest_voxel_transformation_likelihood: 0.0,
+        };
+        let engine_first_allocs =
+            count_allocs(|| run_align_with(&engine, &guess, &source, &convergence, &mut scratch));
         assert_eq!(
             engine_first_allocs, 0,
-            "engine.align_with allocated {engine_first_allocs} time(s) on the first frame with a \
+            "engine run_align_with allocated {engine_first_allocs} time(s) on the first frame with a \
              pre-reserved MatchScratch"
         );
     }

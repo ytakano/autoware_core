@@ -149,7 +149,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_targ
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(
     map: *mut VoxelGridMap,
 ) {
-    ffi_mut!(map, else return).create_kdtree();
+    let _completed = ffi_mut!(map, else return).create_kdtree().is_ok();
 }
 
 /// # Safety
@@ -177,7 +177,12 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_voxel_grid_map_radius_sear
     let map = ffi_ref!(map, else return 0);
     let p = ffi_read!(point, [f32; 3], else return 0);
     let mut found: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
-    map.radius_search(p, radius, max_nn as usize, &mut found);
+    if map
+        .radius_search(p, radius, max_nn as usize, &mut found)
+        .is_err()
+    {
+        return 0;
+    }
     // SAFETY: `out_idx` addresses `cap` writable u32 per the contract (null → skipped); the zip
     // bounds writes to `min(cap, found.len())`. Deref audited in ffi_ptr.
     if let Some(out) = unsafe { ffi_ptr::opt_slice_mut(out_idx, cap as usize) } {
@@ -238,8 +243,8 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_voxel_grid_map_free(map: *
 
 #[cfg(test)]
 #[allow(
-    clippy::float_cmp,
     clippy::expect_used,
+    clippy::float_cmp,
     clippy::needless_range_loop,
     clippy::unreadable_literal,
     clippy::arithmetic_side_effects,
@@ -334,7 +339,7 @@ mod tests {
         let mut pure = VoxelGridMap::new(leaf_size, 6, 0.01);
         pure.add_target(&a, 0);
         pure.add_target(&b, 1);
-        pure.create_kdtree();
+        pure.create_kdtree().expect("build kd-tree");
 
         // FFI map, same inputs.
         let fa: alloc::vec::Vec<f32> = a.iter().flat_map(|p| p.iter().copied()).collect();
@@ -362,7 +367,8 @@ mod tests {
             )
         };
         let mut pure_hits = alloc::vec::Vec::new();
-        pure.radius_search([1.0, 1.0, 1.0], 1.5, 0, &mut pure_hits);
+        pure.radius_search([1.0, 1.0, 1.0], 1.5, 0, &mut pure_hits)
+            .expect("radius search");
         assert_eq!(n as usize, pure_hits.len());
         assert_eq!(n, 1);
 

@@ -400,6 +400,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_evaluate_map_update(
 
 #[cfg(test)]
 #[allow(
+    clippy::expect_used,
     unsafe_code,
     dead_code,
     clippy::borrow_as_ptr,
@@ -515,6 +516,8 @@ mod tests {
             trans_epsilon: 0.0,
             step_size: 0.0,
             max_iterations: 1,
+            max_source_points: 2_000,
+            max_active_leaves: 418_000,
             outlier_ratio: 0.55,
             num_threads: 1,
             converged_param_type: 0,

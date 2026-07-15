@@ -29,6 +29,12 @@
 //! - [`ndt::align`] — the RT-critical, WCET-bounded alignment kernel the engine drives.
 //! - [`tpe::TreeStructuredParzenEstimator`] — the align-service pose-search sampler.
 //!
+//! Deployment code constructs an engine with [`engine::NdtEngine::new_with_limits`]. Its immutable
+//! work envelope contains the maximum source-point count (`Pmax`), maximum published active-leaf
+//! count (`Lmax`), and maximum Newton iterations (`Imax`, constrained to `0..=30`). `Pmax` sizes and
+//! checks caller-owned scratch; `Lmax` is a map-admission bound, not a reservation of `Lmax` leaves.
+//! Increasing either bound admits more work but proportionally weakens the structural work bound.
+//!
 //! Pose guesses and result matrices use [`nalgebra`] types (`Matrix4<f32>`, `Matrix6<f64>`). The
 //! exact `nalgebra` version this crate is built against is re-exported as [`nalgebra`] so callers can
 //! construct those matrices without independently pinning a (possibly mismatched) version.
@@ -50,22 +56,26 @@
 //! Load a one-tile target map, build the kd-tree, and align a source cloud from an identity guess:
 //!
 //! ```
-//! use realtime_ndt_scan_matcher::engine::NdtEngine;
+//! use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine};
 //! use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 //!
 //! // Empty engine: 2.0 m voxels; `MultiVoxelGridCovariance` defaults (min 6 points / eig 0.01).
-//! let engine = NdtEngine::new(2.0, 6, 0.01);
+//! let engine = NdtEngine::new_with_limits(2.0, 6, 0.01, 64, 64, 30)
+//!     .expect("valid work envelope");
 //!
 //! // Register a target map tile (id 0) and build the kd-tree over the voxel centroids.
 //! let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
 //! engine.add_target(&target, 0);
-//! engine.create_kdtree();
+//! engine.create_kdtree().expect("map fits the leaf limit");
 //! assert!(engine.has_target());
 //!
-//! // Align a source cloud from an identity initial guess, then read the result back.
+//! // Preallocate once, then reuse this scratch on every frame.
 //! let source = target.clone();
-//! engine.align(&Matrix4::identity(), &source);
-//! let result = engine.result();
+//! let mut scratch = MatchScratch::try_for_limits(engine.limits()).expect("reserve scratch");
+//! engine
+//!     .align_with(&Matrix4::identity(), &source, &mut scratch)
+//!     .expect("input is inside the work envelope");
+//! let result = scratch.result_ref();
 //! assert!(result.iteration_num >= 0);
 //! ```
 
@@ -226,7 +236,8 @@ fn parse_cpu_affinity(s: &str) -> alloc::vec::Vec<usize> {
 /// The parallel backend runs on rayon's process-global thread pool; this sizes that pool to
 /// `num_threads` workers. It is orthogonal to [`ndt::NdtParams::num_threads`], which only selects
 /// serial vs parallel (`> 1`). If never called, the pool defaults to the number of logical CPUs
-/// (or `RAYON_NUM_THREADS`, if set). Worker CPU affinity follows [`PinPlan`] (see its docs for the
+/// (or `RAYON_NUM_THREADS`, if set). Worker CPU affinity follows the internal `PinPlan` (see its
+/// documentation for the
 /// `NDT_RAYON_CPU_AFFINITY` / `NDT_PIN_RAYON_WORKERS` environment variables).
 ///
 /// Best-effort and idempotent — call it **once, early** (before any align). Returns `true` iff this

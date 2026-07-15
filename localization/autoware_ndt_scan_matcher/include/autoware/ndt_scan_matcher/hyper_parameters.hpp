@@ -20,7 +20,9 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -56,6 +58,12 @@ struct HyperParameters
 
   pclomp::NdtParams ndt{};
   bool ndt_regularization_enable{};
+  struct NdtRuntimeLimits
+  {
+    std::size_t max_source_points{};
+    std::size_t max_active_leaves{};
+  } ndt_runtime_limits{};
+
 
   struct InitialPoseEstimation
   {
@@ -120,7 +128,20 @@ public:
     ndt.trans_epsilon = node->declare_parameter<double>("ndt.trans_epsilon");
     ndt.step_size = node->declare_parameter<double>("ndt.step_size");
     ndt.resolution = node->declare_parameter<float>("ndt.resolution");
-    ndt.max_iterations = static_cast<int>(node->declare_parameter<int64_t>("ndt.max_iterations"));
+    const auto max_iterations = node->declare_parameter<int64_t>("ndt.max_iterations");
+    if (max_iterations < 0 || max_iterations > 30) {
+      throw std::runtime_error("ndt.max_iterations must be between 0 and 30");
+    }
+    ndt.max_iterations = static_cast<int>(max_iterations);
+    const auto max_source_points = node->declare_parameter<int64_t>("ndt.max_source_points");
+    const auto max_active_leaves = node->declare_parameter<int64_t>("ndt.max_active_leaves");
+    if (max_source_points <= 0 || max_active_leaves <= 0) {
+      throw std::runtime_error(
+              "ndt.max_source_points and ndt.max_active_leaves must both be positive");
+    }
+    ndt_runtime_limits.max_source_points = static_cast<std::size_t>(max_source_points);
+    ndt_runtime_limits.max_active_leaves = static_cast<std::size_t>(max_active_leaves);
+
     ndt.num_threads = static_cast<int>(node->declare_parameter<int64_t>("ndt.num_threads"));
     ndt.num_threads = std::max(ndt.num_threads, 1);
     ndt_regularization_enable = node->declare_parameter<bool>("ndt.regularization.enable");

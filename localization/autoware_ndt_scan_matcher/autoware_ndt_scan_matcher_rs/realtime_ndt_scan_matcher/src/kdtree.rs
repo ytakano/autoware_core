@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Static 3-D kd-tree with radius search, over voxel centroids. Replaces `pcl::KdTreeFLANN` for the
-//! NDT voxel-grid map. `no_std` + `alloc`; no external dependency.
+//! Static 3-D kd-tree with radius search over voxel centroids. Replaces `pcl::KdTreeFLANN` for the
+//! NDT voxel-grid map. Tree construction is control-plane work and may allocate and recurse;
+//! queries use a fixed iterative stack. `no_std` + `alloc`; no external dependency.
 
 // Numeric/index kernel: bounded recursion depth (~log2 N) and indexing into fixed `[f32; 3]` /
 // the internal node array; distances are computed in f64 via `f64::from` (no lossy casts).
@@ -37,6 +38,26 @@ pub struct KdTree {
     root: Option<usize>,
 }
 
+/// Failure while building or querying the kd-tree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KdSearchError {
+    /// A control-plane vector reservation failed while building the tree.
+    AllocationFailed,
+    /// A checked node/depth/visit counter operation overflowed.
+    ArithmeticOverflow,
+    /// The balanced tree depth or iterative query exceeded [`KdTree::MAX_STACK`].
+    StackCapacityExceeded,
+}
+
+/// Metadata returned by a bounded radius search.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KdSearchOutcome {
+    /// At least one additional in-radius point existed after `max_nn` results were retained.
+    pub result_limit_exceeded: bool,
+    /// Number of tree nodes examined by this query.
+    pub nodes_visited: u64,
+}
+
 fn dist_sq(a: &[f32; 3], b: &[f32; 3]) -> f64 {
     let dx = f64::from(a[0]) - f64::from(b[0]);
     let dy = f64::from(a[1]) - f64::from(b[1]);
@@ -45,57 +66,91 @@ fn dist_sq(a: &[f32; 3], b: &[f32; 3]) -> f64 {
 }
 
 impl KdTree {
-    /// Build a balanced kd-tree from `points` (copied in).
-    #[must_use]
-    pub fn build(points: &[[f32; 3]]) -> Self {
-        let pts = points.to_vec();
-        let mut idx: Vec<usize> = (0..pts.len()).collect();
-        let mut nodes: Vec<Node> = Vec::with_capacity(pts.len());
+    /// Build a balanced kd-tree from `points` (copied in), rejecting a tree whose required query
+    /// depth would exceed the fixed stack before allocating or publishing it.
+    /// # Errors
+    /// Returns [`KdSearchError::StackCapacityExceeded`] for excessive depth,
+    /// [`KdSearchError::AllocationFailed`] when a reservation fails, or
+    /// [`KdSearchError::ArithmeticOverflow`] when depth arithmetic cannot be represented.
+    pub fn try_build(points: &[[f32; 3]]) -> Result<Self, KdSearchError> {
+        let required_depth = usize::BITS
+            .checked_sub(points.len().leading_zeros())
+            .ok_or(KdSearchError::ArithmeticOverflow)?;
+        let stack_depth =
+            u32::try_from(Self::MAX_STACK).map_err(|_| KdSearchError::ArithmeticOverflow)?;
+        if required_depth > stack_depth {
+            return Err(KdSearchError::StackCapacityExceeded);
+        }
+        let mut pts = Vec::new();
+        pts.try_reserve_exact(points.len())
+            .map_err(|_| KdSearchError::AllocationFailed)?;
+        pts.extend_from_slice(points);
+        let mut idx = Vec::new();
+        idx.try_reserve_exact(pts.len())
+            .map_err(|_| KdSearchError::AllocationFailed)?;
+        idx.extend(0..pts.len());
+        let mut nodes = Vec::new();
+        nodes
+            .try_reserve_exact(pts.len())
+            .map_err(|_| KdSearchError::AllocationFailed)?;
         let root = build_rec(&pts, &mut idx, 0, &mut nodes);
-        Self {
+        Ok(Self {
             points: pts,
             nodes,
             root,
-        }
+        })
     }
 
-    /// Indices of all points within Euclidean `radius` of `query`, appended to `out`.
-    /// `max_nn == 0` means unlimited; otherwise the search stops once `max_nn` are collected.
+    /// Indices of points within Euclidean `radius` of `query`, appended to `out` in deterministic
+    /// near/far traversal order. `max_nn == 0` means unlimited. Otherwise the first `max_nn` points
+    /// are retained and the search continues until either traversal completes or one additional
+    /// in-radius point proves that the result limit was exceeded. Callers that require an
+    /// allocation-free query must clear and pre-reserve `out` before calling.
+    /// # Errors
+    /// Returns [`KdSearchError::StackCapacityExceeded`] on fixed-stack exhaustion or
+    /// [`KdSearchError::ArithmeticOverflow`] if the visited-node counter overflows.
     pub fn radius_search(
         &self,
         query: &[f32; 3],
         radius: f64,
         max_nn: usize,
         out: &mut Vec<usize>,
-    ) {
+    ) -> Result<KdSearchOutcome, KdSearchError> {
         let r2 = radius * radius;
-        // The visited counter is threaded unconditionally (a borrowed stack u64) but only ever
-        // written under `wcet-count`, so the shipping build carries no instrumentation cost.
         let mut visited = 0_u64;
-        self.search_iter(query, r2, max_nn, out, &mut visited);
+        let result_limit_exceeded = self.search_iter(query, r2, max_nn, out, &mut visited)?;
+        Ok(KdSearchOutcome {
+            result_limit_exceeded,
+            nodes_visited: visited,
+        })
     }
 
     /// [`Self::radius_search`] that also returns the number of tree nodes visited — the
     /// deterministic traversal-cost counter for the WCET analysis.
     #[cfg(feature = "wcet-count")]
+    /// # Errors
+    /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
     pub fn radius_search_counted(
         &self,
         query: &[f32; 3],
         radius: f64,
         max_nn: usize,
         out: &mut Vec<usize>,
-    ) -> u64 {
+    ) -> Result<KdSearchOutcome, KdSearchError> {
         let r2 = radius * radius;
         let mut visited = 0_u64;
-        self.search_iter(query, r2, max_nn, out, &mut visited);
-        visited
+        let result_limit_exceeded = self.search_iter(query, r2, max_nn, out, &mut visited)?;
+        Ok(KdSearchOutcome {
+            result_limit_exceeded,
+            nodes_visited: visited,
+        })
     }
 
     /// Depth cap for the explicit search stack. Only deferred *far* children are stacked — at most
     /// one per descent level — so the stack need is the tree depth, ≤ ⌈log₂N⌉ + 1 by the median
     /// build. A `Node` occupies ≥ 48 bytes, so any in-memory tree has N < 2^59 ⇒ depth < 60 < 64;
-    /// the guard below is therefore unreachable by construction (kept panic-free regardless).
-    const MAX_STACK: usize = 64;
+    /// the build-time guard rejects deeper trees before publication.
+    pub(crate) const MAX_STACK: usize = 64;
 
     /// Iterative radius search — an explicit fixed-size stack instead of recursion, so the
     /// RT-critical path uses O(1) stack independent of tree size (WCET audit item; see
@@ -115,29 +170,24 @@ impl KdTree {
         max_nn: usize,
         out: &mut Vec<usize>,
         visited: &mut u64,
-    ) {
-        #[cfg(not(feature = "wcet-count"))]
-        let _ = &visited;
+    ) -> Result<bool, KdSearchError> {
         let mut stack = [0_usize; Self::MAX_STACK];
         let mut sp = 0_usize; // stack length
         let mut cur = self.root;
         loop {
             while let Some(ni) = cur {
-                // Cap reached: the recursive version enters remaining nodes and returns
-                // immediately (before counting), so stopping outright is observationally identical.
-                if max_nn != 0 && out.len() >= max_nn {
-                    return;
-                }
                 let Some(n) = self.nodes.get(ni) else { break };
                 let Some(p) = self.points.get(n.point_idx) else {
                     break;
                 };
-                #[cfg(feature = "wcet-count")]
-                {
-                    *visited = visited.saturating_add(1);
-                }
+                *visited = visited
+                    .checked_add(1)
+                    .ok_or(KdSearchError::ArithmeticOverflow)?;
 
                 if dist_sq(p, query) <= r2 {
+                    if max_nn != 0 && out.len() >= max_nn {
+                        return Ok(true);
+                    }
                     out.push(n.point_idx);
                 }
 
@@ -151,18 +201,21 @@ impl KdTree {
                 // Defer the far side (visited after the whole near subtree) if the splitting plane
                 // is within the radius. The depth bound makes overflow unreachable (see MAX_STACK).
                 if (diff * diff) <= r2
-                    && let (Some(fi), true) = (far, sp < Self::MAX_STACK)
+                    && let Some(fi) = far
                 {
-                    stack[sp] = fi;
-                    sp = sp.saturating_add(1);
+                    let Some(slot) = stack.get_mut(sp) else {
+                        return Err(KdSearchError::StackCapacityExceeded);
+                    };
+                    *slot = fi;
+                    sp = sp.checked_add(1).ok_or(KdSearchError::ArithmeticOverflow)?;
                 }
                 cur = near;
             }
             if sp == 0 {
-                return;
+                return Ok(false);
             }
-            sp = sp.saturating_sub(1);
-            cur = Some(stack[sp]);
+            sp = sp.checked_sub(1).ok_or(KdSearchError::ArithmeticOverflow)?;
+            cur = stack.get(sp).copied();
         }
     }
 
@@ -246,6 +299,7 @@ fn build_rec(
 
 #[cfg(test)]
 #[allow(
+    clippy::expect_used,
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
     clippy::as_conversions,
@@ -289,13 +343,14 @@ mod tests {
         let pts: Vec<[f32; 3]> = (0..500)
             .map(|_| [rng.next_f32(), rng.next_f32(), rng.next_f32()])
             .collect();
-        let tree = KdTree::build(&pts);
+        let tree = KdTree::try_build(&pts).expect("build kd-tree");
 
         for _ in 0..50 {
             let q = [rng.next_f32(), rng.next_f32(), rng.next_f32()];
             let radius = 1.3_f64;
             let mut got = Vec::new();
-            tree.radius_search(&q, radius, 0, &mut got);
+            tree.radius_search(&q, radius, 0, &mut got)
+                .expect("radius search");
             got.sort_unstable();
             assert_eq!(got, brute(&pts, &q, radius));
         }
@@ -303,19 +358,23 @@ mod tests {
 
     #[test]
     fn empty_tree_returns_nothing() {
-        let tree = KdTree::build(&[]);
+        let tree = KdTree::try_build(&[]).expect("build kd-tree");
         let mut out = Vec::new();
-        tree.radius_search(&[0.0, 0.0, 0.0], 1.0, 0, &mut out);
+        tree.radius_search(&[0.0, 0.0, 0.0], 1.0, 0, &mut out)
+            .expect("radius search");
         assert!(out.is_empty());
     }
 
     #[test]
-    fn max_nn_caps_results() {
-        let pts: Vec<[f32; 3]> = (0..10).map(|i| [i as f32 * 0.01, 0.0, 0.0]).collect();
-        let tree = KdTree::build(&pts);
+    fn max_nn_caps_results_and_reports_the_next_neighbor() {
+        let pts: Vec<[f32; 3]> = (0..65).map(|i| [i as f32 * 0.001, 0.0, 0.0]).collect();
+        let tree = KdTree::try_build(&pts).expect("build kd-tree");
         let mut out = Vec::new();
-        tree.radius_search(&[0.05, 0.0, 0.0], 1.0, 3, &mut out);
-        assert_eq!(out.len(), 3);
+        let outcome = tree
+            .radius_search(&[0.032, 0.0, 0.0], 1.0, 64, &mut out)
+            .expect("radius search");
+        assert_eq!(out.len(), 64);
+        assert!(outcome.result_limit_exceeded);
     }
 
     // The iterative search must reproduce the recursive oracle's output in EXACT order (the
@@ -329,13 +388,14 @@ mod tests {
             let pts: Vec<[f32; 3]> = (0..n)
                 .map(|_| [rng.next_f32(), rng.next_f32(), rng.next_f32()])
                 .collect();
-            let tree = KdTree::build(&pts);
+            let tree = KdTree::try_build(&pts).expect("build kd-tree");
             for _ in 0..24 {
                 let q = [rng.next_f32(), rng.next_f32(), rng.next_f32()];
                 let radius = f64::from(0.4 + (rng.next_f32() + 5.0) * 0.3); // ~[0.4, 3.4]
                 for max_nn in [0usize, 1, 3, 64] {
                     let mut iterative = Vec::new();
-                    tree.radius_search(&q, radius, max_nn, &mut iterative);
+                    tree.radius_search(&q, radius, max_nn, &mut iterative)
+                        .expect("radius search");
                     let mut recursive = Vec::new();
                     tree.search_rec(tree.root, &q, radius * radius, max_nn, &mut recursive);
                     assert_eq!(

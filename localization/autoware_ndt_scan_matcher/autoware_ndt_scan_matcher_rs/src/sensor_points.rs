@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The sensor-callback **prologue** in Rust: validate the incoming
-//! `PointCloud2`, decode its xyz, look up the sensor→`base_link` transform through the [`AwHost`]
-//! vtable, transform the points into `base_link`, and gate on size / delay / max-distance — mirroring
-//! `callback_sensor_points_main`'s first ~80 lines. The transformed `base_link` points are written
-//! into a caller-provided buffer (the C++ tail rebuilds its pcl cloud from them); diagnostics are
-//! emitted through the diagnostics vtable with the same keys/levels as the C++ body. std-only.
+//! Rust implementation of the sensor callback. The prepare stage validates and decodes the incoming
+//! `PointCloud2`, applies the sensor-to-`base_link` transform obtained through [`AwHost`], and runs
+//! the input gates. The match stage then runs NDT, evaluates convergence, estimates covariance, and
+//! publishes the Rust-owned outputs.
+//!
+//! The node constructs the engine with fixed `Pmax`, `Lmax`, and `Imax` values and preallocates one
+//! [`MatchScratch`] for the serial alignment path. A source cloud larger than `Pmax`, a parameter
+//! value above `Imax`, arithmetic failure, or another fatal kernel error is logged as an error and
+//! returns `SM_ALIGN_FAILED`. Finding a 65th in-radius leaf is non-fatal: the first 64 leaves are
+//! evaluated, a warning is emitted, and the frame is forced to non-converged. The allocation-free
+//! guarantee covers the serial align-and-verdict kernel using that scratch; decoding, covariance
+//! estimation, and publication in the complete callback may allocate. This module requires `std`.
 
 use nalgebra::{
     Isometry3, Matrix3, Matrix4, Matrix6, Quaternion, Rotation3, Translation3, UnitQuaternion,
@@ -31,7 +37,8 @@ use crate::ffi_ptr::{self, ffi_mut, ffi_mut_slice, ffi_ref, ffi_slice};
 use crate::node::{DIAGNOSTIC_ERROR, DIAGNOSTIC_WARN, Diagnostics};
 use crate::node_handle::NdtScanMatcherRs;
 use realtime_ndt_scan_matcher::engine::{
-    ConvergenceParams, CovEstimationParams, NdtEngine, estimate_pose_covariance, run_align,
+    ConvergenceParams, CovEstimationParams, MatchScratch, NdtEngine, estimate_pose_covariance,
+    run_align_with,
 };
 
 /// `sensor_msgs::msg::PointField::FLOAT32` — the only xyz datatype the fast path decodes.
@@ -247,6 +254,8 @@ pub const SM_MAP_NOT_SET: i32 = 3;
 /// `converged_param_type` is unknown (the C++ ERROR + `return false`, after align).
 pub const SM_INVALID_PARAM_TYPE: i32 = 4;
 /// A pointer was null / bad args.
+/// The bounded kernel rejected the frame or its preallocated scratch was unavailable.
+pub const SM_ALIGN_FAILED: i32 = 6;
 pub const SM_INVALID: i32 = 5;
 
 /// The few scalars the middle needs that are not on the node handle's [`crate::node_handle::Params`]:
@@ -385,6 +394,7 @@ fn publish_cloud_outputs(
     sensor_stamp_ns: i64,
     result_pose: &Matrix4<f32>,
     points_map: &[[f32; 3]],
+    scratch: &mut MatchScratch,
 ) {
     ho.publish_pointcloud_xyz(
         AwPointCloudTopic::PointsAligned,
@@ -394,7 +404,12 @@ fn publish_cloud_outputs(
 
     if ho.pointcloud_has_subscribers(AwPointCloudTopic::VoxelScorePoints) {
         let mut scores_all = alloc::vec::Vec::new();
-        eng.nearest_voxel_score_each_point(points_map, &mut scores_all);
+        if eng
+            .nearest_voxel_score_each_point_with(points_map, &mut scores_all, scratch)
+            .is_err()
+        {
+            return;
+        }
         let mut scored_points = alloc::vec::Vec::new();
         let mut scored_values = alloc::vec::Vec::new();
         for (point, score) in points_map.iter().copied().zip(scores_all) {
@@ -417,8 +432,12 @@ fn publish_cloud_outputs(
             sensor_stamp_ns,
             &no_ground,
         );
-        let tp = eng.calc_transformation_probability(&no_ground);
-        let nvtl = eng.calc_nearest_voxel_likelihood(&no_ground);
+        let Ok(tp) = eng.calc_transformation_probability_with(&no_ground, scratch) else {
+            return;
+        };
+        let Ok(nvtl) = eng.calc_nearest_voxel_likelihood_with(&no_ground, scratch) else {
+            return;
+        };
         #[expect(
             clippy::as_conversions,
             clippy::cast_possible_truncation,
@@ -444,10 +463,15 @@ fn aw_poses(poses: &[Matrix4<f32>]) -> alloc::vec::Vec<AwPose> {
     poses.iter().map(matrix4_to_aw_pose).collect()
 }
 
-/// The sensor-callback middle: gates → align → convergence → covariance, emitting the diagnostics and
-/// **publishing the POD results through the `AwHost` publish ops**; `out` carries
-/// only the result pose + convergence for the C++ cloud publishers + `skipping_publish_num`.
-/// Returns an `SM_*` status. Mirrors `callback_sensor_points_main` lines ~560–981 in order.
+/// The sensor-callback middle: gates, alignment, convergence, and covariance. It emits diagnostics
+/// and publishes POD results through the [`AwHost`] operations. `out` carries only the result pose
+/// and convergence state needed by the remaining C++ publishers.
+///
+/// The serial alignment and convergence verdict reuse the [`MatchScratch`] reserved when the node
+/// handle was constructed. Exceeding `Pmax` or `Imax`, or encountering another fatal alignment
+/// error, logs an error and returns `SM_ALIGN_FAILED`. A 65th in-radius leaf instead emits a warning,
+/// forces the frame to non-converged, and does not by itself make this function fail. Covariance and
+/// publication work lie outside the allocation-free alignment guarantee.
 ///
 /// # Safety
 /// All pointers must be valid/live for the call (or null → `SM_INVALID`). `source_xyz` addresses
@@ -565,11 +589,34 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_matc
             .params
             .converged_param_nearest_voxel_transformation_likelihood,
     };
-    // Cross-call scratch reads (`result`/`score_arrays` after `run_align`) are sound here: this
-    // module is std-only, so all three hit the same thread-local scratch on the calling thread.
-    let outcome = run_align(eng, &initial_pose_matrix, source, &convergence_params);
-    let result = eng.result();
-    let (tp_array, nvtl_array) = eng.score_arrays();
+    let Some(mut scratch) = h.lock_align_scratch() else {
+        d.update_level(DIAGNOSTIC_ERROR, "NDT align scratch is unavailable");
+        return SM_ALIGN_FAILED;
+    };
+    let outcome = match run_align_with(
+        eng,
+        &initial_pose_matrix,
+        source,
+        &convergence_params,
+        &mut scratch,
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let message = alloc::format!("NDT align rejected the frame: {error:?}");
+            d.update_level(DIAGNOSTIC_ERROR, &message);
+            ho.log(LOG_ERROR, &message);
+            return SM_ALIGN_FAILED;
+        }
+    };
+    if outcome.diagnostics.neighbor_limit_exceeded {
+        d.update_level(
+            DIAGNOSTIC_WARN,
+            "NDT neighbor limit exceeded; result is non-converged",
+        );
+    }
+    let result = scratch.result();
+    let tp_array = &result.transform_probability_array;
+    let nvtl_array = &result.nearest_voxel_likelihood_array;
     let verdict = outcome.verdict;
 
     // check iteration_num
@@ -665,26 +712,32 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_matc
     }
 
     // covariance estimation (rotate + dispatch + scale + adjust, against the live map)
-    let cov = eng.with_scratch(|scr| {
-        estimate_pose_covariance(
-            eng,
-            &outcome.pose,
-            &matrix6_to_row_major(&result.hessian),
-            &initial_pose_matrix,
-            source,
-            &h.params.initial_pose_offset_model_x,
-            &h.params.initial_pose_offset_model_y,
-            &CovEstimationParams {
-                estimation_type: h.params.covariance_estimation_type,
-                scale_factor: h.params.covariance_scale_factor,
-                temperature: h.params.covariance_temperature,
-                main_nvtl: result.nearest_voxel_likelihood,
-                output_pose_covariance: h.params.output_pose_covariance,
-                map_to_base_link_rot3x3: map_to_base_link_rot3x3(&outcome.pose),
-            },
-            scr,
-        )
-    });
+    let cov = match estimate_pose_covariance(
+        eng,
+        &outcome.pose,
+        &matrix6_to_row_major(&result.hessian),
+        &initial_pose_matrix,
+        source,
+        &h.params.initial_pose_offset_model_x,
+        &h.params.initial_pose_offset_model_y,
+        &CovEstimationParams {
+            estimation_type: h.params.covariance_estimation_type,
+            scale_factor: h.params.covariance_scale_factor,
+            temperature: h.params.covariance_temperature,
+            main_nvtl: result.nearest_voxel_likelihood,
+            output_pose_covariance: h.params.output_pose_covariance,
+            map_to_base_link_rot3x3: map_to_base_link_rot3x3(&outcome.pose),
+        },
+        &mut scratch,
+    ) {
+        Ok(covariance) => covariance,
+        Err(error) => {
+            let message = alloc::format!("NDT covariance rejected the frame: {error:?}");
+            d.update_level(DIAGNOSTIC_ERROR, &message);
+            ho.log(LOG_ERROR, &message);
+            return SM_ALIGN_FAILED;
+        }
+    };
 
     // check distance_initial_to_result (diagnostic only)
     let dx = interp.position[0] - f64::from(outcome.pose[(0, 3)]);
@@ -775,7 +828,15 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_matc
     // Cloud publishers: transform base_link cloud to map, publish aligned
     // clouds, score-color input, and optional no-ground score scalars through the host.
     let points_map = transform_cloud_to_map(source, &outcome.pose);
-    publish_cloud_outputs(eng, ho, prm, sensor_stamp_ns, &outcome.pose, &points_map);
+    publish_cloud_outputs(
+        eng,
+        ho,
+        prm,
+        sensor_stamp_ns,
+        &outcome.pose,
+        &points_map,
+        &mut scratch,
+    );
 
     // Return the minimal state the C++ shell still needs for `skipping_publish_num`.
     o.result_pose = matrix4_to_row_major(&outcome.pose);
@@ -786,6 +847,11 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_matc
 /// The full Rust sensor callback for the `NDT_USE_RUST` C++ shell: prepare the borrowed
 /// `PointCloud2View`, run the scan-match middle, publish all Rust-owned outputs through `host`, and
 /// return whether the match converged via `*out_is_converged`.
+///
+/// This convenience entry point allocates a decode buffer sized from the incoming cloud. The node's
+/// bounded, preallocated contract therefore applies to the nested serial alignment kernel, not to
+/// this complete callback. Preparation failures return an `SP_*` status; fatal matching failures
+/// return `SM_ALIGN_FAILED`.
 ///
 /// # Safety
 /// All pointers must be valid/live for the call (or null → `SM_INVALID`). `view.data` addresses
@@ -863,6 +929,7 @@ fn ns_to_sec(ns: i64) -> f64 {
 
 #[cfg(test)]
 #[allow(
+    clippy::expect_used,
     clippy::float_cmp,
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,

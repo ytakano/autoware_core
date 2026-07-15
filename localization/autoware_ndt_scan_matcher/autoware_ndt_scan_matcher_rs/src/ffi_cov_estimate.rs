@@ -87,7 +87,9 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_estimate_cov_multi_ndt(
     let main_pose = matrix4_from_row_major(main_buf);
     let mut map = VoxelGridMap::new([inp.resolution; 3], 6, 0.01);
     map.add_target(target, 0);
-    map.create_kdtree();
+    if map.create_kdtree().is_err() {
+        return;
+    }
     let params = NdtParams {
         trans_epsilon: inp.trans_epsilon,
         step_size: inp.step_size,
@@ -102,10 +104,16 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_estimate_cov_multi_ndt(
         pose: main_pose,
         ..AlignResult::default()
     };
-    let mut ws = AlignWorkspace::new();
-    let result =
-        estimate_xy_covariance_by_multi_ndt(&main_ndt, &poses, &map, source, &params, &mut ws);
+    let Ok(mut ws) = AlignWorkspace::try_with_capacity(source.len()) else {
+        return;
+    };
+    let Ok(result) =
+        estimate_xy_covariance_by_multi_ndt(&main_ndt, &poses, &map, source, &params, &mut ws)
+    else {
+        return;
+    };
     ffi_mut_slice!(out_mean, 2, else return).copy_from_slice(&result.mean);
+
     ffi_mut_slice!(out_cov, 4, else return).copy_from_slice(&result.covariance);
 }
 
@@ -134,7 +142,9 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_estimate_cov_multi_ndt_sco
     let main_pose = matrix4_from_row_major(main_buf);
     let mut map = VoxelGridMap::new([inp.resolution; 3], 6, 0.01);
     map.add_target(target, 0);
-    map.create_kdtree();
+    if map.create_kdtree().is_err() {
+        return;
+    }
     let params = NdtParams {
         trans_epsilon: inp.trans_epsilon,
         step_size: inp.step_size,
@@ -150,8 +160,10 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_estimate_cov_multi_ndt_sco
         nearest_voxel_likelihood: cast_f64_to_f32(inp.main_nvtl),
         ..AlignResult::default()
     };
-    let mut ws = AlignWorkspace::new();
-    let result = estimate_xy_covariance_by_multi_ndt_score(
+    let Ok(mut ws) = AlignWorkspace::try_with_capacity(source.len()) else {
+        return;
+    };
+    let Ok(result) = estimate_xy_covariance_by_multi_ndt_score(
         &main_ndt,
         &poses,
         &map,
@@ -159,7 +171,9 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_estimate_cov_multi_ndt_sco
         &params,
         inp.temperature,
         &mut ws,
-    );
+    ) else {
+        return;
+    };
     ffi_mut_slice!(out_mean, 2, else return).copy_from_slice(&result.mean);
     ffi_mut_slice!(out_cov, 4, else return).copy_from_slice(&result.covariance);
 }
@@ -189,6 +203,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_propose_poses_to_search(
 
 #[cfg(test)]
 #[allow(
+    clippy::expect_used,
     unsafe_code,
     clippy::float_cmp,
     clippy::indexing_slicing,
@@ -246,7 +261,7 @@ mod tests {
         }
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
         map.add_target(&pts, 0);
-        map.create_kdtree();
+        map.create_kdtree().expect("build kd-tree");
         (map, pts)
     }
 
@@ -255,7 +270,7 @@ mod tests {
             trans_epsilon: 1e-3,
             step_size: 0.2,
             resolution: 1.0,
-            max_iterations: 50,
+            max_iterations: 30,
             outlier_ratio: 0.55,
             regularization: None,
             num_threads: 1,
@@ -306,9 +321,11 @@ mod tests {
         let ox = [0.3, -0.3, 0.0, 0.0];
         let oy = [0.0, 0.0, 0.3, -0.3];
         let poses = propose_poses_to_search(&main_pose, &ox, &oy);
-        let mut ws = AlignWorkspace::new();
+        let mut ws =
+            AlignWorkspace::try_with_capacity(pts.len()).expect("reserve covariance workspace");
         let pure =
-            estimate_xy_covariance_by_multi_ndt(&main_ndt, &poses, &map, &pts, &params(), &mut ws);
+            estimate_xy_covariance_by_multi_ndt(&main_ndt, &poses, &map, &pts, &params(), &mut ws)
+                .expect("pure covariance estimate");
 
         let main16 = pose16(&main_pose);
         let input = AwMultiNdtCovInput {
@@ -323,7 +340,7 @@ mod tests {
             resolution: 1.0,
             step_size: 0.2,
             trans_epsilon: 1e-3,
-            max_iterations: 50,
+            max_iterations: 30,
             outlier_ratio: 0.55,
             main_nvtl: 0.0,
             temperature: 0.1,
@@ -364,7 +381,8 @@ mod tests {
             &params(),
             0.05,
             &mut ws,
-        );
+        )
+        .expect("pure score covariance estimate");
 
         let main16 = pose16(&main_pose);
         let input = AwMultiNdtCovInput {
@@ -379,7 +397,7 @@ mod tests {
             resolution: 1.0,
             step_size: 0.2,
             trans_epsilon: 1e-3,
-            max_iterations: 50,
+            max_iterations: 30,
             outlier_ratio: 0.55,
             main_nvtl: 2.5,
             temperature: 0.05,

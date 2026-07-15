@@ -63,6 +63,10 @@ pub struct AwNdtAlignOutput {
 /// Run NDT `align` from flat C inputs (builds the target `VoxelGridMap` with the C++ defaults
 /// `min_points = 6`, `eig_mult = 0.01`, `leaf_size = resolution`).
 ///
+/// This one-shot compatibility entry point constructs unbounded map and alignment workspaces and
+/// has no status return. It is intended for parity tests and tooling, not for deployment admission
+/// control; use the bounded engine API when `Pmax`, `Lmax`, and `Imax` must be enforced.
+///
 /// # Safety
 /// `input`/`output` must be valid pointers (or null → no-op). Each non-null pointer must address the
 /// documented length: `target_xyz` `3*n_target` f32, `source_xyz` `3*n_source` f32, `guess` 16,
@@ -93,7 +97,9 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_align(
 
     let mut map = VoxelGridMap::new([inp.resolution; 3], 6, 0.01);
     map.add_target(target, 0);
-    map.create_kdtree();
+    if map.create_kdtree().is_err() {
+        return;
+    }
 
     let reg = if inp.regularization_scale == 0.0 {
         None
@@ -115,9 +121,18 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_align(
         num_threads: 1,
     };
 
-    let mut ws = AlignWorkspace::new();
-    let mut result = AlignResult::default();
-    align(&map, source, &guess, &params, &mut ws, &mut result);
+    let Ok(max_iterations) = usize::try_from(inp.max_iterations) else {
+        return;
+    };
+    let Ok(mut ws) = AlignWorkspace::try_with_capacity(source.len()) else {
+        return;
+    };
+    let Ok(mut result) = AlignResult::try_with_capacity(max_iterations) else {
+        return;
+    };
+    if align(&map, source, &guess, &params, &mut ws, &mut result).is_err() {
+        return;
+    }
 
     // SAFETY: each output pointer is either null (skipped) or valid for its documented length;
     // the derefs are audited in ffi_ptr (null → `opt_slice_mut` None / `write_out` false, i.e. skip).
@@ -151,6 +166,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_align(
 
 #[cfg(test)]
 #[allow(
+    clippy::expect_used,
     clippy::float_cmp,
     clippy::unreadable_literal,
     clippy::needless_range_loop,
@@ -193,7 +209,7 @@ mod tests {
         }
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
         map.add_target(&pts, 0);
-        map.create_kdtree();
+        map.create_kdtree().expect("build kd-tree");
         (map, pts)
     }
 
@@ -221,9 +237,9 @@ mod tests {
         // Pure reference: same map the FFI builds internally (leaf = resolution, min 6, eig 0.01).
         let mut map = VoxelGridMap::new([2.0, 2.0, 2.0], 6, 0.01);
         map.add_target(&target, 0);
-        map.create_kdtree();
-        let mut ws = AlignWorkspace::new();
-        let mut pure = AlignResult::default();
+        map.create_kdtree().expect("build kd-tree");
+        let mut ws = AlignWorkspace::try_with_capacity(source.len()).expect("reserve workspace");
+        let mut pure = AlignResult::try_with_capacity(30).expect("reserve result");
         align(
             &map,
             &source,
@@ -231,7 +247,8 @@ mod tests {
             &params,
             &mut ws,
             &mut pure,
-        );
+        )
+        .expect("pure align");
 
         // FFI call.
         let target_flat: alloc::vec::Vec<f32> =

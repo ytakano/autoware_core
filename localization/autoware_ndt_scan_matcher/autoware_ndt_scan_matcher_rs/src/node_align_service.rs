@@ -22,7 +22,7 @@ use nalgebra::{Matrix3, Matrix4, Quaternion, Rotation3, UnitQuaternion, Vector6}
 use crate::ffi_host::AwPose;
 use crate::ffi_ptr::{ffi_mut, ffi_mut_slice, ffi_ref, ffi_slice};
 use crate::node_handle::NdtScanMatcherRs;
-use realtime_ndt_scan_matcher::engine::{NdtEngine, run_align};
+use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine, run_align_with};
 use realtime_ndt_scan_matcher::tpe::{Direction, TreeStructuredParzenEstimator, Trial};
 
 /// Initial pose TF lookup failed.
@@ -723,19 +723,40 @@ fn set_search_invalid(out: &mut AwNdtAlignServiceSearchOutput) {
     out.cloud_publish_count = 0;
 }
 
+struct AlignServiceBuffers<'a> {
+    initial_poses: &'a mut [AwPose],
+    result_poses: &'a mut [AwPose],
+    scores: &'a mut [f64],
+    iterations: &'a mut [i32],
+}
+
+fn align_service_convergence_params(
+    input: &AwNdtAlignServiceSearchInput,
+) -> realtime_ndt_scan_matcher::engine::ConvergenceParams {
+    realtime_ndt_scan_matcher::engine::ConvergenceParams {
+        converged_param_type: 1,
+        converged_param_transform_probability: 0.0,
+        converged_param_nearest_voxel_transformation_likelihood: input.reliable_score_threshold,
+    }
+}
+
 #[expect(
     clippy::indexing_slicing,
     reason = "fixed ABI covariance diagonals and caller-sized output buffers are validated before use"
 )]
 fn run_align_service_search_impl(
     engine: &NdtEngine,
+    scratch: &mut MatchScratch,
     input: &AwNdtAlignServiceSearchInput,
     source: &[[f32; 3]],
-    initial_poses: &mut [AwPose],
-    result_poses: &mut [AwPose],
-    scores: &mut [f64],
-    iterations: &mut [i32],
+    buffers: AlignServiceBuffers<'_>,
 ) -> Option<AwNdtAlignServiceSearchOutput> {
+    let AlignServiceBuffers {
+        initial_poses,
+        result_poses,
+        scores,
+        iterations,
+    } = buffers;
     if input.particles_num <= 0 || !search_input_is_finite(input) || source.is_empty() {
         return None;
     }
@@ -774,11 +795,7 @@ fn run_align_service_search_impl(
     )
     .ok()?;
 
-    let conv = realtime_ndt_scan_matcher::engine::ConvergenceParams {
-        converged_param_type: 1,
-        converged_param_transform_probability: 0.0,
-        converged_param_nearest_voxel_transformation_likelihood: input.reliable_score_threshold,
-    };
+    let conv = align_service_convergence_params(input);
 
     let mut best_score = f64::NEG_INFINITY;
     let mut best_iteration = -1_i32;
@@ -791,7 +808,7 @@ fn run_align_service_search_impl(
         let tpe_input = tpe.get_next_input().ok()?;
         let tpe_vec = Vector6::from(tpe_input);
         let guess = realtime_ndt_scan_matcher::transform::se3_matrix_f32(&tpe_vec);
-        let outcome = run_align(engine, &guess, source, &conv);
+        let outcome = run_align_with(engine, &guess, source, &conv, scratch).ok()?;
         let initial_pose = matrix4_to_aw_pose(&guess);
         let result_pose = matrix4_to_aw_pose(&outcome.pose);
         let score = f64::from(outcome.nearest_voxel_likelihood);
@@ -881,14 +898,23 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_run_align_service_sea
         ffi_mut_slice!(out_ref.scores, cap, else return NDT_ALIGN_SERVICE_STATUS_INVALID_INPUT);
     let iterations =
         ffi_mut_slice!(out_ref.iterations, cap, else return NDT_ALIGN_SERVICE_STATUS_INVALID_INPUT);
+    let Ok(max_iterations) = usize::try_from(engine_ref.max_iterations()) else {
+        return NDT_ALIGN_SERVICE_STATUS_INVALID_INPUT;
+    };
+    let Ok(mut scratch) = MatchScratch::try_with_capacity(source.len(), max_iterations) else {
+        return NDT_ALIGN_SERVICE_STATUS_INVALID_INPUT;
+    };
     let Some(result) = run_align_service_search_impl(
         engine_ref,
+        &mut scratch,
         input_ref,
         source,
-        initial_poses,
-        result_poses,
-        scores,
-        iterations,
+        AlignServiceBuffers {
+            initial_poses,
+            result_poses,
+            scores,
+            iterations,
+        },
     ) else {
         return NDT_ALIGN_SERVICE_STATUS_INVALID_INPUT;
     };
@@ -985,14 +1011,21 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_run_align_service_sea
         ffi_mut_slice!(out_ref.scores, cap, else return NDT_ALIGN_SERVICE_STATUS_INVALID_INPUT);
     let iterations =
         ffi_mut_slice!(out_ref.iterations, cap, else return NDT_ALIGN_SERVICE_STATUS_INVALID_INPUT);
+    let Some(mut scratch) = handle_ref.lock_align_scratch() else {
+        set_search_invalid(out_ref);
+        return NDT_ALIGN_SERVICE_STATUS_INVALID_INPUT;
+    };
     let Some(result) = run_align_service_search_impl(
         engine_ref,
+        &mut scratch,
         input_ref,
         &source,
-        initial_poses,
-        result_poses,
-        scores,
-        iterations,
+        AlignServiceBuffers {
+            initial_poses,
+            result_poses,
+            scores,
+            iterations,
+        },
     ) else {
         set_search_invalid(out_ref);
         return NDT_ALIGN_SERVICE_STATUS_INVALID_INPUT;
@@ -1994,8 +2027,8 @@ mod tests {
 // test-only lints (expect/unwrap, similar short buffer names, direct unsafe FFI calls).
 #[cfg(test)]
 #[allow(
-    clippy::unwrap_used,
     clippy::expect_used,
+    clippy::unwrap_used,
     clippy::similar_names,
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
@@ -2023,7 +2056,7 @@ mod search_loop_tests {
         let engine = NdtEngine::new(1.0, 6, 0.01);
         engine.set_params(0.01, 0.1, 1.0, 30, 0.55, 1);
         engine.add_target(&cloud, 0);
-        engine.create_kdtree();
+        engine.create_kdtree().expect("build kd-tree");
         let source = cloud.clone();
         (engine, source)
     }
@@ -2056,8 +2089,19 @@ mod search_loop_tests {
             let mut rp = [ZERO_POSE; 5];
             let mut sc = [0.0_f64; 5];
             let mut it = [0_i32; 5];
+            let mut scratch = MatchScratch::try_with_capacity(source.len(), 30)
+                .expect("reserve align-service scratch");
             let out = run_align_service_search_impl(
-                &engine, &input, &source, &mut ip, &mut rp, &mut sc, &mut it,
+                &engine,
+                &mut scratch,
+                &input,
+                &source,
+                AlignServiceBuffers {
+                    initial_poses: &mut ip,
+                    result_poses: &mut rp,
+                    scores: &mut sc,
+                    iterations: &mut it,
+                },
             )
             .expect("search succeeds for a valid engine + input");
             (out, sc)
@@ -2105,7 +2149,22 @@ mod search_loop_tests {
                     rp: &mut [AwPose],
                     sc: &mut [f64],
                     it: &mut [i32]| {
-            run_align_service_search_impl(&engine, input, src, ip, rp, sc, it)
+            {
+                let mut scratch = MatchScratch::try_with_capacity(src.len(), 30)
+                    .expect("reserve align-service scratch");
+                run_align_service_search_impl(
+                    &engine,
+                    &mut scratch,
+                    input,
+                    src,
+                    AlignServiceBuffers {
+                        initial_poses: ip,
+                        result_poses: rp,
+                        scores: sc,
+                        iterations: it,
+                    },
+                )
+            }
         };
 
         // particles_num <= 0

@@ -22,13 +22,16 @@
 //! The match methods take a caller-owned `&mut MatchScratch` (one per task/thread, reused across
 //! frames): the matcher itself holds no per-align mutable state, so a shared `&ScanMatcher` is
 //! sound across concurrent tasks in the std and `mt` configs (map updates included — `update_map`
-//! publishes atomically), with no scratch lock held across an align anywhere.
+//! publishes atomically), with no scratch lock held across an align anywhere. This portable facade
+//! currently uses the compatibility engine constructor; the ROS deployment node constructs its
+//! engine with explicit `Pmax`, `Lmax`, and `Imax` limits.
 
 use nalgebra::Matrix4;
 
 pub use crate::engine::MatchScratch;
 use crate::engine::NdtEngine;
 use crate::host::{CovarianceResult, MapSource, MatchResult};
+use crate::ndt::AlignError;
 
 /// A scan matcher: the persistent NDT engine + the portable orchestration over it.
 ///
@@ -55,11 +58,11 @@ use crate::host::{CovarianceResult, MapSource, MatchResult};
 /// async fn run() {
 ///     let matcher = ScanMatcher::new(2.0, 6, 0.01);
 ///     matcher.set_params(0.01, 0.1, 2.0, 30, 0.55, 1);
-///     matcher.update_map(&Synthetic, [0.0, 0.0], 100.0).await;
+///     matcher.update_map(&Synthetic, [0.0, 0.0], 100.0).await.expect("map update");
 ///
 ///     let source: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
-///     let mut scratch = MatchScratch::new();
-///     let result = matcher.match_scan(&Matrix4::identity(), &source, &mut scratch);
+///     let mut scratch = MatchScratch::try_with_capacity(source.len(), 30).expect("reserve scratch");
+///     let result = matcher.match_scan(&Matrix4::identity(), &source, &mut scratch).expect("match");
 ///     println!("converged: {}", result.converged);
 /// }
 /// ```
@@ -75,8 +78,11 @@ const fn assert_send_sync<T: Send + Sync>() {}
 const _: () = assert_send_sync::<ScanMatcher>();
 
 impl ScanMatcher {
-    /// New matcher with an empty map (`resolution` voxel/neighbor size; `min_points`/`eig_mult` the
-    /// `MultiVoxelGridCovariance` defaults 6 / 0.01).
+    /// New compatibility matcher with an empty map (`resolution` voxel/neighbor size;
+    /// `min_points`/`eig_mult` the `MultiVoxelGridCovariance` defaults 6 / 0.01).
+    ///
+    /// This facade does not establish a deployment leaf/point envelope. The Autoware node uses a
+    /// bounded [`NdtEngine`] directly.
     #[must_use]
     pub fn new(resolution: f64, min_points: i32, eig_mult: f64) -> Self {
         Self {
@@ -155,37 +161,48 @@ impl ScanMatcher {
     }
 
     /// Load the map delta around `center` (within `radius`) from the host and publish it atomically.
-    /// Incremental (keeps the current map); see [`apply_map_update`] for the shared logic.
-    pub async fn update_map<S: MapSource>(&self, source: &S, center: [f64; 2], radius: f64) {
-        apply_map_update(&self.engine, source, center, radius, false).await;
+    /// Incremental (keeps the current map); see [`apply_map_update`] for the shared logic. A build
+    /// or leaf-limit failure leaves the currently published map unchanged.
+    /// # Errors
+    /// Returns the map finalization and admission errors documented by
+    /// [`NdtEngine::try_create_kdtree`] and [`NdtEngine::commit_from`].
+    pub async fn update_map<S: MapSource>(
+        &self,
+        source: &S,
+        center: [f64; 2],
+        radius: f64,
+    ) -> Result<(), AlignError> {
+        apply_map_update(&self.engine, source, center, radius, false).await
     }
 
     /// Align `source` (base_link-frame points) from `guess` and return the result + convergence
-    /// verdict. Synchronous — this is the WCET hot path (one bounded `Vec` of ≤ `max_iterations + 1`
-    /// iteration positions for the oscillation count; no await). `scratch` is caller-owned — one
-    /// per task/thread, reused across frames (never shared), so concurrent matches on a shared
-    /// `&ScanMatcher` are sound in every build config.
+    /// verdict. Synchronous with no await. The result and convergence history live in caller-owned
+    /// scratch, one per task/thread and reused across frames. With the serial backend and correctly
+    /// sized scratch, the complete path is allocation-free from its first call. A neighbor-limit
+    /// diagnostic is represented by `converged == false`.
     ///
     /// # Arguments
     /// * `guess` — initial pose estimate as a 4×4 homogeneous transform.
     /// * `source` — the sensor cloud to align, in the `base_link` frame (`[x, y, z]`, metres).
     /// * `scratch` — caller-owned per-align workspace; reuse it across frames, never share it.
-    #[must_use]
+    /// # Errors
+    /// Returns the source, iteration, numeric, arithmetic, kd-stack, and workspace errors documented
+    /// by [`NdtEngine::align_outcome_with`]. Neighbor-limit exceedance is non-fatal.
     pub fn match_scan(
         &self,
         guess: &Matrix4<f32>,
         source: &[[f32; 3]],
         scratch: &mut MatchScratch,
-    ) -> MatchResult {
-        let o = self.engine.align_outcome_with(guess, source, scratch);
-        MatchResult {
+    ) -> Result<MatchResult, AlignError> {
+        let o = self.engine.align_outcome_with(guess, source, scratch)?;
+        Ok(MatchResult {
             pose: o.pose,
             transform_probability: o.transform_probability,
             nearest_voxel_likelihood: o.nearest_voxel_likelihood,
             iteration_num: o.iteration_num,
             converged: o.verdict.is_converged,
             oscillation_num: o.oscillation_num,
-        }
+        })
     }
 
     /// Align like [`Self::match_scan`], then estimate the pose covariance from that align result using
@@ -200,14 +217,15 @@ impl ScanMatcher {
     /// * `guess` — initial pose estimate as a 4×4 homogeneous transform.
     /// * `source` — the sensor cloud to align, in the `base_link` frame (`[x, y, z]`, metres).
     /// * `scratch` — caller-owned workspace; the align result read from it seeds the covariance.
-    #[must_use]
+    /// # Errors
+    /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
     pub fn match_scan_with_covariance(
         &self,
         guess: &Matrix4<f32>,
         source: &[[f32; 3]],
         scratch: &mut MatchScratch,
-    ) -> (MatchResult, CovarianceResult) {
-        let o = self.engine.align_outcome_with(guess, source, scratch);
+    ) -> Result<(MatchResult, CovarianceResult), AlignError> {
+        let o = self.engine.align_outcome_with(guess, source, scratch)?;
         // The full align result (carries the hessian the covariance estimate needs) — read from
         // THIS scratch session, so it is the hessian of the align above.
         let r = scratch.result();
@@ -218,7 +236,7 @@ impl ScanMatcher {
             source,
             r.nearest_voxel_likelihood,
             scratch,
-        );
+        )?;
         let match_result = MatchResult {
             pose: o.pose,
             transform_probability: o.transform_probability,
@@ -227,12 +245,12 @@ impl ScanMatcher {
             converged: o.verdict.is_converged,
             oscillation_num: o.oscillation_num,
         };
-        (
+        Ok((
             match_result,
             CovarianceResult {
                 covariance: cov.ndt_covariance,
             },
-        )
+        ))
     }
 }
 
@@ -242,18 +260,21 @@ impl ScanMatcher {
 /// engine empty (dropping the current tiles — the C++ `need_rebuild`); otherwise it clones the current
 /// map and applies the incremental delta. Shared by [`ScanMatcher::update_map`] and the ROS map-update
 /// FFI. `async` only at the `source.load` boundary; the staging build is synchronous.
+/// # Errors
+/// Returns a map-build or leaf-admission error without committing the staging map. The existing
+/// engine state remains published on every error.
 pub async fn apply_map_update<S: MapSource>(
     engine: &NdtEngine,
     source: &S,
     center: [f64; 2],
     radius: f64,
     rebuild: bool,
-) {
+) -> Result<(), AlignError> {
     let mut delta = source.load(center, radius).await;
     // Empty delta → no-op (don't republish): mirrors the C++ "no maps to add/remove → no commit", and
     // avoids a wasteful kdtree rebuild on idle map-update cycles.
     if delta.add.is_empty() && delta.remove.is_empty() {
-        return;
+        return Ok(());
     }
     // Canonicalize the control-plane work as well as the finalized map. Valid map-loader deltas
     // contain unique cell ids; sorting makes processing and capture order independent of the ROS
@@ -271,6 +292,7 @@ pub async fn apply_map_update<S: MapSource>(
     for id in &delta.remove {
         staging.remove_target_bytes(id);
     }
-    staging.create_kdtree();
-    engine.commit_from(&staging);
+    staging.create_kdtree()?;
+    engine.commit_from(&staging)?;
+    Ok(())
 }
