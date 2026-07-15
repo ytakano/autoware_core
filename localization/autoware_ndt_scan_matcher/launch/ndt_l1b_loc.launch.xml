@@ -10,7 +10,9 @@
   time via NDT_USE_RUST; init is driven by bench/l1b_init_bypass.py.
 -->
 <launch>
-  <arg name="pointcloud_map_path" description="path to the İSTA pointcloud_map.pcd"/>
+  <arg name="pointcloud_map_path" description="path to a pointcloud-map PCD or tile directory"/>
+  <arg name="pointcloud_map_metadata_path" default="$(var pointcloud_map_path).nonexistent.yaml"/>
+  <arg name="enable_whole_load" default="true"/>
   <arg name="use_sim_time" default="true"/>
 
   <set_parameter name="use_sim_time" value="$(var use_sim_time)"/>
@@ -21,8 +23,8 @@
         namespace="map" output="both">
     <remap from="service/get_differential_pcd_map" to="/map/get_differential_pointcloud_map"/>
     <param name="pcd_paths_or_directory" value="[$(var pointcloud_map_path)]"/>
-    <param name="pcd_metadata_path" value="$(var pointcloud_map_path).nonexistent.yaml"/>
-    <param name="enable_whole_load" value="true"/>
+    <param name="pcd_metadata_path" value="$(var pointcloud_map_metadata_path)"/>
+    <param name="enable_whole_load" value="$(var enable_whole_load)"/>
     <param name="enable_partial_load" value="true"/>
     <param name="enable_downsampled_whole_load" value="false"/>
     <param name="enable_selected_load" value="false"/>

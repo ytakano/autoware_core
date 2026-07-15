@@ -25,12 +25,15 @@ the cloud data. Run with use_sim_time:=true so `now()` is the sim clock.
 """
 
 import argparse
+import csv
 import sys
+import zlib
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
+from builtin_interfaces.msg import Time
 from geometry_msgs.msg import TwistWithCovarianceStamped
 from sensor_msgs.msg import PointCloud2
 
@@ -41,6 +44,8 @@ def main() -> int:
     parser.add_argument("--out-topic", default="/localization/util/downsample/pointcloud")
     parser.add_argument("--in-twist", default="/l1b/raw_twist")
     parser.add_argument("--out-twist", default="/localization/twist_estimator/twist_with_covariance")
+    parser.add_argument("--offset-ns", type=int, default=None, help="fixed offset added to recorded header stamps")
+    parser.add_argument("--trace", default=None, help="stream cloud identity mapping to CSV")
     args = parser.parse_args()
 
     rclpy.init()
@@ -51,11 +56,29 @@ def main() -> int:
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST)
     pub = node.create_publisher(PointCloud2, args.out_topic, qos)
     count = {"n": 0}
+    trace_file = open(args.trace, "w", newline="", encoding="utf-8", buffering=1) if args.trace else None
+    trace_writer = csv.writer(trace_file) if trace_file else None
+    if trace_writer:
+        trace_writer.writerow(["sequence", "original_ns", "restamped_ns", "width", "height", "data_crc32"])
+
+    def shifted_stamp(original):
+        if args.offset_ns is None:
+            return node.get_clock().now().to_msg()
+        shifted_ns = original.sec * 1_000_000_000 + original.nanosec + args.offset_ns
+        return Time(sec=shifted_ns // 1_000_000_000, nanosec=shifted_ns % 1_000_000_000)
 
     def on_cloud(msg: PointCloud2) -> None:
-        msg.header.stamp = node.get_clock().now().to_msg()  # align to sim-now (== EKF pose time base)
+        original_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        restamped = shifted_stamp(msg.header.stamp)
+        msg.header.stamp = restamped  # preserve recorded intervals on the simulation time base
         pub.publish(msg)
         count["n"] += 1
+        if trace_writer:
+            trace_writer.writerow([
+                count["n"], original_ns,
+                restamped.sec * 1_000_000_000 + restamped.nanosec,
+                msg.width, msg.height, f"{zlib.crc32(msg.data):08x}",
+            ])
         if count["n"] % 100 == 1:
             node.get_logger().info(f"re-stamped {count['n']} clouds -> {args.out_topic}")
 
@@ -66,15 +89,17 @@ def main() -> int:
     tw_pub = node.create_publisher(TwistWithCovarianceStamped, args.out_twist, 50)
 
     def on_twist(msg: TwistWithCovarianceStamped) -> None:
-        msg.header.stamp = node.get_clock().now().to_msg()
+        msg.header.stamp = shifted_stamp(msg.header.stamp)
         tw_pub.publish(msg)
 
     node.create_subscription(TwistWithCovarianceStamped, args.in_twist, on_twist, 50)
-    node.get_logger().info(f"re-stamp relay: {args.in_topic} -> {args.out_topic} (header.stamp := sim now)")
+    node.get_logger().info(f"re-stamp relay: {args.in_topic} -> {args.out_topic} (fixed header offset when --offset-ns is set)")
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
+    if trace_file:
+        trace_file.close()
     node.destroy_node()
     rclpy.try_shutdown()
     return 0

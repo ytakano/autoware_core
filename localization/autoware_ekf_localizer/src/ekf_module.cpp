@@ -30,6 +30,9 @@
 #include <fmt/core.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <iomanip>
+#include <limits>
 #include <utility>
 
 namespace autoware::ekf_localizer
@@ -60,6 +63,42 @@ EKFModule::EKFModule(std::shared_ptr<Warning> warning, const HyperParameters & p
   z_filter_.set_proc_var(params_.z_filter_proc_dev * params_.z_filter_proc_dev);
   roll_filter_.set_proc_var(params_.roll_filter_proc_dev * params_.roll_filter_proc_dev);
   pitch_filter_.set_proc_var(params_.pitch_filter_proc_dev * params_.pitch_filter_proc_dev);
+
+  const char * trace_path = std::getenv("AUTOWARE_EKF_POSE_TRACE");
+  if (trace_path != nullptr && trace_path[0] != '\0') {
+    pose_trace_.open(trace_path, std::ios::out | std::ios::trunc);
+    if (pose_trace_.is_open()) {
+      pose_trace_ << "current_ns,measurement_ns,delay_s,delay_step,obs_x,obs_y,obs_yaw,"
+                     "pred_x,pred_y,pred_yaw,innovation_x,innovation_y,innovation_yaw,"
+                     "mahalanobis,delay_gate,mahalanobis_gate,accepted,post_x,post_y,post_yaw\n";
+      pose_trace_ << std::setprecision(17);
+    }
+  }
+}
+
+void EKFModule::trace_pose_update(
+  const PoseWithCovariance & pose, const rclcpp::Time & current_time, const double delay_time,
+  const size_t delay_step, const double observation_yaw, const double predicted_x,
+  const double predicted_y, const double predicted_yaw, const double mahalanobis_distance,
+  const bool delay_gate, const bool mahalanobis_gate, const bool accepted)
+{
+  if (!pose_trace_.is_open()) {
+    return;
+  }
+
+  const double obs_x = pose.pose.pose.position.x;
+  const double obs_y = pose.pose.pose.position.y;
+  const double post_x = kalman_filter_.getXelement(IDX::X);
+  const double post_y = kalman_filter_.getXelement(IDX::Y);
+  const double post_yaw = kalman_filter_.getXelement(IDX::YAW);
+  pose_trace_ << current_time.nanoseconds() << "," << rclcpp::Time(pose.header.stamp).nanoseconds()
+              << "," << delay_time << "," << delay_step << "," << obs_x << "," << obs_y << ","
+              << observation_yaw << "," << predicted_x << "," << predicted_y << "," << predicted_yaw
+              << "," << obs_x - predicted_x << "," << obs_y - predicted_y << ","
+              << normalize_yaw(observation_yaw - predicted_yaw) << "," << mahalanobis_distance
+              << "," << static_cast<int>(delay_gate) << "," << static_cast<int>(mahalanobis_gate)
+              << "," << static_cast<int>(accepted) << "," << post_x << "," << post_y << ","
+              << post_yaw << "\n";
 }
 
 void EKFModule::initialize(
@@ -260,6 +299,8 @@ bool EKFModule::measurement_update_pose(
   delay_time = std::max(delay_time, 0.0);
 
   const size_t delay_step = find_closest_delay_time_index(delay_time);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double raw_yaw = tf2::getYaw(pose.pose.pose.orientation);
 
   pose_diag_info.delay_time = std::max(delay_time, pose_diag_info.delay_time);
   pose_diag_info.delay_time_threshold = accumulated_delay_times_.back();
@@ -271,6 +312,8 @@ bool EKFModule::measurement_update_pose(
       pose_delay_step_warning_message(
         pose_diag_info.delay_time, pose_diag_info.delay_time_threshold),
       2000);
+    trace_pose_update(
+      pose, t_curr, delay_time, delay_step, raw_yaw, nan, nan, nan, nan, false, false, false);
     return false;
   }
 
@@ -289,6 +332,8 @@ bool EKFModule::measurement_update_pose(
   if (has_nan(y) || has_inf(y)) {
     warning_->warn(
       "[EKF] pose measurement matrix includes NaN of Inf. ignore update. check pose message.");
+    trace_pose_update(
+      pose, t_curr, delay_time, delay_step, yaw, nan, nan, nan, nan, true, false, false);
     return false;
   }
 
@@ -307,6 +352,9 @@ bool EKFModule::measurement_update_pose(
     pose_diag_info.is_passed_mahalanobis_gate = false;
     warning_->warn_throttle(mahalanobis_warning_message(distance, params_.pose_gate_dist), 2000);
     warning_->warn_throttle("Ignore the measurement data.", 2000);
+    trace_pose_update(
+      pose, t_curr, delay_time, delay_step, yaw, y_ekf.x(), y_ekf.y(), y_ekf.z(), distance, true,
+      false, false);
     return false;
   }
 
@@ -330,6 +378,10 @@ bool EKFModule::measurement_update_pose(
   const Eigen::MatrixXd x_result = kalman_filter_.getLatestX();
   DEBUG_PRINT_MAT(x_result.transpose());
   DEBUG_PRINT_MAT((x_result - x_curr).transpose());
+
+  trace_pose_update(
+    pose, t_curr, delay_time, delay_step, yaw, y_ekf.x(), y_ekf.y(), y_ekf.z(), distance, true,
+    true, true);
 
   return true;
 }

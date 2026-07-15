@@ -21,15 +21,17 @@ map/cloud DO overlap (score-0 was just a rough seed) and we publish the REFINED 
 fix). Uses rclpy (the ros2 CLI is broken here)."""
 
 import argparse
+import json
 import sys
 import time
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from autoware_internal_localization_msgs.srv import PoseWithCovarianceStamped as NdtAlign
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from sensor_msgs.msg import PointCloud2
 from std_srvs.srv import SetBool
 
 try:
@@ -43,8 +45,10 @@ def main() -> int:
     ap.add_argument("--pose", default=None, help="seed x,y,z,qx,qy,qz,qw (map); default = GNSS")
     ap.add_argument("--align-srv", default="/localization/pose_estimator/ndt_align_srv")
     ap.add_argument("--gnss-topic", default="/sensing/gnss/pose_with_covariance")
+    ap.add_argument("--cloud-topic", default="/localization/util/downsample/pointcloud")
     ap.add_argument("--yaw-var", type=float, default=0.1, help="seed yaw variance (rad^2); ~10 -> full-circle TPE search")
     ap.add_argument("--xy-var", type=float, default=4.0)
+    ap.add_argument("--out", default=None, help="write refined pose and covariance fixture as JSON")
     args = ap.parse_args()
 
     rclpy.init()
@@ -87,6 +91,19 @@ def main() -> int:
     pp = seed.pose.pose.position
     log.info(f"seed ({pp.x:.2f}, {pp.y:.2f}, {pp.z:.2f}) -> ndt_align")
 
+    got_cloud = {"value": False}
+    cloud_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+    cloud_sub = node.create_subscription(
+        PointCloud2, args.cloud_topic, lambda _msg: got_cloud.__setitem__("value", True), cloud_qos)
+    cloud_deadline = time.monotonic() + 20.0
+    while not got_cloud["value"] and rclpy.ok() and time.monotonic() < cloud_deadline:
+        rclpy.spin_once(node, timeout_sec=0.2)
+    node.destroy_subscription(cloud_sub)
+    if not got_cloud["value"]:
+        log.error(f"no pointcloud on {args.cloud_topic}")
+        return 1
+    log.info("received an NDT input cloud before pausing the bag")
+
     # Freeze the bag while we align: the vehicle moves ~13 m/s, so the multi-second TPE align would
     # otherwise leave the refined pose ~50+ m stale. Seed captured just above -> pause now, so the
     # frozen vehicle is at most a few m from the seed (covered by the TPE search covariance).
@@ -118,6 +135,16 @@ def main() -> int:
     # publish the REFINED pose as the EKF init + activate NDT/EKF
     refined = res.pose_with_covariance
     refined.header.frame_id = "map"
+    if args.out:
+        p = refined.pose.pose
+        with open(args.out, "w", encoding="utf-8") as fixture_file:
+            json.dump({
+                "pose": [p.position.x, p.position.y, p.position.z,
+                         p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w],
+                "covariance": list(refined.pose.covariance),
+            }, fixture_file, indent=2)
+            fixture_file.write("\n")
+        log.info(f"wrote fixed initialization fixture to {args.out}")
     qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
     pub = node.create_publisher(PoseWithCovarianceStamped, "/initialpose3d", qos)
     for _ in range(5):

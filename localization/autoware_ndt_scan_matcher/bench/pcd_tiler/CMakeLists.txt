@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(ndt_pcd_tiler LANGUAGES CXX)
+find_package(PCL REQUIRED COMPONENTS common io)
+add_executable(ndt_pcd_tiler main.cpp)
+target_compile_features(ndt_pcd_tiler PRIVATE cxx_std_17)
+target_include_directories(ndt_pcd_tiler SYSTEM PRIVATE ${PCL_INCLUDE_DIRS})
+target_link_libraries(ndt_pcd_tiler PRIVATE ${PCL_LIBRARIES})
+target_compile_options(ndt_pcd_tiler PRIVATE -Wall -Wextra -Wpedantic)

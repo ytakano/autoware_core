@@ -30,6 +30,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
 
+#include <fstream>
 #include <memory>
 #include <vector>
 
@@ -128,6 +129,12 @@ public:
     const PoseWithCovariance & pose, tf2::Vector3 last_angular_velocity, const double delay_time);
 
 private:
+  void trace_pose_update(
+    const PoseWithCovariance & pose, const rclcpp::Time & current_time, double delay_time,
+    size_t delay_step, double observation_yaw, double predicted_x, double predicted_y,
+    double predicted_yaw, double mahalanobis_distance, bool delay_gate, bool mahalanobis_gate,
+    bool accepted);
+
   void update_simple_1d_filters(
     const geometry_msgs::msg::PoseWithCovarianceStamped & pose, const size_t smoothing_step);
 
@@ -148,6 +155,7 @@ private:
   tf2::Vector3 last_angular_velocity_;
 
   double ekf_dt_;
+  std::ofstream pose_trace_;
 };
 
 }  // namespace autoware::ekf_localizer

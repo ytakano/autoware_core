@@ -33,6 +33,7 @@ Uses only std_srvs + geometry_msgs (no autoware srv type / ros2interface needed)
 """
 
 import argparse
+import json
 import sys
 import time
 
@@ -43,9 +44,15 @@ from rclpy.qos import DurabilityPolicy, QoSProfile
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_srvs.srv import SetBool
 
+try:
+    from rosbag2_interfaces.srv import Pause, Resume
+except ImportError:
+    Pause = Resume = None
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--fixture", default=None, help="fixed pose and covariance JSON")
     parser.add_argument(
         "--pose",
         default=None,
@@ -54,6 +61,7 @@ def main() -> int:
     parser.add_argument("--initialpose-topic", default="/initialpose3d")
     parser.add_argument("--gnss-topic", default="/sensing/gnss/pose_with_covariance")
     parser.add_argument("--publishes", type=int, default=5, help="times to (re)publish /initialpose3d")
+    parser.add_argument("--pause-player", action="store_true")
     args = parser.parse_args()
 
     rclpy.init()
@@ -61,10 +69,33 @@ def main() -> int:
     node.set_parameters([rclpy.parameter.Parameter("use_sim_time", value=True)])
     log = node.get_logger()
 
+    def call_player(srv_type, name):
+        if srv_type is None:
+            return False
+        client = node.create_client(srv_type, name)
+        if not client.wait_for_service(timeout_sec=5.0):
+            return False
+        future = client.call_async(srv_type.Request())
+        rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
+        return future.done() and future.result() is not None
+
     # 1. resolve the init pose
     pose_msg = PoseWithCovarianceStamped()
     pose_msg.header.frame_id = "map"
-    if args.pose:
+    fixture_cov = None
+    if args.fixture:
+        with open(args.fixture, encoding="utf-8") as fixture_file:
+            fixture = json.load(fixture_file)
+        x, y, z, qx, qy, qz, qw = (float(v) for v in fixture["pose"])
+        p = pose_msg.pose.pose
+        p.position.x, p.position.y, p.position.z = x, y, z
+        p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = qx, qy, qz, qw
+        fixture_cov = [float(v) for v in fixture["covariance"]]
+        if len(fixture_cov) != 36:
+            log.error("fixture covariance must contain 36 values")
+            return 1
+        log.info(f"using fixture pose ({x:.2f}, {y:.2f}, {z:.2f})")
+    elif args.pose:
         x, y, z, qx, qy, qz, qw = (float(v) for v in args.pose.split(","))
         p = pose_msg.pose.pose
         p.position.x, p.position.y, p.position.z = x, y, z
@@ -94,7 +125,11 @@ def main() -> int:
     cov[14] = 0.01
     cov[21] = cov[28] = 0.01
     cov[35] = 0.2
-    pose_msg.pose.covariance = cov
+    pose_msg.pose.covariance = fixture_cov if fixture_cov is not None else cov
+
+    if args.pause_player and not call_player(Pause, "/rosbag2_player/pause"):
+        log.error("failed to pause rosbag player")
+        return 1
 
     # 2. publish /initialpose3d (transient-local so a late EKF still gets it), a few times
     qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -130,6 +165,10 @@ def main() -> int:
         else:
             log.error(f"trigger call timed out: {name}")
             ok = False
+
+    if args.pause_player and not call_player(Resume, "/rosbag2_player/resume"):
+        log.error("failed to resume rosbag player")
+        ok = False
 
     node.destroy_node()
     rclpy.try_shutdown()
