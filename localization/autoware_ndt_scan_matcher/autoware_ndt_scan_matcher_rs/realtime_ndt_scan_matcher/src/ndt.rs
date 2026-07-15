@@ -67,7 +67,7 @@ pub struct AlignWorkspace {
     /// Algorithmic-cost counters for the current/last [`align`] (reset at each align start).
     #[cfg(feature = "wcet-count")]
     pub counters: crate::wcet::WcetCounters,
-    /// Per-pass trace records for the C1 cross-language trace certificate (reset per align;
+    /// Per-pass records for cross-language work-shape analysis (reset per align;
     /// serial backend only — the parallel backend poisons it).
     #[cfg(feature = "wcet-trace")]
     pub trace: crate::wcet::AlignTrace,
@@ -393,21 +393,7 @@ pub fn compute_derivatives(
                 .neighbors
                 .saturating_add(u64::try_from(c.neighborhood).unwrap_or(u64::MAX));
             pass.kd_nodes = pass.kd_nodes.saturating_add(c.kd_nodes);
-            // The scratch still holds this point's neighbor list. The per-point neighbor-set
-            // hash is ORDER-INSENSITIVE (XOR of per-leaf hashes): pcl/FLANN returns each
-            // point's neighbors distance-sorted while this engine's kd walk returns them in
-            // visit order, so within-point order legitimately differs between the engines.
-            let mut set_hash: u64 = 0;
-            for &li in &ws.neighbor_idx {
-                if let Some(leaf) = map.leaf(li) {
-                    let mut leaf_hash = crate::wcet::FNV_OFFSET;
-                    for m in &leaf.mean {
-                        leaf_hash = crate::wcet::fnv1a_u64(leaf_hash, m.to_bits());
-                    }
-                    set_hash ^= leaf_hash;
-                }
-            }
-            pass.nbr_hash = crate::wcet::fnv1a_u64(pass.nbr_hash, set_hash);
+            trace_point(&mut pass, map, &mut ws.neighbor_idx);
         }
         red.add(&c);
     }
@@ -418,6 +404,64 @@ pub fn compute_derivatives(
         ws.trace.push(pass);
     }
     d
+}
+
+#[cfg(feature = "wcet-trace")]
+fn trace_point(pass: &mut crate::wcet::PassTrace, map: &VoxelGridMap, neighbors: &mut [usize]) {
+    use sha2::{Digest, Sha256};
+
+    neighbors.sort_unstable_by_key(|idx| {
+        map.leaf(*idx).map_or((u64::MAX, i64::MAX), |leaf| {
+            (leaf.trace_grid_ordinal, leaf.trace_voxel_id)
+        })
+    });
+
+    let mut shape = Sha256::new();
+    shape.update(b"NDT-SHAPE-POINT-v1\0");
+    shape.update(
+        u64::try_from(neighbors.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    let mut payload = Sha256::new();
+    payload.update(b"NDT-PAYLOAD-POINT-v1\0");
+    payload.update(
+        u64::try_from(neighbors.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for idx in neighbors {
+        if let Some(leaf) = map.leaf(*idx) {
+            let grid = leaf.trace_grid_ordinal.to_le_bytes();
+            let voxel = leaf.trace_voxel_id.to_le_bytes();
+            shape.update(grid);
+            shape.update(voxel);
+            payload.update(grid);
+            payload.update(voxel);
+            for value in leaf.mean.iter().chain(leaf.icov.iter()) {
+                payload.update(value.to_bits().to_le_bytes());
+            }
+        }
+    }
+    let point_shape: [u8; 32] = shape.finalize().into();
+    let point_payload: [u8; 32] = payload.finalize().into();
+    pass.shape_digest = trace_chain(b"NDT-SHAPE-CHAIN-v1\0", &pass.shape_digest, &point_shape);
+    pass.payload_digest = trace_chain(
+        b"NDT-PAYLOAD-CHAIN-v1\0",
+        &pass.payload_digest,
+        &point_payload,
+    );
+}
+
+#[cfg(feature = "wcet-trace")]
+fn trace_chain(domain: &[u8], previous: &[u8; 32], point: &[u8; 32]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+
+    let mut hash = Sha256::new();
+    hash.update(domain);
+    hash.update(previous);
+    hash.update(point);
+    hash.finalize().into()
 }
 
 /// Close a pass record with the values handed to the Newton step (mirrors the C++
@@ -500,8 +544,8 @@ pub fn compute_derivatives_parallel(
     }
     #[cfg(feature = "wcet-trace")]
     {
-        // The trace certificate is defined on the serial backend only (per-pass neighbor-order
-        // hashing); mark any align that went through here as non-certifiable.
+        // The work-shape trace is defined on the serial backend only (per-pass neighbor-order
+        // hashing); mark any align that went through here as invalid for comparison.
         ws.trace.poisoned = true;
     }
     finalize(red, p, cfg, source.len())
@@ -712,7 +756,7 @@ pub struct AlignResult {
     /// Algorithmic-cost counters of this align (WCET analysis; serial + parallel backends).
     #[cfg(feature = "wcet-count")]
     pub counters: crate::wcet::WcetCounters,
-    /// Per-pass trace of this align (C1 trace certificate; serial backend only).
+    /// Per-pass work-shape trace of this align (analysis build; serial backend only).
     #[cfg(feature = "wcet-trace")]
     pub trace: crate::wcet::AlignTrace,
 }

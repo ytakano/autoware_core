@@ -229,8 +229,10 @@ void MultiVoxelGridCovariance<PointT>::createKdtree()
   leaf_ptrs_.clear();
   leaf_ptrs_.reserve(total_leaf_num);
 
+  std::uint64_t grid_ordinal = 0;
   for (const auto & grid_ptr : grid_list_) {
-    for (const auto & leaf : *grid_ptr) {
+    for (auto & leaf : *grid_ptr) {
+      leaf.trace_grid_ordinal_ = grid_ordinal;
       PointT new_leaf;
 
       new_leaf.x = leaf.centroid_[0];
@@ -239,6 +241,7 @@ void MultiVoxelGridCovariance<PointT>::createKdtree()
       voxel_centroids_ptr_->push_back(new_leaf);
       leaf_ptrs_.push_back(&leaf);
     }
+    ++grid_ordinal;
   }
 
   // Rebuild the kdtree_ of leaves
@@ -390,8 +393,9 @@ void MultiVoxelGridCovariance<PointT>::apply_filter(
     // Append qualified leaves to the end of the output vector
     node.push_back(it.second);
 
-    // Normalize the centroid
+    // Normalize the centroid and retain the integer voxel id for analysis traces.
     Leaf & leaf = node.back();
+    leaf.trace_voxel_id_ = it.first;
 
     // Normalize the centroid
     leaf.centroid_ /= static_cast<float>(leaf.nr_points_);

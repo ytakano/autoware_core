@@ -44,6 +44,12 @@ pub struct Leaf {
     pub mean: [f64; 3],
     pub icov: [f64; 9],
     pub centroid: [f32; 3],
+    /// Per-grid integer voxel id, retained only by analysis traces.
+    #[cfg(feature = "wcet-trace")]
+    pub trace_voxel_id: i64,
+    /// Canonical grid ordinal after tile-key sorting, retained only by analysis traces.
+    #[cfg(feature = "wcet-trace")]
+    pub trace_grid_ordinal: u64,
 }
 
 struct Accumulator {
@@ -96,6 +102,36 @@ pub struct VoxelGrid {
 )]
 fn floor_i64(x: f64) -> i64 {
     libm::floor(x) as i64
+}
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    clippy::allow_attributes,
+    reason = "control-plane map build: nalgebra f64 covariance math and deliberate count casts"
+)]
+fn finalize_leaf(id: i64, accumulator: &Accumulator, eig_mult: f64) -> Option<Leaf> {
+    let n_f = accumulator.n as f64;
+    let mean = accumulator.sum / n_f;
+    // C++ initializes cov_ to Identity, adding I/(n-1) to the sample covariance.
+    let cov = (accumulator.sum_outer + Matrix3::identity() - accumulator.sum * mean.transpose())
+        / (n_f - 1.0);
+    let icov = compute_icov(&cov, eig_mult)?;
+    let n_f32 = accumulator.n as f32;
+    Some(Leaf {
+        n: i32::try_from(accumulator.n).unwrap_or(i32::MAX),
+        mean: [mean.x, mean.y, mean.z],
+        icov,
+        centroid: [
+            accumulator.centroid_sum[0] / n_f32,
+            accumulator.centroid_sum[1] / n_f32,
+            accumulator.centroid_sum[2] / n_f32,
+        ],
+        #[cfg(feature = "wcet-trace")]
+        trace_voxel_id: id,
+        #[cfg(feature = "wcet-trace")]
+        trace_grid_ordinal: 0,
+    })
 }
 
 impl VoxelGrid {
@@ -221,25 +257,9 @@ impl VoxelGrid {
             if a.n < i64::from(min_points) {
                 continue;
             }
-            let n_f = a.n as f64;
-            let mean = a.sum / n_f;
-            // The C++ `Leaf` ctor initializes `cov_` to Identity (not Zero), so the accumulated
-            // `Σppᵀ` yields `(Σppᵀ + I - Σp·meanᵀ)/(n-1)` = sample_cov + I/(n-1). Replicate that
-            // `+ I` for behavioral equivalence (see multi_voxel_grid_covariance_omp.h Leaf()).
-            let cov = (a.sum_outer + Matrix3::identity() - a.sum * mean.transpose()) / (n_f - 1.0);
-            if let Some(icov) = compute_icov(&cov, eig_mult) {
-                let n_f32 = a.n as f32;
+            if let Some(leaf) = finalize_leaf(*id, a, eig_mult) {
                 let idx = grid.leaves.len();
-                grid.leaves.push(Leaf {
-                    n: a.n.min(i64::from(i32::MAX)) as i32,
-                    mean: [mean.x, mean.y, mean.z],
-                    icov,
-                    centroid: [
-                        a.centroid_sum[0] / n_f32,
-                        a.centroid_sum[1] / n_f32,
-                        a.centroid_sum[2] / n_f32,
-                    ],
-                });
+                grid.leaves.push(leaf);
                 grid.index.insert(*id, idx);
             }
         }
@@ -408,10 +428,15 @@ impl VoxelGridMap {
     pub fn create_kdtree(&mut self) {
         let mut centroids: Vec<[f32; 3]> = Vec::new();
         let mut flat: Vec<Leaf> = Vec::new();
-        for grid in self.grids.values() {
+        for (grid_ordinal, grid) in self.grids.values().enumerate() {
             for leaf in &grid.leaves {
                 centroids.push(leaf.centroid);
-                flat.push(leaf.clone());
+                let mut flat_leaf = leaf.clone();
+                #[cfg(feature = "wcet-trace")]
+                {
+                    flat_leaf.trace_grid_ordinal = u64::try_from(grid_ordinal).unwrap_or(u64::MAX);
+                }
+                flat.push(flat_leaf);
             }
         }
         self.kdtree = Some(KdTree::build(&centroids));

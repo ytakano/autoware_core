@@ -996,7 +996,7 @@ double MultiGridNormalDistributionsTransform<PointSource, PointTarget>::computeS
   int step_iterations = 0;
 
   if (params_.use_line_search) {
-    // NDT_TRACE: the shipped configuration never enters here; the counter certifies it.
+    // NDT_TRACE: the shipped configuration never enters here; the counter records it.
     ndt_trace::line_search_entered();
     // Set the value of phi(0), Equation 1.3 [More, Thuente 1994]
     double phi_0 = -score;

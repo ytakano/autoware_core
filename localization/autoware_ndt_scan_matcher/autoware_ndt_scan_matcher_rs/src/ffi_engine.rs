@@ -1173,8 +1173,8 @@ mod tests {
 
 /// One per-pass record of the C1 trace certificate (`wcet-trace` analysis builds only).
 /// Field semantics mirror `realtime_ndt_scan_matcher::wcet::PassTrace`: structural work
-/// (`points`, `neighbors`, this engine's own `kd_nodes`), the neighbor-identity hash, and the
-/// pass-final score/gradient/Hessian bit hashes (FNV-1a, shared constants with the C++ mirror).
+/// (`points`, `neighbors`, this engine's own `kd_nodes`), neighbor shape/payload digests,
+/// and the pass-final score/gradient/Hessian bit hashes.
 #[cfg(feature = "wcet-trace")]
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -1182,7 +1182,8 @@ pub struct AwNdtPassTrace {
     pub points: u64,
     pub neighbors: u64,
     pub kd_nodes: u64,
-    pub nbr_hash: u64,
+    pub shape_digest: [u8; 32],
+    pub payload_digest: [u8; 32],
     pub score_bits: u64,
     pub grad_hash: u64,
     pub hess_hash: u64,
@@ -1224,7 +1225,8 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_trace(
                     points: src.points,
                     neighbors: src.neighbors,
                     kd_nodes: src.kd_nodes,
-                    nbr_hash: src.nbr_hash,
+                    shape_digest: src.shape_digest,
+                    payload_digest: src.payload_digest,
                     score_bits: src.score_bits,
                     grad_hash: src.grad_hash,
                     hess_hash: src.hess_hash,

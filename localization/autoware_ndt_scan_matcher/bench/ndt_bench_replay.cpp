@@ -46,7 +46,7 @@
 #include "autoware_ndt_scan_matcher_rs.h"
 
 #ifdef NDT_TRACE
-// C1 trace certificate (plan/paper_fix2.md): per-pass trace comparison between the traced C++
+// Cross-language work-shape analysis: per-pass trace comparison between the traced C++
 // engine (bench/traced/, ndt_trace.hpp) and the Rust engine's mirrored `wcet-trace` records.
 #include <ndt_trace.hpp>
 
@@ -321,7 +321,12 @@ TraceSnap snap_rust(struct AwNdtEngine * eng)
     out.pass[i].neighbors = buf[i].neighbors;
     out.pass[i].kd_dist = buf[i].kd_nodes;
     out.pass[i].kd_accum = 0;
-    out.pass[i].nbr_hash = buf[i].nbr_hash;
+    std::copy(
+      std::begin(buf[i].shape_digest), std::end(buf[i].shape_digest),
+      out.pass[i].shape_digest.begin());
+    std::copy(
+      std::begin(buf[i].payload_digest), std::end(buf[i].payload_digest),
+      out.pass[i].payload_digest.begin());
     out.pass[i].score_bits = buf[i].score_bits;
     out.pass[i].grad_hash = buf[i].grad_hash;
     out.pass[i].hess_hash = buf[i].hess_hash;
@@ -331,13 +336,13 @@ TraceSnap snap_rust(struct AwNdtEngine * eng)
   return out;
 }
 
-// Per-leg comparison result. Structural legs (pass count, per-pass points/neighbors and the
-// neighbor-identity hash) certify equal work; the numeric legs (score/gradient/Hessian bits)
-// certify the operand stream. kd counters are engine-own metrics, recorded but never compared.
+// Per-leg comparison result. Structural legs compare pass count, per-pass point/neighbor
+// counts, and canonical leaf-ID digests. Payload and numeric legs are independent diagnostics. kd counters are engine-own metrics, recorded but never compared.
 struct TraceCert
 {
   bool valid = false;        // both traces present, unpoisoned
   bool structural = false;
+  bool payload = false;
   bool score = false;
   bool grad = false;
   bool hess = false;
@@ -363,6 +368,7 @@ TraceCert compare_traces(const TraceSnap & c, const TraceSnap & r)
   out.valid = !c.poisoned && !r.poisoned;
   if (!out.valid) return out;
   out.structural = (c.passes == r.passes);
+  out.payload = out.structural;
   out.score = out.structural;
   out.grad = out.structural;
   out.hess = out.structural;
@@ -378,12 +384,19 @@ TraceCert compare_traces(const TraceSnap & c, const TraceSnap & r)
     const char * leg = nullptr;
     if (a.points != b.points) leg = "points";
     else if (a.neighbors != b.neighbors) leg = "neighbors";
-    else if (a.nbr_hash != b.nbr_hash) leg = "nbr_hash";
+    else if (a.shape_digest != b.shape_digest) leg = "shape_digest";
     if (leg != nullptr) {
-      out.structural = out.score = out.grad = out.hess = false;
+      out.structural = out.payload = out.score = out.grad = out.hess = false;
       out.first_div_pass = static_cast<int>(i);
       out.first_div_leg = leg;
       return out;
+    }
+    if (out.payload && a.payload_digest != b.payload_digest) {
+      out.payload = false;
+      if (out.first_div_pass < 0) {
+        out.first_div_pass = static_cast<int>(i);
+        out.first_div_leg = "payload_digest";
+      }
     }
     if (a.score_bits != b.score_bits) {
       out.score_max_ulp = std::max(out.score_max_ulp, ulp_delta_f64(a.score_bits, b.score_bits));
@@ -408,20 +421,22 @@ void write_trace_json(FILE * f, const TraceSnap & c, const TraceSnap & r, const 
 {
   std::fprintf(f,
     "\"trace\": { \"valid\": %s, \"passes_cpp\": %llu, \"passes_rust\": %llu, "
-    "\"structural_match\": %s, \"score_match\": %s, \"grad_match\": %s, "
-    "\"hess_match\": %s, \"first_div_pass\": %d, \"first_div_leg\": \"%s\", "
+    "\"structural_match\": %s, \"payload_match\": %s, \"score_match\": %s, "
+    "\"grad_match\": %s, \"hess_match\": %s, \"first_div_pass\": %d, "
+    "\"first_div_leg\": \"%s\", "
     "\"line_search_loops\": %llu, \"cpp_kd_dist\": %llu, \"cpp_kd_accum\": %llu, "
     "\"rust_kd\": %llu, \"score_max_ulp\": %llu, \"cpp_nbr\": %llu, \"rust_nbr\": %llu }",
     t.valid ? "true" : "false", static_cast<unsigned long long>(c.passes),
     static_cast<unsigned long long>(r.passes), t.structural ? "true" : "false",
-    t.score ? "true" : "false", t.grad ? "true" : "false", t.hess ? "true" : "false",
-    t.first_div_pass, t.first_div_leg, static_cast<unsigned long long>(c.line_search_loops),
+    t.payload ? "true" : "false", t.score ? "true" : "false", t.grad ? "true" : "false",
+    t.hess ? "true" : "false", t.first_div_pass, t.first_div_leg,
+    static_cast<unsigned long long>(c.line_search_loops),
     static_cast<unsigned long long>(c.kd_a), static_cast<unsigned long long>(c.kd_b),
     static_cast<unsigned long long>(r.kd_a), static_cast<unsigned long long>(t.score_max_ulp),
     static_cast<unsigned long long>(c.nbr_total), static_cast<unsigned long long>(r.nbr_total));
 }
 
-// Startup self-test: the C++ FNV-1a mirror must reproduce the Rust crate's shared vectors
+// Startup self-test: the C++ FNV-1a numeric diagnostics and SHA-256 implementation must reproduce the Rust crate's shared vectors
 // (realtime_ndt_scan_matcher::wcet trace_tests).
 bool trace_selftest()
 {
@@ -432,10 +447,75 @@ bool trace_selftest()
   uint64_t bits = 0;
   std::memcpy(&bits, &one, 8);
   ok = ok && fnv1a_u64(kFnvOffset, bits) == 0xaab1693229ba1db8ULL;
-  if (!ok) std::fprintf(stderr, "trace: FNV-1a self-test FAILED (C++/Rust mirror broken)\n");
+
+  ndt_trace::Sha256 sha;
+  static constexpr char kAbc[] = {'a', 'b', 'c'};
+  sha.bytes(kAbc, sizeof(kAbc));
+  ndt_trace::Digest digest{};
+  static constexpr ndt_trace::Digest kExpected{
+    0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40,
+    0xde, 0x5d, 0xae, 0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17,
+    0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad};
+  ok = ok && sha.finish(digest) && digest == kExpected;
+  if (!ok) std::fprintf(stderr, "trace: digest self-test FAILED (C++/Rust mirror broken)\n");
   return ok;
 }
 #endif
+
+constexpr double kBaseTranslationToleranceM = 1e-4;
+constexpr double kBaseRotationToleranceRad = 1e-5;
+constexpr double kBaseScoreTolerance = 1e-4;
+
+struct BaseAgreement
+{
+  bool iteration_match = false;
+  bool match = false;
+  double trans_delta_m = 0.0;
+  double rot_delta_rad = 0.0;
+  double tp_delta = 0.0;
+  double nvtl_delta = 0.0;
+};
+
+BaseAgreement compare_base(
+  const pclomp::NdtResult & cpp, int rust_iteration, const std::array<float, 16> & rust_pose,
+  float rust_tp, float rust_nvtl)
+{
+  BaseAgreement out;
+  out.iteration_match = cpp.iteration_num == rust_iteration;
+  Eigen::Matrix3d cpp_rotation;
+  Eigen::Matrix3d rust_rotation;
+  for (int r = 0; r < 3; ++r) {
+    const double dt = static_cast<double>(cpp.pose(r, 3)) -
+                      static_cast<double>(rust_pose[(static_cast<std::size_t>(r) * 4U) + 3U]);
+    out.trans_delta_m += dt * dt;
+    for (int c = 0; c < 3; ++c) {
+      cpp_rotation(r, c) = static_cast<double>(cpp.pose(r, c));
+      rust_rotation(r, c) =
+        static_cast<double>(rust_pose[(static_cast<std::size_t>(r) * 4U) +
+                                      static_cast<std::size_t>(c)]);
+    }
+  }
+  out.trans_delta_m = std::sqrt(out.trans_delta_m);
+  Eigen::Quaterniond cpp_quaternion(cpp_rotation);
+  Eigen::Quaterniond rust_quaternion(rust_rotation);
+  cpp_quaternion.normalize();
+  rust_quaternion.normalize();
+  const double cosine =
+    std::clamp(std::abs(cpp_quaternion.dot(rust_quaternion)), 0.0, 1.0);
+  out.rot_delta_rad = 2.0 * std::acos(cosine);
+  out.tp_delta =
+    std::abs(static_cast<double>(cpp.transform_probability) - static_cast<double>(rust_tp));
+  out.nvtl_delta = std::abs(
+    static_cast<double>(cpp.nearest_voxel_transformation_likelihood) -
+    static_cast<double>(rust_nvtl));
+  out.match = out.iteration_match && std::isfinite(out.trans_delta_m) &&
+              std::isfinite(out.rot_delta_rad) && std::isfinite(out.tp_delta) &&
+              std::isfinite(out.nvtl_delta) &&
+              out.trans_delta_m <= kBaseTranslationToleranceM &&
+              out.rot_delta_rad <= kBaseRotationToleranceRad &&
+              out.tp_delta <= kBaseScoreTolerance && out.nvtl_delta <= kBaseScoreTolerance;
+  return out;
+}
 
 int run_fixture_mode(const std::string & out_path, const std::vector<std::string> & paths)
 {
@@ -471,6 +551,7 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     return 1;
   }
   std::fprintf(f, "{\n");
+  std::fprintf(f, "  \"schema_version\": 2,\n");
   std::fprintf(f, "  \"benchmark\": \"WCET fixture replay (frozen adversarial inputs)\",\n");
   std::fprintf(f, "  \"meta\": {\n");
   std::fprintf(f, "    \"iters\": %d,\n", iters);
@@ -483,7 +564,16 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
   std::fprintf(f, "    \"engine\": \"%s\",\n", engine_sel.c_str());
   std::fprintf(f, "    \"evict_bytes\": %lld,\n", evict_bytes);
   std::fprintf(f, "    \"cache_condition\": \"%s\",\n", evict_bytes > 0 ? "cold" : "warm");
+#ifdef NDT_TRACE
+  std::fprintf(f, "    \"note\": \"align loop only; map+kdtree built once per engine per fixture\",\n");
+  std::fprintf(f, "    \"trace_digest\": \"SHA-256\",\n");
+  std::fprintf(f, "    \"shape_fields\": [\"grid_ordinal\", \"voxel_id\"],\n");
+  std::fprintf(
+    f, "    \"payload_fields\": [\"grid_ordinal\", \"voxel_id\", \"mean\", "
+       "\"inverse_covariance\"]\n");
+#else
   std::fprintf(f, "    \"note\": \"align loop only; map+kdtree built once per engine per fixture\"\n");
+#endif
   std::fprintf(f, "  },\n");
   std::fprintf(f, "  \"fixtures\": {\n");
 
@@ -619,46 +709,16 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
 
     // ---- equal-work assert (only meaningful when both engines ran in this invocation;
     // single-engine cells are paired and re-asserted by the campaign orchestrator's merge)
-    bool iter_match = true;
-    bool pose_match = true;
-    double trans_delta = 0.0;
-    double rot_delta = 0.0;
-    double tp_delta = 0.0;
-    double nvtl_delta = 0.0;
+    BaseAgreement base;
+    base.iteration_match = true;
+    base.match = true;
     if (both) {
-      iter_match = (cpp_iter == rs_iter);
-      if (!iter_match) {
-        std::fprintf(stderr, "wcet: ITERATION MISMATCH on %s: cpp=%d rust=%d\n", path.c_str(),
-          cpp_iter, rs_iter);
-        rc = 1;
-      }
-
-      // ---- pose/score certificate (plan/paper_fix.md B1): the equal-work certificate's
-      // second leg. Both engines already expose the final pose and both scores, so agreement
-      // is asserted per fixture with no extra instrumentation.
-      for (int r = 0; r < 3; ++r) {
-        const double dt = static_cast<double>(cpp_res.pose(r, 3)) -
-                          static_cast<double>(rs_pose[(static_cast<size_t>(r) * 4) + 3]);
-        trans_delta += dt * dt;
-        for (int c = 0; c < 3; ++c) {
-          rot_delta = std::max(
-            rot_delta, std::abs(
-                         static_cast<double>(cpp_res.pose(r, c)) -
-                         static_cast<double>(rs_pose[(static_cast<size_t>(r) * 4) + c])));
-        }
-      }
-      trans_delta = std::sqrt(trans_delta);
-      tp_delta = std::abs(
-        static_cast<double>(cpp_res.transform_probability) - static_cast<double>(rs_tp));
-      nvtl_delta = std::abs(
-        static_cast<double>(cpp_res.nearest_voxel_transformation_likelihood) -
-        static_cast<double>(rs_nvtl));
-      pose_match =
-        trans_delta < 1e-4 && rot_delta < 1e-5 && tp_delta < 1e-4 && nvtl_delta < 1e-4;
-      if (!pose_match) {
+      base = compare_base(cpp_res, rs_iter, rs_pose, rs_tp, rs_nvtl);
+      if (!base.match) {
         std::fprintf(stderr,
-          "wcet: POSE/SCORE MISMATCH on %s: dtrans=%.3e drot=%.3e dtp=%.3e dnvtl=%.3e\n",
-          path.c_str(), trans_delta, rot_delta, tp_delta, nvtl_delta);
+          "wcet: BASE MISMATCH on %s: iter=%s dtrans=%.3e drot=%.3e dtp=%.3e dnvtl=%.3e\n",
+          path.c_str(), base.iteration_match ? "OK" : "DIFF", base.trans_delta_m,
+          base.rot_delta_rad, base.tp_delta, base.nvtl_delta);
         rc = 1;
       }
     }
@@ -671,12 +731,14 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     std::fprintf(f, "      \"n_source\": %zu,\n", n_src);
     std::fprintf(f, "      \"max_iterations\": %d,\n", fx.max_iterations);
     if (both) {
-      std::fprintf(f, "      \"iter_match\": %s,\n", iter_match ? "true" : "false");
+      std::fprintf(
+        f, "      \"iter_match\": %s,\n", base.iteration_match ? "true" : "false");
       std::fprintf(
         f,
-        "      \"cert\": { \"pose_match\": %s, \"trans_delta_m\": %.3e, \"rot_delta\": %.3e, "
-        "\"tp_delta\": %.3e, \"nvtl_delta\": %.3e },\n",
-        pose_match ? "true" : "false", trans_delta, rot_delta, tp_delta, nvtl_delta);
+        "      \"cert\": { \"base_match\": %s, \"trans_delta_m\": %.3e, "
+        "\"rot_delta_rad\": %.3e, \"tp_delta\": %.3e, \"nvtl_delta\": %.3e },\n",
+        base.match ? "true" : "false", base.trans_delta_m, base.rot_delta_rad, base.tp_delta,
+        base.nvtl_delta);
 #ifdef NDT_TRACE
       if (have_trace_cpp && have_trace_rust) {
         const TraceCert tc = compare_traces(trace_cpp, trace_rust);
@@ -722,9 +784,10 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
 
     if (both) {
       std::fprintf(stderr,
-        "wcet: %-18s map=%zu src=%zu iter cpp=%d rust=%d %s pose/score %s (dtrans=%.1e)\n",
-        name.c_str(), n_map, n_src, cpp_iter, rs_iter, iter_match ? "OK" : "MISMATCH",
-        pose_match ? "OK" : "MISMATCH", trans_delta);
+        "wcet: %-18s map=%zu src=%zu iter cpp=%d rust=%d %s base %s (dtrans=%.1e)\n",
+        name.c_str(), n_map, n_src, cpp_iter, rs_iter,
+        base.iteration_match ? "OK" : "MISMATCH", base.match ? "OK" : "MISMATCH",
+        base.trans_delta_m);
     } else {
       std::fprintf(stderr, "wcet: %-18s map=%zu src=%zu engine=%s iter=%d\n", name.c_str(),
         n_map, n_src, engine_sel.c_str(), run_cpp ? cpp_iter : static_cast<int>(rs_iter));
@@ -850,7 +913,20 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     if (e.path().extension() == ".bin") frame_paths.push_back(e.path().string());
   }
   std::sort(frame_paths.begin(), frame_paths.end());
-  std::fprintf(stderr, "capture: %zu frames, %d repeats/frame\n", frame_paths.size(), repeats);
+  const char * begin_env = std::getenv("WCET_SEQ_BEGIN");
+  const char * end_env = std::getenv("WCET_SEQ_END");
+  const std::size_t seq_begin =
+    begin_env != nullptr ? static_cast<std::size_t>(std::strtoull(begin_env, nullptr, 10)) : 0U;
+  const std::size_t seq_end = end_env != nullptr
+                                ? static_cast<std::size_t>(std::strtoull(end_env, nullptr, 10))
+                                : frame_paths.size();
+  if (seq_begin > seq_end || seq_end > frame_paths.size()) {
+    std::fprintf(stderr, "capture: invalid seq range [%zu,%zu) for %zu frames\n", seq_begin,
+      seq_end, frame_paths.size());
+    return 1;
+  }
+  std::fprintf(stderr, "capture: %zu frames, range [%zu,%zu), %d repeats/frame\n",
+    frame_paths.size(), seq_begin, seq_end, repeats);
 
   // Tile cache: hex id -> (pcl cloud, flat xyz).
   std::map<std::string, std::pair<pcl::PointCloud<pcl::PointXYZ>::Ptr, std::vector<float>>>
@@ -888,7 +964,7 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     std::fprintf(stderr, "capture: cannot open %s\n", out_path.c_str());
     return 1;
   }
-  std::fprintf(f, "{\n  \"frames\": [\n");
+  std::fprintf(f, "{\n  \"schema_version\": 2,\n  \"frames\": [\n");
 
   int rc = 0;
   bool first = true;
@@ -900,6 +976,8 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
   auto aligned = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
 
   for (size_t fi = 0; fi < frame_paths.size(); ++fi) {
+    if (fi < seq_begin) continue;
+    if (fi >= seq_end) break;
     CaptureFrame fr;
     if (!read_capture_frame(frame_paths[fi], fr)) {
       std::fprintf(stderr, "capture: malformed frame %s\n", frame_paths[fi].c_str());
@@ -1125,7 +1203,8 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     }
     std::sort(cpp_ms_v.begin(), cpp_ms_v.end());
     std::sort(rs_ms_v.begin(), rs_ms_v.end());
-    const int cpp_iter = ndt->getResult().iteration_num;
+    const pclomp::NdtResult cpp_result = ndt->getResult();
+    const int cpp_iter = cpp_result.iteration_num;
     // WCET_DUMP=1: per-iteration score/pose comparison for divergence root-causing.
     if (std::getenv("WCET_DUMP") != nullptr) {
       const auto res = ndt->getResult();
@@ -1177,9 +1256,13 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     }
     int32_t rs_iter = 0;
     std::array<float, 16> rs_pose{};
+    float rs_tp = 0.0F;
+    float rs_nvtl = 0.0F;
     AwNdtAlignOutput rout{};
     rout.iteration_num = &rs_iter;
     rout.pose = rs_pose.data();
+    rout.transform_probability = &rs_tp;
+    rout.nearest_voxel_likelihood = &rs_nvtl;
     autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &rout);
     if (chain) {
       Eigen::Matrix4f pose = Eigen::Matrix4f::Identity();
@@ -1190,14 +1273,18 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
       chain_prev = pose;
       have_prev = true;
     }
-    const bool match = (cpp_iter == rs_iter);
-    if (!match) ++mismatches;
+    const BaseAgreement base = compare_base(cpp_result, rs_iter, rs_pose, rs_tp, rs_nvtl);
+    if (!base.iteration_match) ++mismatches;
 
     std::fprintf(f,
       "%s    { \"seq\": %zu, \"n_source\": %zu, \"n_tiles\": %zu, \"cpp_ms\": %.4f, "
-      "\"rust_ms\": %.4f, \"iter_cpp\": %d, \"iter_rust\": %d, \"match\": %s",
+      "\"rust_ms\": %.4f, \"iter_cpp\": %d, \"iter_rust\": %d, "
+      "\"iteration_match\": %s, \"base_match\": %s, \"trans_delta_m\": %.9e, "
+      "\"rot_delta_rad\": %.9e, \"tp_delta\": %.9e, \"nvtl_delta\": %.9e",
       (first ? "" : ",\n"), fi, n_src, fr.ids.size(), cpp_ms_v[cpp_ms_v.size() / 2],
-      rs_ms_v[rs_ms_v.size() / 2], cpp_iter, rs_iter, match ? "true" : "false");
+      rs_ms_v[rs_ms_v.size() / 2], cpp_iter, rs_iter,
+      base.iteration_match ? "true" : "false", base.match ? "true" : "false",
+      base.trans_delta_m, base.rot_delta_rad, base.tp_delta, base.nvtl_delta);
 #ifdef NDT_TRACE
     {
       const TraceSnap tc_cpp = snap_cpp();
@@ -1205,15 +1292,6 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
       const TraceCert tc = compare_traces(tc_cpp, tc_rust);
       std::fprintf(f, ", ");
       write_trace_json(f, tc_cpp, tc_rust, tc);
-      // Pose/score deltas of the divergent frames (C2 rider): cheap, so emit per frame.
-      double dtrans = 0.0;
-      const auto res = ndt->getResult();
-      for (int r = 0; r < 3; ++r) {
-        const double dt = static_cast<double>(res.pose(r, 3)) -
-                          static_cast<double>(rs_pose[(static_cast<size_t>(r) * 4) + 3]);
-        dtrans += dt * dt;
-      }
-      std::fprintf(f, ", \"trans_delta_m\": %.3e", std::sqrt(dtrans));
     }
 #endif
     std::fprintf(f, " }");

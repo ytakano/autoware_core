@@ -139,12 +139,19 @@ public:
       mean_(Eigen::Vector3d::Zero()),
       centroid_(),
       cov_(Eigen::Matrix3d::Identity()),
-      icov_(Eigen::Matrix3d::Zero())
+      icov_(Eigen::Matrix3d::Zero()),
+      trace_voxel_id_(0),
+      trace_grid_ordinal_(0)
     {
     }
 
     Leaf(const Leaf & other)
-    : mean_(other.mean_), centroid_(other.centroid_), cov_(other.cov_), icov_(other.icov_)
+    : mean_(other.mean_),
+      centroid_(other.centroid_),
+      cov_(other.cov_),
+      icov_(other.icov_),
+      trace_voxel_id_(other.trace_voxel_id_),
+      trace_grid_ordinal_(other.trace_grid_ordinal_)
     {
       nr_points_ = other.nr_points_;
     }
@@ -153,7 +160,9 @@ public:
     : mean_(std::move(other.mean_)),
       centroid_(std::move(other.centroid_)),
       cov_(std::move(other.cov_)),
-      icov_(std::move(other.icov_))
+      icov_(std::move(other.icov_)),
+      trace_voxel_id_(other.trace_voxel_id_),
+      trace_grid_ordinal_(other.trace_grid_ordinal_)
     {
       nr_points_ = other.nr_points_;
     }
@@ -165,6 +174,8 @@ public:
       cov_ = other.cov_;
       icov_ = other.icov_;
       nr_points_ = other.nr_points_;
+      trace_voxel_id_ = other.trace_voxel_id_;
+      trace_grid_ordinal_ = other.trace_grid_ordinal_;
 
       return *this;
     }
@@ -176,6 +187,8 @@ public:
       cov_ = std::move(other.cov_);
       icov_ = std::move(other.icov_);
       nr_points_ = other.nr_points_;
+      trace_voxel_id_ = other.trace_voxel_id_;
+      trace_grid_ordinal_ = other.trace_grid_ordinal_;
 
       return *this;
     }
@@ -194,6 +207,9 @@ public:
 
     Eigen::Vector3d & getMean() { return (mean_); }
 
+    std::int64_t getTraceVoxelId() const { return trace_voxel_id_; }
+    std::uint64_t getTraceGridOrdinal() const { return trace_grid_ordinal_; }
+
     /** \brief Number of points contained by voxel */
     int nr_points_;
 
@@ -210,6 +226,10 @@ public:
 
     /** \brief Inverse of voxel covariance matrix */
     Eigen::Matrix3d icov_;
+
+    /** \brief Canonical analysis-only leaf identity. */
+    std::int64_t trace_voxel_id_;
+    std::uint64_t trace_grid_ordinal_;
   };
 
   /** \brief Pointer to MultiVoxelGridCovariance leaf structure */

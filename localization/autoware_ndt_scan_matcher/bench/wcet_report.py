@@ -181,7 +181,7 @@ def main():
     if alloc:
         w("## Heap allocations per align (LD_PRELOAD interposer)")
         w("")
-        w("Rust is independently proven zero-alloc per frame by `engine/tests/zero_alloc.rs`;")
+        w("Rust is independently verified zero-alloc per frame by `engine/tests/zero_alloc.rs`;")
         w("the interposer measures the whole process, so the Rust column includes any harness-")
         w("side allocation as an upper bound.")
         w("")

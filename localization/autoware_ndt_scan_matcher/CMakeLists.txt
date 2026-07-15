@@ -39,7 +39,7 @@ option(NDT_USE_RUST "Build the node from the Rust port instead of the original C
 
 # C1 analysis build (plan/paper_fix2.md C1): builds a TRACED COPY of the C++ engine from
 # bench/traced/ (per-pass trace + FLANN-work counter; upstream sources stay byte-identical) and a
-# traced replay that certifies equal work per input against the Rust engine's mirrored trace.
+# traced replay that checks the recorded work shape per input against the Rust engine's mirrored trace.
 # Analysis only -- never shipped, never a timing configuration.
 option(NDT_BUILD_TRACED "Build the traced analysis engine + replay (requires NDT_BUILD_BENCH)" OFF)
 
@@ -160,6 +160,7 @@ if(NDT_BUILD_TRACED)
   if(NOT NDT_BUILD_BENCH)
     message(FATAL_ERROR "NDT_BUILD_TRACED requires NDT_BUILD_BENCH=ON")
   endif()
+  find_package(OpenSSL REQUIRED COMPONENTS Crypto)
   # Traced engine: compiled from the instrumented copies in bench/traced/ (the align loops are
   # header-template code, so a separate library is required -- the stock libmultigrid_ndt_omp
   # already contains the uninstrumented instantiations). BEFORE-include shadows the one traced
@@ -171,7 +172,7 @@ if(NDT_BUILD_TRACED)
   target_include_directories(multigrid_ndt_omp_traced BEFORE PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/bench/traced/include)
   target_include_directories(multigrid_ndt_omp_traced PRIVATE include ${PCL_INCLUDE_DIRS})
-  target_link_libraries(multigrid_ndt_omp_traced ${PCL_LIBRARIES})
+  target_link_libraries(multigrid_ndt_omp_traced ${PCL_LIBRARIES} OpenSSL::Crypto)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(multigrid_ndt_omp_traced OpenMP::OpenMP_CXX)
   endif()
@@ -256,7 +257,7 @@ if(BUILD_TESTING)
   endif()
 
   if(NDT_USE_RUST)
-    # Differential and FFI tests for the Rust port. Each proves equivalence against the original C++
+    # Differential and FFI tests for the Rust port. Each checks evaluated behavior against the original C++
     # engine (linked as multigrid_ndt_omp) or exercises the crate's C ABI directly. Tests that use
     # the C++ RAII wrapper header (ndt_scan_matcher_rs.hpp) link the node library, which exports the
     # rust/include directory.

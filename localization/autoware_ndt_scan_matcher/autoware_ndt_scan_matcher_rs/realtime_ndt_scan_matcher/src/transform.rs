@@ -158,7 +158,7 @@ pub fn se3_matrix_f32(p: &Vector6<f64>) -> Matrix4<f32> {
     // differently rounded; measured on this toolchain). We deliberately KEEP `libm` — build/ISA
     // determinism of the engine outweighs the last ULP of host C++ parity (measured impact:
     // 1 extra ±1-iteration flip in 22,416 real frames; see the porting notes' divergence
-    // finding). The wcet-count counters certify equal work per frame wherever it matters.
+    // finding). The wcet-count counters confirm the compared per-frame work counts.
     let (sx, cx) = (libm::sinf(p[3] as f32), libm::cosf(p[3] as f32));
     let (sy, cy) = (libm::sinf(p[4] as f32), libm::cosf(p[4] as f32));
     let (sz, cz) = (libm::sinf(p[5] as f32), libm::cosf(p[5] as f32));

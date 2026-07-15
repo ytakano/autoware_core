@@ -19,7 +19,7 @@
 // hooks via dlsym(RTLD_DEFAULT, ...) at runtime — if this library is preloaded it resets the
 // counter after warmup and reads it after the timed align window, yielding allocations/align for
 // each engine; if not preloaded, the hooks are absent and counting is skipped. The Rust engine is
-// independently proven zero-alloc by engine/tests/zero_alloc.rs; this interposer is how we get
+// independently verified zero-alloc by engine/tests/zero_alloc.rs; this interposer is how we get
 // the same number for the C++ engine.
 //
 // Build:  cc -O2 -shared -fPIC -o alloc_count.so alloc_count.c -ldl

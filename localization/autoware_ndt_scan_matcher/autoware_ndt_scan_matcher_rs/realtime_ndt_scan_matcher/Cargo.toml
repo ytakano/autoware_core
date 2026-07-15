@@ -39,13 +39,11 @@ parallel = ["std", "dep:rayon", "dep:libc"]
 # for the SERIAL backend (the WCET baseline); compiled out entirely when the feature is off, so the
 # shipping hot path is untouched. No extra dependencies.
 wcet-count = []
-# `wcet-trace`: per-pass trace records for the C1 cross-language trace certificate
-# (plan/paper_fix2.md): per derivative pass, the point/neighbor counts, the neighbor-identity
-# hash (FNV-1a over leaf-mean f64 bits in summation order), and the pass-final
-# score/gradient/Hessian bits. Mirrored bit-for-bit by the C++ analysis build
-# (bench/traced/include/ndt_trace.hpp). SERIAL backend only (the analysis configuration);
-# the parallel backend poisons the trace. No extra dependencies.
-wcet-trace = ["wcet-count"]
+# `wcet-trace`: analysis-only per-pass records for cross-language work-shape conformance.
+# Canonical leaf ids and complete kernel payloads (mean + regularized inverse covariance) use
+# SHA-256; pass-final score/gradient/Hessian diagnostics retain their compact bit hashes.
+# SERIAL backend only (the parallel backend poisons the ordered trace).
+wcet-trace = ["wcet-count", "dep:sha2"]
 
 # The worst-input searches need the cost counters as their fitness; without the feature the
 # examples have no meaningful fitness, so they are not built at all.
@@ -74,6 +72,8 @@ libc = { version = "0.2", optional = true }
 # Lock-free engine-state double-buffer (the `std` feature). `load()` is lock-free — the read
 # (align) path takes no lock; map-update publishes a fresh state with an atomic store.
 arc-swap = { version = "1", optional = true }
+# Analysis-only, no_std-capable SHA-256 used by `wcet-trace`. It is absent from shipping builds.
+sha2 = { version = "0.10", default-features = false, optional = true }
 # Kernel-grade locks for the `mt` (multi-core no_std) build. Unpublished on crates.io -> pinned git
 # rev (recorded in Cargo.lock); default-features off so the backend choice stays with the final binary.
 awkernel_sync = { git = "https://github.com/tier4/awkernel_sync.git", rev = "d9ea774eb55fc62a392981dd01945e92fec0f134", default-features = false, optional = true }

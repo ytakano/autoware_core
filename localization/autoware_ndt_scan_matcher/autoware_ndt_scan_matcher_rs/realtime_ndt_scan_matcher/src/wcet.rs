@@ -58,7 +58,7 @@ impl WcetCounters {
     }
 }
 
-/// 64-bit FNV-1a offset basis (the trace-hash initial value). Shared with the C++ analysis
+/// 64-bit FNV-1a offset basis for numeric diagnostics. Shared with the C++ analysis
 /// build (`bench/traced/include/ndt_trace.hpp`); the two implementations are bit-identical and
 /// covered by the same test vectors.
 #[cfg(feature = "wcet-trace")]
@@ -70,6 +70,10 @@ pub const FNV_PRIME: u64 = 1_099_511_628_211;
 /// leaves margin; `AlignTrace::len` still counts every pass even past the storage cap).
 #[cfg(feature = "wcet-trace")]
 pub const MAX_TRACE_PASSES: usize = 40;
+
+/// SHA-256 digest width used by the cross-language trace ABI.
+#[cfg(feature = "wcet-trace")]
+pub const TRACE_DIGEST_BYTES: usize = 32;
 
 /// Fold one `u64` (little-endian bytes) into a 64-bit FNV-1a state.
 #[cfg(feature = "wcet-trace")]
@@ -84,8 +88,8 @@ pub fn fnv1a_u64(mut h: u64, v: u64) -> u64 {
     h
 }
 
-/// One derivative pass of the trace certificate: structural work (points, neighbors, the
-/// engine-own kd counter), the neighbor-identity hash, and the pass-final numeric bits.
+/// One derivative pass of the analysis trace: structural work, canonical shape and payload
+/// digests, engine-own kd work, and pass-final numeric diagnostics.
 #[cfg(feature = "wcet-trace")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PassTrace {
@@ -95,9 +99,10 @@ pub struct PassTrace {
     pub neighbors: u64,
     /// This engine's own kd traversal count for the pass (NOT cross-language comparable).
     pub kd_nodes: u64,
-    /// FNV-1a over each neighbor leaf's `mean` f64 bits, per point in index order, per
-    /// neighbor in search-return order — the language-neutral neighbor-identity/order hash.
-    pub nbr_hash: u64,
+    /// SHA-256 chain over sorted canonical `(grid ordinal, voxel id)` sets, in point order.
+    pub shape_digest: [u8; TRACE_DIGEST_BYTES],
+    /// SHA-256 chain over the same ids plus mean and inverse-covariance f64 bits.
+    pub payload_digest: [u8; TRACE_DIGEST_BYTES],
     /// Bit pattern of the pass-final score (the value handed to the Newton step).
     pub score_bits: u64,
     /// FNV-1a over the pass-final gradient's 6 f64 bit patterns (index order).
@@ -108,14 +113,15 @@ pub struct PassTrace {
 
 #[cfg(feature = "wcet-trace")]
 impl PassTrace {
-    /// Empty pass record (hash fields start at the FNV offset basis).
+    /// Empty pass record (numeric diagnostic hashes start at the FNV offset basis).
     #[must_use]
     pub const fn new() -> Self {
         Self {
             points: 0,
             neighbors: 0,
             kd_nodes: 0,
-            nbr_hash: FNV_OFFSET,
+            shape_digest: [0; TRACE_DIGEST_BYTES],
+            payload_digest: [0; TRACE_DIGEST_BYTES],
             score_bits: 0,
             grad_hash: FNV_OFFSET,
             hess_hash: FNV_OFFSET,
@@ -196,6 +202,21 @@ mod trace_tests {
         let a = fnv1a_u64(fnv1a_u64(FNV_OFFSET, 1), 2);
         let b = fnv1a_u64(fnv1a_u64(FNV_OFFSET, 2), 1);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn sha256_shared_vector() {
+        use sha2::{Digest, Sha256};
+
+        let digest: [u8; TRACE_DIGEST_BYTES] = Sha256::digest(b"abc").into();
+        assert_eq!(
+            digest,
+            [
+                0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+                0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+                0xf2, 0x00, 0x15, 0xad,
+            ]
+        );
     }
 
     #[test]
