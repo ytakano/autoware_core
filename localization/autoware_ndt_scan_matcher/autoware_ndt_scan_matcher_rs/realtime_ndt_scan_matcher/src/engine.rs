@@ -198,8 +198,8 @@ impl CovarianceConfig {
     }
 }
 
-/// The atomically-swappable engine state: the target map, the active params, and the cell-id → tile
-/// mapping. Immutable once published — map-update builds a fresh `EngineState` and stores it.
+/// The atomically-swappable engine state: the target map and active params. Immutable once
+/// published — map-update builds a fresh `EngineState` and stores it.
 #[derive(Clone)]
 struct EngineState {
     map: VoxelGridMap,
@@ -209,10 +209,6 @@ struct EngineState {
     conv: ConvergenceParams,
     /// The `covariance` hyper-params read on `estimate_covariance` (swapped like `conv`).
     cov_config: CovarianceConfig,
-    /// Cell-id bytes → tile `u64` (the engine owns the legacy string-id mapping; keys are the
-    /// raw `std::string` cell-id bytes — not validated UTF-8).
-    id_map: alloc::collections::BTreeMap<alloc::vec::Vec<u8>, u64>,
-    next_id: u64,
 }
 
 /// Per-align scratch: the reused workspace + the last align result. Never shared mutable state
@@ -303,7 +299,7 @@ std::thread_local! {
     static SCRATCH: core::cell::RefCell<MatchScratch> = core::cell::RefCell::new(MatchScratch::new());
 }
 
-/// Persistent NDT engine: a `Swap` cell of the target map + params (+ id mapping) and the
+/// Persistent NDT engine: a `Swap` cell of the target map + params and the
 /// optional regularization. `&self`-only + `Sync` (std and `mt`; the plain `no_std` single-core
 /// build is `!Sync` and additionally keeps the align scratch here) — see the module docs.
 ///
@@ -367,7 +363,7 @@ impl Clone for NdtEngine {
 
 impl NdtEngine {
     /// Clone the engine's configuration (params, convergence + covariance config, regularization) but
-    /// with an **empty** map (no tiles, fresh id mapping). Used by the map-update rebuild path to start
+    /// with an **empty** map (no tiles). Used by the map-update rebuild path to start
     /// a staging engine from scratch (mirrors the C++ `need_rebuild`: fresh `NdtType` + `setParams`),
     /// as opposed to [`Clone`] which deep-copies the current map.
     #[must_use]
@@ -379,8 +375,6 @@ impl NdtEngine {
                 params: st.params,
                 conv: st.conv,
                 cov_config: st.cov_config.clone(),
-                id_map: alloc::collections::BTreeMap::new(),
-                next_id: 0,
             }),
             reg: swap_new(*swap_load(&self.reg)),
             min_points: self.min_points,
@@ -409,8 +403,6 @@ impl NdtEngine {
                 },
                 conv: ConvergenceParams::default(),
                 cov_config: CovarianceConfig::new(),
-                id_map: alloc::collections::BTreeMap::new(),
-                next_id: 0,
             }),
             reg: swap_new(None),
             min_points,
@@ -657,23 +649,15 @@ impl NdtEngine {
         });
     }
 
-    /// Add a target tile keyed by the cell-id bytes (the C++ `addTarget(cloud, cell_id)`); the engine
-    /// owns the cell-id → `u64` mapping, assigning a fresh id on first use. Needs a following
-    /// [`Self::create_kdtree`].
+    /// Add a target tile keyed by the cell-id bytes (the C++ `addTarget(cloud, cell_id)`). Raw ids
+    /// are retained as the map keys, so finalized tile order is independent of insertion history.
+    /// Needs a following [`Self::create_kdtree`].
     pub fn add_target_bytes(&self, points: &[[f32; 3]], id: &[u8]) {
         #[cfg(feature = "std")]
         crate::capture::hook_tile(id, points);
         swap_rcu(&self.state, |s| {
             let mut n = s.clone();
-            let u = if let Some(&u) = n.id_map.get(id) {
-                u
-            } else {
-                let u = n.next_id;
-                n.next_id = n.next_id.saturating_add(1);
-                n.id_map.insert(id.to_vec(), u);
-                u
-            };
-            n.map.add_target(points, u);
+            n.map.add_target_bytes(points, id);
             n
         });
     }
@@ -683,9 +667,7 @@ impl NdtEngine {
     pub fn remove_target_bytes(&self, id: &[u8]) {
         swap_rcu(&self.state, |s| {
             let mut n = s.clone();
-            if let Some(u) = n.id_map.remove(id) {
-                n.map.remove_target(u);
-            }
+            n.map.remove_target_bytes(id);
             n
         });
     }
@@ -718,7 +700,7 @@ impl NdtEngine {
     /// crate's `get_current_map_ids` C-ABI shim, which cannot reach the engine-private state.
     #[must_use]
     pub fn map_ids(&self) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
-        self.load_state().id_map.keys().cloned().collect()
+        self.load_state().map.cell_ids()
     }
 
     /// Align `source` from `guess` into the caller-owned `scratch` (result lands in
@@ -1509,14 +1491,14 @@ mod tests {
         assert!(!engine.has_target());
     }
 
-    // --- engine-owned cell-id map ---
+    // --- engine-owned canonical cell-id map ---
 
     fn ids_of(engine: &NdtEngine) -> Vec<Vec<u8>> {
-        engine.load_state().id_map.keys().cloned().collect()
+        engine.map_ids()
     }
 
     #[test]
-    fn id_map_add_remove_and_sorted_ids() {
+    fn cell_id_add_remove_and_sorted_ids() {
         let tile = dense_cluster(0.5, 0.5, 0.5);
         let mut engine = NdtEngine::new(1.0, 6, 0.01);
         configured(&mut engine);
@@ -1534,27 +1516,155 @@ mod tests {
     }
 
     #[test]
-    fn id_map_reuses_u64_for_existing_cell_id() {
+    fn cell_id_replaces_existing_tile() {
         let tile = dense_cluster(0.5, 0.5, 0.5);
         let mut engine = NdtEngine::new(1.0, 6, 0.01);
         configured(&mut engine);
         engine.add_target_bytes(&tile, b"0");
-        engine.add_target_bytes(&tile, b"0"); // same cell-id → same tile, no new id
+        engine.add_target_bytes(&tile, b"0"); // same cell-id replaces the tile
         assert_eq!(ids_of(&engine), vec![b"0".to_vec()]);
     }
 
     #[test]
-    fn clone_carries_id_map() {
+    fn clone_carries_cell_ids() {
         let tile = dense_cluster(0.5, 0.5, 0.5);
         let mut engine = NdtEngine::new(1.0, 6, 0.01);
         configured(&mut engine);
         engine.add_target_bytes(&tile, b"0");
         engine.add_target_bytes(&tile, b"1");
         let clone = engine.clone();
-        // Mutating the original must not affect the clone's id-map.
+        // Mutating the original must not affect the clone's cell-id map.
         engine.remove_target_bytes(b"0");
         assert_eq!(ids_of(&engine), vec![b"1".to_vec()]);
         assert_eq!(ids_of(&clone), vec![b"0".to_vec(), b"1".to_vec()]);
+    }
+
+    fn assert_same_canonical_map(left: &NdtEngine, right: &NdtEngine) {
+        assert_eq!(left.map_ids(), right.map_ids());
+        let left_state = left.load_state();
+        let right_state = right.load_state();
+        assert_eq!(left_state.map.num_leaves(), right_state.map.num_leaves());
+        for idx in 0..left_state.map.num_leaves() {
+            let left_leaf = left_state.map.leaf(idx);
+            let right_leaf = right_state.map.leaf(idx);
+            assert!(left_leaf.is_some(), "left leaf {idx} missing");
+            assert!(right_leaf.is_some(), "right leaf {idx} missing");
+            let (Some(left_leaf), Some(right_leaf)) = (left_leaf, right_leaf) else {
+                return;
+            };
+            assert_eq!(left_leaf.n, right_leaf.n);
+            assert_eq!(
+                left_leaf.mean.map(f64::to_bits),
+                right_leaf.mean.map(f64::to_bits)
+            );
+            assert_eq!(
+                left_leaf.icov.map(f64::to_bits),
+                right_leaf.icov.map(f64::to_bits)
+            );
+            assert_eq!(
+                left_leaf.centroid.map(f32::to_bits),
+                right_leaf.centroid.map(f32::to_bits)
+            );
+
+            let mut left_neighbors = Vec::new();
+            let mut right_neighbors = Vec::new();
+            left_state.map.radius_search(
+                left_leaf.centroid,
+                left_state.params.resolution,
+                0,
+                &mut left_neighbors,
+            );
+            right_state.map.radius_search(
+                right_leaf.centroid,
+                right_state.params.resolution,
+                0,
+                &mut right_neighbors,
+            );
+            assert_eq!(left_neighbors, right_neighbors);
+        }
+    }
+
+    fn canonical_tiles() -> [([u8; 5], Vec<[f32; 3]>); 3] {
+        [
+            (*b"gamma", dense_cluster(8.5, 0.5, 0.5)),
+            (*b"alpha", dense_cluster(0.5, 0.5, 0.5)),
+            (*b"bravo", dense_cluster(4.5, 0.5, 0.5)),
+        ]
+    }
+
+    fn cell_engine(tiles: &[([u8; 5], Vec<[f32; 3]>); 3], order: [usize; 3]) -> NdtEngine {
+        let mut engine = NdtEngine::new(1.0, 6, 0.01);
+        configured(&mut engine);
+        for index in order {
+            let (id, points) = &tiles[index];
+            engine.add_target_bytes(points, id);
+        }
+        engine.create_kdtree();
+        engine
+    }
+
+    #[test]
+    fn cell_tile_permutations_build_identical_map_and_alignment() {
+        let tiles = canonical_tiles();
+        let baseline = cell_engine(&tiles, [0, 1, 2]);
+        let source: Vec<[f32; 3]> = tiles
+            .iter()
+            .flat_map(|(_, points)| points.iter().copied())
+            .collect();
+        let guess = Matrix4::<f32>::identity();
+        let mut baseline_scratch = MatchScratch::new();
+        baseline.align_with(&guess, &source, &mut baseline_scratch);
+        let baseline_result = baseline_scratch.result();
+
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let candidate = cell_engine(&tiles, order);
+            assert_same_canonical_map(&baseline, &candidate);
+
+            let mut scratch = MatchScratch::new();
+            candidate.align_with(&guess, &source, &mut scratch);
+            let result = scratch.result();
+            assert_eq!(result.pose, baseline_result.pose);
+            assert_eq!(result.hessian, baseline_result.hessian);
+            assert_eq!(result.iteration_num, baseline_result.iteration_num);
+            assert_eq!(
+                result.transform_probability.to_bits(),
+                baseline_result.transform_probability.to_bits()
+            );
+            assert_eq!(
+                result.nearest_voxel_likelihood.to_bits(),
+                baseline_result.nearest_voxel_likelihood.to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn cell_tile_update_history_builds_identical_final_map() {
+        let tiles = canonical_tiles();
+        let baseline = cell_engine(&tiles, [0, 1, 2]);
+
+        let mut historical = NdtEngine::new(1.0, 6, 0.01);
+        configured(&mut historical);
+        for index in [2, 0] {
+            let (id, points) = &tiles[index];
+            historical.add_target_bytes(points, id);
+            historical.create_kdtree();
+        }
+        let (alpha_id, alpha_points) = &tiles[1];
+        historical.add_target_bytes(alpha_points, alpha_id);
+        historical.create_kdtree();
+        historical.remove_target_bytes(alpha_id);
+        historical.create_kdtree();
+        historical.add_target_bytes(alpha_points, alpha_id);
+        historical.create_kdtree();
+
+        assert_same_canonical_map(&baseline, &historical);
     }
 
     // #2: set_regularization must fold into the align path and shift the converged pose.

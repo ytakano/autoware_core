@@ -249,12 +249,17 @@ pub async fn apply_map_update<S: MapSource>(
     radius: f64,
     rebuild: bool,
 ) {
-    let delta = source.load(center, radius).await;
+    let mut delta = source.load(center, radius).await;
     // Empty delta → no-op (don't republish): mirrors the C++ "no maps to add/remove → no commit", and
     // avoids a wasteful kdtree rebuild on idle map-update cycles.
     if delta.add.is_empty() && delta.remove.is_empty() {
         return;
     }
+    // Canonicalize the control-plane work as well as the finalized map. Valid map-loader deltas
+    // contain unique cell ids; sorting makes processing and capture order independent of the ROS
+    // response vector order.
+    delta.add.sort_by(|left, right| left.id.cmp(&right.id));
+    delta.remove.sort();
     let staging = if rebuild {
         engine.clone_empty()
     } else {

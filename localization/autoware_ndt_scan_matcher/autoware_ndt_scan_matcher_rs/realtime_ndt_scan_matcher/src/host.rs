@@ -37,6 +37,7 @@ pub struct MapTile {
 
 /// A differential map update around a position (mirrors the ROS `pcd_loader` add/remove delta).
 pub struct MapDelta {
+    /// Tiles to add or replace. Cell ids must be unique within one delta.
     pub add: Vec<MapTile>,
     /// Cell ids to remove.
     pub remove: Vec<Vec<u8>>,

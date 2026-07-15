@@ -309,6 +309,15 @@ fn compute_icov(cov: &Matrix3<f64>, eig_mult: f64) -> Option<[f64; 9]> {
 
 // ---- multi-grid map + kd-tree (the MultiVoxelGridCovariance equivalent) ----
 
+/// Canonical tile key. Numeric ids preserve the public `VoxelGridMap` API, while raw cell ids let
+/// the engine reproduce C++'s `std::map<std::string, ...>` ordering without an insertion-ordered
+/// surrogate id. The variants form separate namespaces if both APIs are used on one engine.
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+enum TileKey {
+    Numeric(u64),
+    Cell(Vec<u8>),
+}
+
 /// Id-keyed collection of per-cloud voxel grids plus a kd-tree over all voxel centroids for radius
 /// search. Mirrors `MultiVoxelGridCovariance` (`sid_to_iid_`/`grid_list_` + `KdTreeFLANN`).
 #[derive(Clone)]
@@ -316,7 +325,7 @@ pub struct VoxelGridMap {
     leaf_size: [f64; 3],
     min_points: i32,
     eig_mult: f64,
-    grids: BTreeMap<u64, VoxelGrid>,
+    grids: BTreeMap<TileKey, VoxelGrid>,
     flat_leaves: Vec<Leaf>,
     kdtree: Option<KdTree>,
 }
@@ -348,15 +357,40 @@ impl VoxelGridMap {
     /// * `id` — tile key; re-adding the same `id` replaces that tile.
     pub fn add_target(&mut self, points: &[[f32; 3]], id: u64) {
         let grid = VoxelGrid::build(points, self.leaf_size, self.min_points, self.eig_mult);
-        self.grids.insert(id, grid);
+        self.grids.insert(TileKey::Numeric(id), grid);
+        self.invalidate();
+    }
+
+    /// Register a tile under its raw cell-id bytes. Cell ids are ordered lexicographically, so the
+    /// finalized map is independent of the order in which tile updates arrived.
+    pub(crate) fn add_target_bytes(&mut self, points: &[[f32; 3]], id: &[u8]) {
+        let grid = VoxelGrid::build(points, self.leaf_size, self.min_points, self.eig_mult);
+        self.grids.insert(TileKey::Cell(id.to_vec()), grid);
         self.invalidate();
     }
 
     /// Remove the tile registered under `id` (no-op if absent). Invalidates the kd-tree — call
     /// [`Self::create_kdtree`] before searching again.
     pub fn remove_target(&mut self, id: u64) {
-        self.grids.remove(&id);
+        self.grids.remove(&TileKey::Numeric(id));
         self.invalidate();
+    }
+
+    /// Remove a tile registered under its raw cell-id bytes.
+    pub(crate) fn remove_target_bytes(&mut self, id: &[u8]) {
+        self.grids.remove(&TileKey::Cell(id.to_vec()));
+        self.invalidate();
+    }
+
+    /// Registered raw cell ids in canonical bytewise order.
+    pub(crate) fn cell_ids(&self) -> Vec<Vec<u8>> {
+        self.grids
+            .keys()
+            .filter_map(|key| match key {
+                TileKey::Numeric(_) => None,
+                TileKey::Cell(id) => Some(id.clone()),
+            })
+            .collect()
     }
 
     /// Whether any target grid is registered (the C++ `hasTarget`).
