@@ -61,6 +61,64 @@ Dev smoke test (container, unprepared host): `run --allow-env-mismatch --max-cel
 reduced config — the override is recorded in the manifest as `env_check: "overridden"` and
 such data must never feed the paper.
 
+## Unified 3 x 1000 Profile-B campaign
+
+`campaign_config_unified.json` is the measurement configuration used to replace the
+mixed-sample primary and Pareto timing campaigns. It contains ten fixtures, including the
+two tracked Pareto inputs, and measures five series: warm, cold, and the `membw`, `llc`, and
+`fp` co-runners. Each fixture/engine/series cell contains 1000 measured aligns in each of
+three sessions. The matrix is 100 cells per session and 300,000 measured aligns in total.
+The prior-based estimate is about 10.6 hours per boot and 31.6 hours overall, excluding map
+builds, calibration, and recovery from rejected cells.
+
+Build once and freeze the binary and fixtures before the first reboot:
+
+```sh
+CFG=campaign_config_unified.json
+python3 wcet_campaign.py --config "$CFG" plan --verbose
+python3 wcet_campaign.py --config "$CFG" smoke
+python3 wcet_campaign.py --config "$CFG" prepare
+```
+
+`prepare` writes `campaign_runs/unified_3x1000/campaign.lock.json`. Do not rebuild, change
+the config, or replace a fixture until all three sessions are complete. The runner compares
+the config, binary, source commits, and fixture hashes with this lock before every run.
+
+Use a different boot for each session. The operator applies GRUB isolation, the governor
+and 3.2 GHz frequency pin, CPU-3 offline, and IRQ affinity after each reboot. Then run
+`verify-env`; never use `--allow-env-mismatch` for retained measurements. Execute the five
+series separately so an environmental abort only interrupts one series:
+
+```sh
+CFG=campaign_config_unified.json
+N=1  # use 2 and 3 after separate reboots
+python3 wcet_campaign.py --config "$CFG" verify-env
+python3 wcet_campaign.py --config "$CFG" run --session "$N" --series warm --resume
+python3 wcet_campaign.py --config "$CFG" run --session "$N" --series cold --resume
+python3 wcet_campaign.py --config "$CFG" run --session "$N" --series corunner:membw --resume
+python3 wcet_campaign.py --config "$CFG" run --session "$N" --series corunner:llc --resume
+python3 wcet_campaign.py --config "$CFG" run --session "$N" --series corunner:fp --resume
+python3 wcet_campaign.py --config "$CFG" status --session "$N"
+python3 wcet_campaign.py --config "$CFG" merge --session "$N"
+```
+
+A session lock records the kernel boot ID and rejects continuation after a reboot. If a
+boot must be replaced before its session completes, preserve that directory as a rejected
+attempt and restart the same session number in an empty directory. `--resume` skips only
+cells whose sample count, engine, config hash, fixture hash, and problem-free sidecar all
+match the current plan; malformed or partial outputs are moved below `rejected/`.
+
+The runner requires at least 8 GiB available before a cell. It terminates the replay below
+4 GiB, rejects any cell with swap I/O, and records the minimum available memory. Only one
+replay process and at most one co-runner execute at a time.
+
+After all three boots, validate before writing paper data:
+
+```sh
+python3 ../../../../../../paper/scripts/integrate_campaign.py --check-only
+python3 ../../../../../../paper/scripts/integrate_campaign.py
+```
+
 ## Profile A (production-representative) and the bridge experiment
 
 `campaign_config_profileA.json` sets `"profile": "A"`: verify-env then *inverts* the

@@ -59,6 +59,7 @@ PKG_REL = pathlib.Path("src/core/autoware_core/localization") / PKG / "bench"
 EST_CPP_MS = {
     "search_00": 900, "search_01": 620, "dense_neighbors": 600, "max_iterations": 90,
     "cache_hostile": 20, "subnormal": 55, "legal_worst": 165, "legal_osc": 120,
+    "pareto_01": 895, "pareto_02": 872,
 }
 RUST_FACTOR = 0.7  # Rust/C++ median ratio prior
 COLD_OVERHEAD_MS = 40  # per-sample eviction cost prior
@@ -99,6 +100,78 @@ def sha256_of(path):
 def load_config(path):
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+def all_fixture_names(cfg):
+    names = [name for spec in cfg["tiers"].values() for name in spec["fixtures"]]
+    if len(names) != len(set(names)):
+        raise ValueError("fixture names must be unique across tiers")
+    return names
+
+
+def fixture_path(cfg, name):
+    override = cfg.get("fixture_paths", {}).get(name)
+    if override:
+        path = BENCH_DIR / override
+    else:
+        path = BENCH_DIR / cfg["fixtures_dir"] / f"{name}.ndtfix"
+    return path.resolve()
+
+
+def validate_config(cfg):
+    names = all_fixture_names(cfg)
+    if not names:
+        raise ValueError("at least one fixture is required")
+    missing = [str(fixture_path(cfg, name)) for name in names
+               if not fixture_path(cfg, name).is_file()]
+    if missing:
+        raise ValueError("missing fixtures: " + ", ".join(missing))
+    unknown_corunner = sorted(set(cfg["corunner"]["fixtures"]) - set(names))
+    if unknown_corunner:
+        raise ValueError(f"co-runner fixtures are not in the timing set: {unknown_corunner}")
+    if cfg.get("sessions", 0) < 1:
+        raise ValueError("sessions must be positive")
+    for tier, spec in cfg["tiers"].items():
+        if spec.get("samples", 0) < 1:
+            raise ValueError(f"tier {tier} samples must be positive")
+    for section in ("cold", "corunner"):
+        if cfg[section].get("samples", 0) < 1:
+            raise ValueError(f"{section} samples must be positive")
+    minimum = cfg["abort"].get("min_mem_available_mib", 0)
+    critical = cfg["abort"].get("critical_mem_available_mib", 0)
+    if minimum and critical and critical >= minimum:
+        raise ValueError("critical memory threshold must be lower than the pre-cell threshold")
+
+
+def config_hash(cfg):
+    encoded = json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def boot_id():
+    return read_sys("/proc/sys/kernel/random/boot_id")
+
+
+def read_memory_snapshot():
+    values = {}
+    text_value = read_sys("/proc/meminfo") or ""
+    for line in text_value.splitlines():
+        key, _, value = line.partition(":")
+        fields = value.split()
+        if fields and fields[0].isdigit():
+            values[key] = int(fields[0]) // 1024
+    vmstat = {}
+    text_value = read_sys("/proc/vmstat") or ""
+    for line in text_value.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] in ("pswpin", "pswpout") and fields[1].isdigit():
+            vmstat[fields[0]] = int(fields[1])
+    return {
+        "mem_available_mib": values.get("MemAvailable"),
+        "swap_free_mib": values.get("SwapFree"),
+        "pswpin": vmstat.get("pswpin", 0),
+        "pswpout": vmstat.get("pswpout", 0),
+    }
+
 
 
 # ---------------------------------------------------------------------------
@@ -361,11 +434,13 @@ def git_commit(path):
 
 
 def build_manifest(cfg, root, session_id, series, cell=None, env_snap=None, env_mode="strict"):
-    fixtures_dir = BENCH_DIR / cfg["fixtures_dir"]
     exe = find_replay(root)
     m = {
         "experiment_id": f"{session_id}/{series}" + (f"/{cell}" if cell else ""),
+        "campaign_id": cfg.get("campaign_id"),
+        "campaign_config_hash": config_hash(cfg),
         "measurement_profile": cfg["profile"],
+        "boot_id": boot_id(),
         "run_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "host_name": platform.node(),
         "cpu_model": next(
@@ -400,7 +475,7 @@ def build_manifest(cfg, root, session_id, series, cell=None, env_snap=None, env_
         "cpp_commit": git_commit(root / "src/core/autoware_core"),
         "rust_commit": git_commit(root / "src/core/autoware_core"),
         "fixture_hashes": {
-            p.stem: sha256_of(p) for p in sorted(fixtures_dir.glob("*.ndtfix"))},
+            name: sha256_of(fixture_path(cfg, name)) for name in all_fixture_names(cfg)},
         "binary_hash": sha256_of(exe) if exe else None,
         "cache_condition": "cold" if series == "cold" else "warm",
         "co_runner": series.split(":", 1)[1] if series.startswith("corunner:") else None,
@@ -431,21 +506,17 @@ def fixture_tier(cfg, name):
 
 
 def build_plan(cfg, session):
-    """List of cells: dicts with series/fixture/engine/samples/warmup/evict/corunner."""
+    """Return randomized single-engine cells for one session."""
     rng = random.Random(0xC0FFEE ^ session)
-    all_fixtures = [f for spec in cfg["tiers"].values() for f in spec["fixtures"]]
+    all_fixtures = all_fixture_names(cfg)
     series_list = ["warm", "cold"] + [f"corunner:{m}" for m in cfg["corunner"]["modes"]]
     cells = []
     for series in series_list:
-        if series == "warm":
-            fixtures = list(all_fixtures)
-        elif series == "cold":
-            fixtures = list(all_fixtures)
-        else:
-            fixtures = list(cfg["corunner"]["fixtures"])
-        rng.shuffle(fixtures)  # fixture-order randomization (policy amendment)
-        for fx in fixtures:
-            _, tier_samples = fixture_tier(cfg, fx)
+        fixtures = (list(all_fixtures) if series in ("warm", "cold")
+                    else list(cfg["corunner"]["fixtures"]))
+        rng.shuffle(fixtures)
+        for fixture in fixtures:
+            _, tier_samples = fixture_tier(cfg, fixture)
             if series == "warm":
                 samples, warmup, evict = tier_samples, cfg["warmup"], 0
             elif series == "cold":
@@ -455,10 +526,10 @@ def build_plan(cfg, session):
             else:
                 samples, warmup, evict = cfg["corunner"]["samples"], cfg["warmup"], 0
             engines = ["cpp", "rust"]
-            rng.shuffle(engines)  # engine-order randomization per fixture
-            for eng in engines:
+            rng.shuffle(engines)
+            for engine in engines:
                 cells.append({
-                    "series": series, "fixture": fx, "engine": eng,
+                    "series": series, "fixture": fixture, "engine": engine,
                     "samples": samples, "warmup": warmup, "evict_bytes": evict,
                     "corunner": series.split(":", 1)[1] if ":" in series else None,
                 })
@@ -473,28 +544,189 @@ def estimate_ms(cell):
     return (cell["samples"] + cell["warmup"]) * per
 
 
+def campaign_root(cfg):
+    return BENCH_DIR / cfg["output_dir"]
+
+
+def campaign_identity(cfg, root):
+    exe = find_replay(root)
+    if exe is None:
+        raise ValueError(
+            f"ndt_bench_replay not found under {root}/build/{PKG}; "
+            "build with -DNDT_BUILD_BENCH=ON")
+    return {
+        "campaign_id": cfg.get("campaign_id"),
+        "config_hash": config_hash(cfg),
+        "binary_hash": sha256_of(exe),
+        "cpp_commit": git_commit(root / "src/core/autoware_core"),
+        "rust_commit": git_commit(root / "src/core/autoware_core"),
+        "fixture_hashes": {
+            name: sha256_of(fixture_path(cfg, name)) for name in all_fixture_names(cfg)},
+        "sessions": cfg["sessions"],
+        "cells_per_session": len(build_plan(cfg, 1)),
+    }
+
+
+def ensure_campaign_lock(cfg, root):
+    out = campaign_root(cfg)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "campaign.lock.json"
+    expected = campaign_identity(cfg, root)
+    if path.is_file():
+        actual = json.loads(path.read_text(encoding="utf-8"))
+        mismatches = [key for key, value in expected.items() if actual.get(key) != value]
+        if mismatches:
+            raise ValueError(
+                "campaign lock mismatch for " + ", ".join(mismatches) +
+                "; do not rebuild or change fixtures between sessions")
+        return actual
+    locked = dict(expected, created_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    path.write_text(json.dumps(locked, indent=1) + "\n", encoding="utf-8")
+    return locked
+
+
+def ensure_session_lock(cfg, session):
+    directory = campaign_root(cfg) / f"session-{session}"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "session.lock.json"
+    current = boot_id()
+    if not current:
+        raise ValueError("kernel boot_id is unavailable")
+    expected = {
+        "campaign_id": cfg.get("campaign_id"), "config_hash": config_hash(cfg),
+        "session": session, "boot_id": current,
+    }
+    if path.is_file():
+        actual = json.loads(path.read_text(encoding="utf-8"))
+        mismatches = [key for key, value in expected.items() if actual.get(key) != value]
+        if mismatches:
+            raise ValueError(
+                f"session-{session} lock mismatch for {', '.join(mismatches)}; "
+                "a session may not span boots")
+        return directory
+    expected["created_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    path.write_text(json.dumps(expected, indent=1) + "\n", encoding="utf-8")
+    return directory
+
+
+def series_dir_name(series):
+    return series.replace(":", "_")
+
+
+def cell_paths(session_dir, cell):
+    directory = session_dir / series_dir_name(cell["series"])
+    stem = f"{cell['fixture']}__{cell['engine']}"
+    return directory / f"{stem}.json", directory / f"{stem}.cell.json"
+
+
+def load_json(path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def measurement_problem(path, cell):
+    doc = load_json(path)
+    if doc is None:
+        return "measurement JSON is missing or malformed"
+    meta = doc.get("meta") or {}
+    if meta.get("iters") != cell["samples"]:
+        return f"sample metadata is {meta.get('iters')}, expected {cell['samples']}"
+    if meta.get("engine") != cell["engine"]:
+        return f"engine metadata is {meta.get('engine')!r}, expected {cell['engine']!r}"
+    fixtures = doc.get("fixtures") or {}
+    if set(fixtures) != {cell["fixture"]}:
+        return f"fixture set is {sorted(fixtures)}, expected {[cell['fixture']]}"
+    samples = (fixtures[cell["fixture"]].get(cell["engine"]) or {}).get("samples_ms")
+    if not isinstance(samples, list) or len(samples) != cell["samples"]:
+        return f"sample array length is {len(samples) if isinstance(samples, list) else None}"
+    return None
+
+
+def completed_cell_problem(cfg, out_json, sidecar_json, cell):
+    problem = measurement_problem(out_json, cell)
+    if problem:
+        return problem
+    sidecar = load_json(sidecar_json)
+    if sidecar is None:
+        return "sidecar is missing or malformed"
+    if sidecar.get("cell") != cell:
+        return "sidecar cell specification differs from the current plan"
+    if sidecar.get("problems"):
+        return "sidecar records measurement problems"
+    manifest = sidecar.get("manifest") or {}
+    if manifest.get("campaign_config_hash") != config_hash(cfg):
+        return "sidecar config hash differs from the current campaign"
+    expected_hash = sha256_of(fixture_path(cfg, cell["fixture"]))
+    if manifest.get("fixture_hashes", {}).get(cell["fixture"]) != expected_hash:
+        return "sidecar fixture hash differs from the current input"
+    return None
+
+
+def quarantine_cell(out_json, sidecar_json):
+    existing = [path for path in (out_json, sidecar_json) if path.exists()]
+    if not existing:
+        return
+    rejected = out_json.parent.parent / "rejected" / out_json.parent.name
+    rejected.mkdir(parents=True, exist_ok=True)
+    suffix = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    for path in existing:
+        path.rename(rejected / f"{path.name}.{suffix}")
+
+
+def stop_process(proc):
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+def cmd_prepare(cfg, _args):
+    try:
+        locked = ensure_campaign_lock(cfg, ws_root())
+    except ValueError as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(locked, indent=1))
+    return 0
+
+
 def cmd_plan(cfg, args):
     total = 0.0
     for session in range(1, cfg["sessions"] + 1):
         cells = build_plan(cfg, session)
-        dur = sum(estimate_ms(c) for c in cells) / 1000.0
-        total += dur
-        print(f"session {session}: {len(cells)} cells, ~{dur / 60:.0f} min")
+        duration = sum(estimate_ms(cell) for cell in cells) / 1000.0
+        total += duration
+        print(f"session {session}: {len(cells)} cells, ~{duration / 60:.0f} min")
         if session == 1 and args.verbose:
-            for c in cells:
-                print(f"  {c['series']:14} {c['fixture']:16} {c['engine']:4} "
-                      f"n={c['samples']} warmup={c['warmup']} evict={c['evict_bytes']}")
-    print(f"total (all {cfg['sessions']} sessions): ~{total / 3600:.1f} h "
-          "(priors-based estimate; excludes map builds and env checks)")
+            for cell in cells:
+                print(
+                    f"  {cell['series']:14} {cell['fixture']:16} {cell['engine']:4} "
+                    f"n={cell['samples']} warmup={cell['warmup']} "
+                    f"evict={cell['evict_bytes']}")
+    print(
+        f"total (all {cfg['sessions']} sessions): ~{total / 3600:.1f} h "
+        "(priors-based estimate; excludes map builds and environment checks)")
     return 0
 
 
 def cmd_verify_env(cfg, _args):
     failures, warnings, snap = verify_environment(cfg)
-    for w in warnings:
-        print(f"WARN: {w}")
-    for f in failures:
-        print(f"FAIL: {f}")
+    memory = read_memory_snapshot()
+    minimum = cfg["abort"].get("min_mem_available_mib", 0)
+    if memory["mem_available_mib"] is not None and memory["mem_available_mib"] < minimum:
+        failures.append(
+            f"MemAvailable {memory['mem_available_mib']} MiB < required {minimum} MiB")
+    snap["memory"] = memory
+    for warning in warnings:
+        print(f"WARN: {warning}")
+    for failure in failures:
+        print(f"FAIL: {failure}")
     print(json.dumps(snap, indent=1))
     return 1 if failures else 0
 
@@ -516,225 +748,317 @@ def start_corunner(cfg, mode, out_dir):
     return subprocess.Popen(argv)
 
 
+def cmd_status(cfg, args):
+    session_dir = campaign_root(cfg) / f"session-{args.session}"
+    done = {}
+    invalid = []
+    for cell in build_plan(cfg, args.session):
+        out_json, sidecar = cell_paths(session_dir, cell)
+        problem = completed_cell_problem(cfg, out_json, sidecar, cell)
+        done.setdefault(cell["series"], [0, 0])
+        done[cell["series"]][1] += 1
+        if problem is None:
+            done[cell["series"]][0] += 1
+        elif out_json.exists() or sidecar.exists():
+            invalid.append(f"{cell['series']}/{cell['fixture']}/{cell['engine']}: {problem}")
+    for series in sorted(done):
+        complete, total = done[series]
+        print(f"{series}: {complete}/{total} complete")
+    for item in invalid:
+        print(f"INVALID: {item}")
+    complete = all(finished == total for finished, total in done.values())
+    return 0 if complete and not invalid else 1
+
+
 def cmd_run(cfg, args):
     root = ws_root()
-    exe = find_replay(root)
-    if exe is None:
-        print(f"FAIL: ndt_bench_replay not found under {root}/build/{PKG} "
-              "(build with -DNDT_BUILD_BENCH=ON)", file=sys.stderr)
+    try:
+        locked = ensure_campaign_lock(cfg, root)
+        session_dir = ensure_session_lock(cfg, args.session)
+    except ValueError as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
         return 1
+    exe = find_replay(root)
     failures, warnings, snap0 = verify_environment(cfg)
     env_mode = "strict"
     if failures:
         if not args.allow_env_mismatch:
-            for f in failures:
-                print(f"FAIL: {f}", file=sys.stderr)
-            print("environment not ready; fix the knobs above or use --allow-env-mismatch "
-                  "for a dev smoke test", file=sys.stderr)
+            for failure in failures:
+                print(f"FAIL: {failure}", file=sys.stderr)
             return 1
         env_mode = "overridden"
-        for f in failures:
-            print(f"WARN (overridden): {f}", file=sys.stderr)
-    for w in warnings:
-        print(f"WARN: {w}", file=sys.stderr)
+        for failure in failures:
+            print(f"WARN (overridden): {failure}", file=sys.stderr)
+    for warning in warnings:
+        print(f"WARN: {warning}", file=sys.stderr)
 
-    session_id = f"session-{args.session}"
-    out_root = BENCH_DIR / cfg["output_dir"] / session_id
-    out_root.mkdir(parents=True, exist_ok=True)
-    fixtures_dir = BENCH_DIR / cfg["fixtures_dir"]
-    # Session throttling baseline: measured sustained speed on the benchmark CPU.
-    calib_exe = corunner_exe(out_root)
-    calib_base_ns = run_calibration(cfg, calib_exe)
-    if calib_base_ns is None:
-        print("WARN: calibration spin failed; throttling guard limited to sysfs readings",
-              file=sys.stderr)
-    else:
-        print(f"calibration baseline: {calib_base_ns / 1e6:.1f} ms "
-              f"(guard: > x{cfg['abort'].get('max_calib_slowdown', 1.1)})")
     cells = build_plan(cfg, args.session)
     if args.series:
-        cells = [c for c in cells if c["series"] == args.series]
+        cells = [cell for cell in cells if cell["series"] == args.series]
+        if not cells:
+            print(f"FAIL: unknown or empty series {args.series!r}", file=sys.stderr)
+            return 1
     if args.max_cells:
-        cells = cells[: args.max_cells]
-    print(f"{session_id}: {len(cells)} cells")
-
+        cells = cells[:args.max_cells]
+    calib_exe = corunner_exe(session_dir)
+    calib_base_ns = run_calibration(cfg, calib_exe)
+    print(f"session-{args.session}: {len(cells)} planned cells")
     rc = 0
-    for i, cell in enumerate(cells, 1):
-        series_dir = out_root / cell["series"].replace(":", "_")
-        series_dir.mkdir(parents=True, exist_ok=True)
-        out_json = series_dir / f"{cell['fixture']}__{cell['engine']}.json"
-        fixture_path = fixtures_dir / f"{cell['fixture']}.ndtfix"
-        if not fixture_path.is_file():
-            print(f"FAIL: missing fixture {fixture_path}", file=sys.stderr)
-            rc = 1
-            continue
+    for index, cell in enumerate(cells, 1):
+        out_json, sidecar_json = cell_paths(session_dir, cell)
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+        existing_problem = completed_cell_problem(cfg, out_json, sidecar_json, cell)
+        if existing_problem is None:
+            if args.resume:
+                print(f"[{index}/{len(cells)}] SKIP {cell['series']} {cell['fixture']} {cell['engine']}")
+                continue
+            print(f"FAIL: completed output exists at {out_json}; use --resume", file=sys.stderr)
+            return 1
+        if out_json.exists() or sidecar_json.exists():
+            if not args.resume:
+                print(
+                    f"FAIL: incomplete output at {out_json}: {existing_problem}; use --resume",
+                    file=sys.stderr)
+                return 1
+            quarantine_cell(out_json, sidecar_json)
 
+        memory_before = read_memory_snapshot()
+        minimum = cfg["abort"].get("min_mem_available_mib", 0)
+        available = memory_before["mem_available_mib"]
+        if available is not None and available < minimum:
+            print(f"ABORT: MemAvailable {available} MiB < {minimum} MiB", file=sys.stderr)
+            return 1
         _, _, before = verify_environment(cfg)
-        co = None
-        if cell["corunner"]:
-            co = start_corunner(cfg, cell["corunner"], out_root)
-            time.sleep(1.0)  # let the co-runner reach steady state
+        co = child = None
+        memory_abort = None
+        during = []
+        memory_samples = [memory_before]
         env = dict(os.environ)
         env.update({
-            "WCET_ITERS": str(cell["samples"]),
-            "WCET_WARMUP": str(cell["warmup"]),
-            "WCET_ENGINE": cell["engine"],
-            "WCET_EVICT_BYTES": str(cell["evict_bytes"]),
+            "WCET_ITERS": str(cell["samples"]), "WCET_WARMUP": str(cell["warmup"]),
+            "WCET_ENGINE": cell["engine"], "WCET_EVICT_BYTES": str(cell["evict_bytes"]),
         })
-        # Profile A: no pinning -- the production node runs under normal CFS placement.
         pin = ([] if cfg.get("profile") == "A"
                else ["taskset", "-c", str(cfg["benchmark_cpu"])])
-        argv = pin + [str(exe), "--fixture", str(out_json), str(fixture_path)]
-        print(f"[{i}/{len(cells)}] {cell['series']} {cell['fixture']} {cell['engine']} "
-              f"n={cell['samples']}")
-        # Poll the effective frequency + temperatures while the replay runs (policy:
-        # "record the effective CPU frequency when possible"); idle readings before the
-        # series are C-state artifacts and are not judged.
-        during = []
-        child = subprocess.Popen(argv, env=env)
-        while child.poll() is None:
-            during.append((read_freq_khz(cfg["benchmark_cpu"]), read_temps_c()))
-            time.sleep(1.0)
-        proc_rc = child.returncode
-        if co is not None:
-            co.send_signal(signal.SIGTERM)
-            co.wait(timeout=10)
-        _, _, after = verify_environment(cfg)
+        argv = pin + [str(exe), "--fixture", str(out_json), str(fixture_path(cfg, cell["fixture"]))]
+        print(f"[{index}/{len(cells)}] {cell['series']} {cell['fixture']} {cell['engine']} n={cell['samples']}")
+        try:
+            if cell["corunner"]:
+                co = start_corunner(cfg, cell["corunner"], session_dir)
+                time.sleep(1.0)
+            child = subprocess.Popen(argv, env=env)
+            while child.poll() is None:
+                during.append((read_freq_khz(cfg["benchmark_cpu"]), read_temps_c()))
+                memory_now = read_memory_snapshot()
+                memory_samples.append(memory_now)
+                critical = cfg["abort"].get("critical_mem_available_mib", 0)
+                current = memory_now["mem_available_mib"]
+                if critical and current is not None and current < critical:
+                    memory_abort = f"MemAvailable {current} MiB < critical {critical} MiB"
+                    stop_process(child)
+                    break
+                time.sleep(1.0)
+        finally:
+            stop_process(child)
+            stop_process(co)
+        proc_rc = child.returncode if child is not None else 1
+        memory_after = read_memory_snapshot()
+        memory_samples.append(memory_after)
+        failures_after, _, after = verify_environment(cfg)
         problems = series_guard(cfg, during, f"{cell['series']}/{cell['fixture']}")
-        nominal, nominal_src = nominal_freq_khz(cfg)
-        if nominal is None and i == 1:
-            print(f"WARN: frequency-sag guard unavailable ({nominal_src})", file=sys.stderr)
-        # Calibration guard: sustained-speed regression vs the session baseline detects
-        # throttling even where the kernel's frequency reporting is stale (isolated cores).
+        if env_mode == "strict":
+            problems.extend(f"post-cell environment: {item}" for item in failures_after)
+        if memory_abort:
+            problems.append(memory_abort)
+        if cfg["abort"].get("abort_on_swap_io", False):
+            if (memory_after["pswpin"] != memory_before["pswpin"]
+                    or memory_after["pswpout"] != memory_before["pswpout"]):
+                problems.append("swap I/O occurred during the cell")
+        if proc_rc != 0:
+            problems.append(f"replay exited {proc_rc}")
+        output_problem = measurement_problem(out_json, cell)
+        if output_problem:
+            problems.append(output_problem)
+        nominal, nominal_source = nominal_freq_khz(cfg)
         calib_ns = run_calibration(cfg, calib_exe, n=1)
         if calib_base_ns and calib_ns:
             slowdown = calib_ns / calib_base_ns
             if slowdown > cfg["abort"].get("max_calib_slowdown", 1.1):
-                problems.append(
-                    f"{cell['series']}/{cell['fixture']}: calibration spin x{slowdown:.2f} "
-                    "slower than the session baseline -- throttling?")
+                problems.append(f"calibration spin x{slowdown:.2f} slower than session baseline")
         demoted = []
         if cfg.get("profile") == "A" and problems:
-            # Profile A measures the interference; frequency/calibration excursions are data,
-            # not aborts (the thermal ceiling and replay failures below still abort).
-            keep = []
-            for p in problems:
-                (keep if "temperature" in p else demoted).append(p)
-            for p in demoted:
-                print(f"NOTE (profile A, recorded): {p}", file=sys.stderr)
-            problems = keep
-        if proc_rc != 0:
-            problems.append(f"replay exited {proc_rc}")
-        freq_samples = [f for f, _ in during if f]
+            retained = []
+            for problem in problems:
+                (retained if "temperature" in problem else demoted).append(problem)
+            problems = retained
+        frequencies = [freq for freq, _ in during if freq]
+        available_samples = [
+            sample["mem_available_mib"] for sample in memory_samples
+            if sample["mem_available_mib"] is not None]
         sidecar = {
-            "cell": cell,
-            "env_before": before,
-            "env_after": after,
+            "cell": cell, "env_before": before, "env_after": after,
             "freq_khz_during": {
-                "n": len(freq_samples),
-                "median": sorted(freq_samples)[len(freq_samples) // 2] if freq_samples else None,
-                "min": min(freq_samples) if freq_samples else None,
-                "max": max(freq_samples) if freq_samples else None,
-                "nominal": nominal,
-                "nominal_source": nominal_src,
-                "stale": bool(freq_samples) and len(set(freq_samples)) <= 1,
+                "n": len(frequencies),
+                "median": sorted(frequencies)[len(frequencies) // 2] if frequencies else None,
+                "min": min(frequencies) if frequencies else None,
+                "max": max(frequencies) if frequencies else None,
+                "nominal": nominal, "nominal_source": nominal_source,
+                "stale": bool(frequencies) and len(set(frequencies)) <= 1,
+            },
+            "memory": {
+                "before": memory_before, "after": memory_after,
+                "min_available_mib": min(available_samples) if available_samples else None,
             },
             "calibration": {
-                "baseline_ns": calib_base_ns,
-                "after_cell_ns": calib_ns,
-                "slowdown": (calib_ns / calib_base_ns)
-                if (calib_base_ns and calib_ns) else None,
+                "baseline_ns": calib_base_ns, "after_cell_ns": calib_ns,
+                "slowdown": calib_ns / calib_base_ns if calib_base_ns and calib_ns else None,
             },
-            "problems": problems,
-            "profile_a_recorded_excursions": demoted,
-            "manifest": build_manifest(cfg, root, session_id, cell["series"],
-                                       cell=f"{cell['fixture']}__{cell['engine']}",
-                                       env_snap=snap0, env_mode=env_mode),
+            "problems": problems, "profile_a_recorded_excursions": demoted,
+            "campaign_lock": locked,
+            "manifest": build_manifest(
+                cfg, root, f"session-{args.session}", cell["series"],
+                cell=f"{cell['fixture']}__{cell['engine']}", env_snap=snap0,
+                env_mode=env_mode),
         }
-        out_json.with_suffix(".cell.json").write_text(
-            json.dumps(sidecar, indent=1), encoding="utf-8")
+        sidecar_json.write_text(json.dumps(sidecar, indent=1) + "\n", encoding="utf-8")
         if problems:
-            for p in problems:
-                print(f"{'WARN' if env_mode == 'overridden' else 'ABORT'}: {p}",
-                      file=sys.stderr)
+            for problem in problems:
+                print(f"{'WARN' if env_mode == 'overridden' else 'ABORT'}: {problem}", file=sys.stderr)
             if env_mode != "overridden":
-                print("aborting the session per the policy's abort rules; re-run this "
-                      "series after fixing the environment", file=sys.stderr)
                 return 1
             rc = max(rc, 2)
-    print(f"done -> {out_root}")
+    print(f"done -> {session_dir}")
     return rc
+
+
+def resolve_session_dir(cfg, args):
+    if getattr(args, "session", None) is not None:
+        return campaign_root(cfg) / f"session-{args.session}"
+    if getattr(args, "session_dir", None):
+        return pathlib.Path(args.session_dir)
+    raise ValueError("either --session or SESSION_DIR is required")
 
 
 def cmd_merge(cfg, args):
-    root = ws_root()
-    session_dir = pathlib.Path(args.session_dir)
+    try:
+        session_dir = resolve_session_dir(cfg, args)
+        session_number = int(session_dir.name.split("-", 1)[1])
+    except (ValueError, IndexError) as exc:
+        print(f"FAIL: invalid session directory: {exc}", file=sys.stderr)
+        return 1
+    cells = build_plan(cfg, session_number)
+    invalid = []
+    for cell in cells:
+        out_json, sidecar = cell_paths(session_dir, cell)
+        problem = completed_cell_problem(cfg, out_json, sidecar, cell)
+        if problem:
+            invalid.append(f"{cell['series']}/{cell['fixture']}/{cell['engine']}: {problem}")
+    if invalid:
+        for item in invalid:
+            print(f"INCOMPLETE: {item}", file=sys.stderr)
+        return 1
     rc = 0
-    for series_dir in sorted(p for p in session_dir.iterdir() if p.is_dir()):
+    for series in sorted({cell["series"] for cell in cells}):
+        selected = [cell for cell in cells if cell["series"] == series]
         merged = {}
         meta = None
-        for cell_json in sorted(series_dir.glob("*__*.json")):
-            if cell_json.name.endswith(".cell.json"):
-                continue
-            data = json.loads(cell_json.read_text(encoding="utf-8"))
+        manifests = []
+        for cell in selected:
+            cell_json, sidecar_json = cell_paths(session_dir, cell)
+            data, sidecar = load_json(cell_json), load_json(sidecar_json)
             meta = meta or data.get("meta")
-            for name, fx in data.get("fixtures", {}).items():
-                slot = merged.setdefault(name, {
-                    k: v for k, v in fx.items() if k not in ("cpp", "rust")})
-                for eng in ("cpp", "rust"):
-                    if eng in fx:
-                        slot[eng] = fx[eng]
-        # Re-assert equal work across the engine pair (policy: fairness requirements).
-        for name, fx in merged.items():
-            if "cpp" in fx and "rust" in fx:
-                fx["iter_match"] = (
-                    fx["cpp"]["iteration_num"] == fx["rust"]["iteration_num"])
-                if not fx["iter_match"]:
-                    print(f"MERGE MISMATCH: {series_dir.name}/{name}: "
-                          f"cpp={fx['cpp']['iteration_num']} "
-                          f"rust={fx['rust']['iteration_num']}", file=sys.stderr)
-                    rc = 1
-        sidecars = sorted(series_dir.glob("*.cell.json"))
-        manifest = (json.loads(sidecars[0].read_text())["manifest"] if sidecars
-                    else build_manifest(cfg, root, session_dir.name, series_dir.name))
-        out = {
+            manifests.append(sidecar["manifest"])
+            for name, fixture in data["fixtures"].items():
+                slot = merged.setdefault(
+                    name, {key: value for key, value in fixture.items()
+                           if key not in ("cpp", "rust")})
+                slot[cell["engine"]] = fixture[cell["engine"]]
+        for name, fixture in merged.items():
+            fixture["iter_match"] = (
+                fixture["cpp"]["iteration_num"] == fixture["rust"]["iteration_num"])
+            if not fixture["iter_match"]:
+                print(f"MERGE MISMATCH: {series}/{name}", file=sys.stderr)
+                rc = 1
+        representative = dict(manifests[0], cell_manifests=manifests)
+        output = {
             "benchmark": "WCET fixture replay (campaign merge)",
-            "meta": dict(meta or {}, manifest=manifest),
-            "fixtures": merged,
+            "meta": dict(meta or {}, manifest=representative), "fixtures": merged,
         }
-        out_path = session_dir / f"{series_dir.name}.json"
-        out_path.write_text(json.dumps(out, indent=1), encoding="utf-8")
-        print(f"wrote {out_path} ({len(merged)} fixtures)")
+        output_path = session_dir / f"{series_dir_name(series)}.json"
+        output_path.write_text(json.dumps(output, indent=1) + "\n", encoding="utf-8")
+        print(f"wrote {output_path} ({len(merged)} fixtures)")
     return rc
 
 
+def cmd_smoke(cfg, _args):
+    smoke_cfg = json.loads(json.dumps(cfg))
+    token = uuid.uuid4().hex[:8]
+    smoke_cfg["campaign_id"] = f"{cfg.get('campaign_id', 'campaign')}-smoke-{token}"
+    smoke_cfg["output_dir"] = f"campaign_runs/smoke-{token}"
+    smoke_cfg["sessions"] = 1
+    smoke_cfg["warmup"] = 0
+    for spec in smoke_cfg["tiers"].values():
+        spec["samples"] = 1
+    smoke_cfg["cold"]["samples"] = 1
+    smoke_cfg["cold"]["warmup"] = 0
+    smoke_cfg["corunner"]["samples"] = 1
+    args = argparse.Namespace(
+        session=1, series=None, allow_env_mismatch=True, max_cells=None, resume=False)
+    rc = cmd_run(smoke_cfg, args)
+    if rc not in (0, 2):
+        return rc
+    merge_args = argparse.Namespace(
+        session=1, session_dir=str(campaign_root(smoke_cfg) / "session-1"))
+    return cmd_merge(smoke_cfg, merge_args)
+
+
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", default=str(BENCH_DIR / "campaign_config.json"))
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--config", default=str(BENCH_DIR / "campaign_config.json"))
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("prepare")
     sub.add_parser("verify-env")
-    p_plan = sub.add_parser("plan")
-    p_plan.add_argument("--verbose", action="store_true")
-    p_run = sub.add_parser("run")
-    p_run.add_argument("--session", type=int, required=True)
-    p_run.add_argument("--series", default=None,
-                       help="restrict to one series (warm|cold|corunner:MODE)")
-    p_run.add_argument("--allow-env-mismatch", action="store_true")
-    p_run.add_argument("--max-cells", type=int, default=None,
-                       help="dev: truncate the plan (smoke tests)")
-    p_merge = sub.add_parser("merge")
-    p_merge.add_argument("session_dir")
-    args = ap.parse_args()
-    cfg = load_config(args.config)
+    plan_parser = sub.add_parser("plan")
+    plan_parser.add_argument("--verbose", action="store_true")
+    run_parser = sub.add_parser("run")
+    run_parser.add_argument("--session", type=int, required=True)
+    run_parser.add_argument("--series", default=None,
+                            help="warm|cold|corunner:membw|corunner:llc|corunner:fp")
+    run_parser.add_argument("--resume", action="store_true")
+    run_parser.add_argument("--allow-env-mismatch", action="store_true")
+    run_parser.add_argument("--max-cells", type=int, default=None,
+                            help="development-only plan truncation")
+    status_parser = sub.add_parser("status")
+    status_parser.add_argument("--session", type=int, required=True)
+    merge_parser = sub.add_parser("merge")
+    merge_parser.add_argument("session_dir", nargs="?")
+    merge_parser.add_argument("--session", type=int)
+    sub.add_parser("smoke")
+    args = parser.parse_args()
+    try:
+        cfg = load_config(args.config)
+        validate_config(cfg)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        print(f"FAIL: invalid campaign config: {exc}", file=sys.stderr)
+        return 1
+    if args.cmd == "prepare":
+        return cmd_prepare(cfg, args)
     if args.cmd == "verify-env":
         return cmd_verify_env(cfg, args)
     if args.cmd == "plan":
         return cmd_plan(cfg, args)
     if args.cmd == "run":
+        if args.session < 1 or args.session > cfg["sessions"]:
+            print(f"FAIL: session must be in 1..{cfg['sessions']}", file=sys.stderr)
+            return 1
         return cmd_run(cfg, args)
+    if args.cmd == "status":
+        return cmd_status(cfg, args)
     if args.cmd == "merge":
         return cmd_merge(cfg, args)
+    if args.cmd == "smoke":
+        return cmd_smoke(cfg, args)
     return 2
 
 

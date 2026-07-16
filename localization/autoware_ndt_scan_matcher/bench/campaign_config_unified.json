@@ -1,0 +1,72 @@
+{
+ "campaign_id": "profile-b-unified-3x1000-v1",
+ "profile": "B",
+ "benchmark_cpu": 2,
+ "corunner_cpu": 4,
+ "corunner_cpu_note": "different physical core sharing the L3; cpu3, the SMT sibling of cpu2, must be offline",
+ "fixtures_dir": "fixtures",
+ "fixture_paths": {
+  "pareto_01": "fixtures/pareto/pareto_01.ndtfix",
+  "pareto_02": "fixtures/pareto/pareto_02.ndtfix"
+ },
+ "tiers": {
+  "unified": {
+   "fixtures": [
+    "search_00",
+    "pareto_01",
+    "pareto_02",
+    "search_01",
+    "dense_neighbors",
+    "max_iterations",
+    "cache_hostile",
+    "subnormal",
+    "legal_worst",
+    "legal_osc"
+   ],
+   "samples": 1000
+  }
+ },
+ "warmup": 10,
+ "cold": {
+  "samples": 1000,
+  "warmup": 0,
+  "evict_mib": 64
+ },
+ "corunner": {
+  "fixtures": [
+   "search_00",
+   "pareto_01",
+   "pareto_02",
+   "search_01",
+   "dense_neighbors",
+   "max_iterations",
+   "cache_hostile",
+   "subnormal",
+   "legal_worst",
+   "legal_osc"
+  ],
+  "modes": [
+   "membw",
+   "llc",
+   "fp"
+  ],
+  "samples": 1000,
+  "mib": {
+   "membw": 256,
+   "llc": 32
+  }
+ },
+ "abort": {
+  "min_freq_frac": 0.9,
+  "nominal_khz": 3200000,
+  "max_temp_c": 85,
+  "nominal_note": "operator pins scaling_min_freq and scaling_max_freq to 3.2 GHz after every boot",
+  "max_calib_slowdown": 1.1,
+  "min_mem_available_mib": 8192,
+  "critical_mem_available_mib": 4096,
+  "abort_on_swap_io": true
+ },
+ "sessions": 3,
+ "output_dir": "campaign_runs/unified_3x1000",
+ "note": "Unified Profile-B campaign: ten fixtures, five series, 1000 measured aligns per fixture, engine, series, and boot."
+}
