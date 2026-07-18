@@ -92,6 +92,19 @@ class UnifiedCampaignTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "may not span boots"):
                     CAMPAIGN.ensure_session_lock(cfg, 1)
 
+    def test_timing_campaign_rejects_traced_or_unknown_builds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            cache = root / "build" / CAMPAIGN.PKG / "CMakeCache.txt"
+            cache.parent.mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "NDT_BUILD_TRACED=OFF"):
+                CAMPAIGN.require_untraced_timing_build(root)
+            cache.write_text("NDT_BUILD_TRACED:BOOL=ON\n")
+            with self.assertRaisesRegex(ValueError, "CMake cache: ON"):
+                CAMPAIGN.require_untraced_timing_build(root)
+            cache.write_text("NDT_BUILD_TRACED:BOOL=OFF\n")
+            CAMPAIGN.require_untraced_timing_build(root)
+
     def test_status_reports_an_empty_session(self):
         with tempfile.TemporaryDirectory() as temp:
             cfg = json.loads(json.dumps(self.cfg))

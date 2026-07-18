@@ -20,6 +20,9 @@ ros = ["dep:bindgen"]
 # `wcet-trace`: expose the engine crate's per-pass trace (C1 trace certificate) over the C ABI.
 # Enabled only by the NDT_BUILD_TRACED analysis configure; never a shipping feature.
 wcet-trace = ["realtime_ndt_scan_matcher/wcet-trace"]
+# Benchmark-only propagation of the engine's kd-tree timing ablations.
+bench-kd-force-count = ["realtime_ndt_scan_matcher/bench-kd-force-count"]
+bench-kd-stop-at-cap = ["realtime_ndt_scan_matcher/bench-kd-stop-at-cap"]
 
 [dependencies]
 # The pure-Rust NDT engine (ROS-free, no_std-capable). Built with std + the rayon derivative

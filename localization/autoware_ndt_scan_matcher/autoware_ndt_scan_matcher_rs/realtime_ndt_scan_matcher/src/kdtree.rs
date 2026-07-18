@@ -54,7 +54,9 @@ pub enum KdSearchError {
 pub struct KdSearchOutcome {
     /// At least one additional in-radius point existed after `max_nn` results were retained.
     pub result_limit_exceeded: bool,
-    /// Number of tree nodes examined by this query.
+    /// Number of tree points distance-tested by this query. This is populated by
+    /// [`KdTree::radius_search_counted`] and by the benchmark-only force-count ablation; normal
+    /// production queries leave it at zero.
     pub nodes_visited: u64,
 }
 
@@ -118,7 +120,14 @@ impl KdTree {
     ) -> Result<KdSearchOutcome, KdSearchError> {
         let r2 = radius * radius;
         let mut visited = 0_u64;
-        let result_limit_exceeded = self.search_iter(query, r2, max_nn, out, &mut visited)?;
+        let result_limit_exceeded = self
+            .search_iter::<{ cfg!(feature = "bench-kd-force-count") }>(
+                query,
+                r2,
+                max_nn,
+                out,
+                &mut visited,
+            )?;
         Ok(KdSearchOutcome {
             result_limit_exceeded,
             nodes_visited: visited,
@@ -139,7 +148,8 @@ impl KdTree {
     ) -> Result<KdSearchOutcome, KdSearchError> {
         let r2 = radius * radius;
         let mut visited = 0_u64;
-        let result_limit_exceeded = self.search_iter(query, r2, max_nn, out, &mut visited)?;
+        let result_limit_exceeded =
+            self.search_iter::<true>(query, r2, max_nn, out, &mut visited)?;
         Ok(KdSearchOutcome {
             result_limit_exceeded,
             nodes_visited: visited,
@@ -163,7 +173,7 @@ impl KdTree {
         reason = "axis is depth % 3 ∈ 0..3 indexing a fixed-size [f32; 3]; the stack index is \
                   guarded < MAX_STACK"
     )]
-    fn search_iter(
+    fn search_iter<const COUNT_NODES: bool>(
         &self,
         query: &[f32; 3],
         r2: f64,
@@ -176,13 +186,19 @@ impl KdTree {
         let mut cur = self.root;
         loop {
             while let Some(ni) = cur {
+                #[cfg(feature = "bench-kd-stop-at-cap")]
+                if max_nn != 0 && out.len() >= max_nn {
+                    return Ok(false);
+                }
                 let Some(n) = self.nodes.get(ni) else { break };
                 let Some(p) = self.points.get(n.point_idx) else {
                     break;
                 };
-                *visited = visited
-                    .checked_add(1)
-                    .ok_or(KdSearchError::ArithmeticOverflow)?;
+                if COUNT_NODES {
+                    *visited = visited
+                        .checked_add(1)
+                        .ok_or(KdSearchError::ArithmeticOverflow)?;
+                }
 
                 if dist_sq(p, query) <= r2 {
                     if max_nn != 0 && out.len() >= max_nn {
@@ -365,6 +381,7 @@ mod tests {
         assert!(out.is_empty());
     }
 
+    #[cfg(not(feature = "bench-kd-stop-at-cap"))]
     #[test]
     fn max_nn_caps_results_and_reports_the_next_neighbor() {
         let pts: Vec<[f32; 3]> = (0..65).map(|i| [i as f32 * 0.001, 0.0, 0.0]).collect();
@@ -375,6 +392,41 @@ mod tests {
             .expect("radius search");
         assert_eq!(out.len(), 64);
         assert!(outcome.result_limit_exceeded);
+    }
+
+    #[cfg(not(feature = "bench-kd-stop-at-cap"))]
+    #[test]
+    fn exactly_max_nn_is_not_reported_as_exceeded() {
+        let pts: Vec<[f32; 3]> = (0..64).map(|i| [i as f32 * 0.001, 0.0, 0.0]).collect();
+        let tree = KdTree::try_build(&pts).expect("build kd-tree");
+        let mut out = Vec::new();
+        let outcome = tree
+            .radius_search(&[0.032, 0.0, 0.0], 1.0, 64, &mut out)
+            .expect("radius search");
+        assert_eq!(out.len(), 64);
+        assert!(!outcome.result_limit_exceeded);
+    }
+
+    #[cfg(not(feature = "bench-kd-force-count"))]
+    #[test]
+    fn production_search_does_not_count_nodes() {
+        let tree = KdTree::try_build(&[[0.0, 0.0, 0.0]]).expect("build kd-tree");
+        let mut out = Vec::new();
+        let outcome = tree
+            .radius_search(&[0.0, 0.0, 0.0], 1.0, 0, &mut out)
+            .expect("radius search");
+        assert_eq!(outcome.nodes_visited, 0);
+    }
+
+    #[cfg(feature = "wcet-count")]
+    #[test]
+    fn counted_search_reports_distance_tests() {
+        let tree = KdTree::try_build(&[[0.0, 0.0, 0.0]]).expect("build kd-tree");
+        let mut out = Vec::new();
+        let outcome = tree
+            .radius_search_counted(&[0.0, 0.0, 0.0], 1.0, 0, &mut out)
+            .expect("radius search");
+        assert_eq!(outcome.nodes_visited, 1);
     }
 
     // The iterative search must reproduce the recursive oracle's output in EXACT order (the

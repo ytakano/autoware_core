@@ -35,8 +35,12 @@ recorded as telemetry and only judged when the readings vary (`abort.min_freq_fr
 
 ```sh
 colcon build --packages-select autoware_ndt_scan_matcher \
-  --cmake-args -DCMAKE_BUILD_TYPE=Release -DNDT_USE_RUST=ON -DNDT_BUILD_BENCH=ON
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DNDT_USE_RUST=ON -DNDT_BUILD_BENCH=ON \
+  -DNDT_BUILD_TRACED=OFF
 ```
+
+The campaign rejects a missing or enabled `NDT_BUILD_TRACED` cache entry. Work-trace SHA-256 is an
+analysis-only conformance instrument and must not be present in a timing binary.
 
 ## Run
 

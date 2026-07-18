@@ -406,7 +406,8 @@ def cmake_flags(root):
     if cache.is_file():
         for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
             for key in ("CMAKE_CXX_FLAGS_RELEASE", "CMAKE_CXX_FLAGS", "CMAKE_BUILD_TYPE",
-                        "CMAKE_EXE_LINKER_FLAGS"):
+                        "CMAKE_EXE_LINKER_FLAGS", "NDT_BUILD_TRACED", "NDT_BUILD_BENCH",
+                        "NDT_USE_RUST"):
                 if line.startswith(key + ":"):
                     flags[key] = line.split("=", 1)[-1]
     return flags
@@ -548,7 +549,17 @@ def campaign_root(cfg):
     return BENCH_DIR / cfg["output_dir"]
 
 
+def require_untraced_timing_build(root):
+    flags = cmake_flags(root)
+    if flags.get("NDT_BUILD_TRACED") != "OFF":
+        value = flags.get("NDT_BUILD_TRACED", "missing")
+        raise ValueError(
+            f"timing campaign requires NDT_BUILD_TRACED=OFF (CMake cache: {value}); "
+            "use ndt_bench_replay_traced only for work-trace conformance")
+
+
 def campaign_identity(cfg, root):
+    require_untraced_timing_build(root)
     exe = find_replay(root)
     if exe is None:
         raise ValueError(

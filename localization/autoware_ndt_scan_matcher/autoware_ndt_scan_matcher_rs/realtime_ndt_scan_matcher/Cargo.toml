@@ -44,6 +44,10 @@ wcet-count = []
 # SHA-256; pass-final score/gradient/Hessian diagnostics retain their compact bit hashes.
 # SERIAL backend only (the parallel backend poisons the ordered trace).
 wcet-trace = ["wcet-count", "dep:sha2"]
+# Benchmark-only kd-tree ablations. These reconstruct pre-optimization hot-path components for
+# matched-binary timing diagnosis; normal and `wcet-count` builds leave them disabled.
+bench-kd-force-count = []
+bench-kd-stop-at-cap = []
 
 # The worst-input searches need the cost counters as their fitness; without the feature the
 # examples have no meaningful fitness, so they are not built at all.

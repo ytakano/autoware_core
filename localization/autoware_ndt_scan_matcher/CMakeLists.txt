@@ -42,6 +42,12 @@ option(NDT_USE_RUST "Build the node from the Rust port instead of the original C
 # traced replay that checks the recorded work shape per input against the Rust engine's mirrored trace.
 # Analysis only -- never shipped, never a timing configuration.
 option(NDT_BUILD_TRACED "Build the traced analysis engine + replay (requires NDT_BUILD_BENCH)" OFF)
+option(NDT_BENCH_KD_FORCE_COUNT "Benchmark ablation: count every Rust kd-node visit" OFF)
+option(NDT_BENCH_KD_STOP_AT_CAP "Benchmark ablation: stop Rust search at 64 neighbors" OFF)
+
+if((NDT_BENCH_KD_FORCE_COUNT OR NDT_BENCH_KD_STOP_AT_CAP) AND NOT NDT_BUILD_BENCH)
+  message(FATAL_ERROR "NDT_BENCH_KD_* options require NDT_BUILD_BENCH=ON")
+endif()
 
 if(NDT_USE_RUST)
   # Corrosion is fetched at configure time; for offline builds switch GIT_* to a local SOURCE_DIR.
@@ -57,6 +63,12 @@ if(NDT_USE_RUST)
   if(NDT_BUILD_TRACED)
     # Mirrored per-pass trace on the Rust side (realtime_ndt_scan_matcher `wcet-trace`).
     list(APPEND NDT_RS_FEATURES wcet-trace)
+  endif()
+  if(NDT_BENCH_KD_FORCE_COUNT)
+    list(APPEND NDT_RS_FEATURES bench-kd-force-count)
+  endif()
+  if(NDT_BENCH_KD_STOP_AT_CAP)
+    list(APPEND NDT_RS_FEATURES bench-kd-stop-at-cap)
   endif()
   corrosion_import_crate(MANIFEST_PATH
     ${CMAKE_CURRENT_SOURCE_DIR}/autoware_ndt_scan_matcher_rs/Cargo.toml
@@ -150,6 +162,9 @@ if(NDT_BUILD_BENCH)
   if(NOT NDT_USE_RUST)
     message(FATAL_ERROR "NDT_BUILD_BENCH requires NDT_USE_RUST=ON (the benchmark drives both engines)")
   endif()
+endif()
+
+if(NDT_BUILD_BENCH AND NOT NDT_BUILD_TRACED)
   add_executable(ndt_bench_replay bench/ndt_bench_replay.cpp)
   target_include_directories(ndt_bench_replay PRIVATE include ${PCL_INCLUDE_DIRS})
   target_link_libraries(ndt_bench_replay
