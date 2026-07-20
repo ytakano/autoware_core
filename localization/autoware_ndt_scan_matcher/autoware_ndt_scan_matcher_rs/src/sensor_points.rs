@@ -614,7 +614,8 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_matc
             "NDT neighbor limit exceeded; result is non-converged",
         );
     }
-    let result = scratch.result();
+    let result = scratch.result_ref().clone();
+    let result_hessian = result.hessian;
     let tp_array = &result.transform_probability_array;
     let nvtl_array = &result.nearest_voxel_likelihood_array;
     let verdict = outcome.verdict;
@@ -715,7 +716,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_matc
     let cov = match estimate_pose_covariance(
         eng,
         &outcome.pose,
-        &matrix6_to_row_major(&result.hessian),
+        &matrix6_to_row_major(&result_hessian),
         &initial_pose_matrix,
         source,
         &h.params.initial_pose_offset_model_x,
@@ -724,7 +725,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_matc
             estimation_type: h.params.covariance_estimation_type,
             scale_factor: h.params.covariance_scale_factor,
             temperature: h.params.covariance_temperature,
-            main_nvtl: result.nearest_voxel_likelihood,
+            main_nvtl: outcome.nearest_voxel_likelihood,
             output_pose_covariance: h.params.output_pose_covariance,
             map_to_base_link_rot3x3: map_to_base_link_rot3x3(&outcome.pose),
         },
@@ -770,12 +771,12 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_matc
     ho.publish_float32(
         AwFloat32Topic::TransformProbability,
         sensor_stamp_ns,
-        result.transform_probability,
+        outcome.transform_probability,
     );
     ho.publish_float32(
         AwFloat32Topic::NearestVoxelTransformationLikelihood,
         sensor_stamp_ns,
-        result.nearest_voxel_likelihood,
+        outcome.nearest_voxel_likelihood,
     );
     ho.publish_int32(
         AwInt32Topic::IterationNum,

@@ -22,35 +22,35 @@
 
 use realtime_ndt_scan_matcher::engine::{
     ConvergenceParams, CovEstimationParams, MatchScratch, NdtEngine, estimate_pose_covariance,
-    run_align,
+    run_align_with,
 };
 use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 
 use crate::ffi_matrix::{
     matrix4_from_row_major, write_matrix4_row_major, write_matrix4_seq, write_matrix6_row_major,
 };
-use crate::ffi_ndt::AwNdtAlignOutput;
 use crate::ffi_ptr::{self, ffi_mut, ffi_mut_slice, ffi_ref, ffi_slice};
 use crate::node::AwConvergenceVerdict;
 
-/// Create a new engine handle (empty map). Free with `..._ndt_engine_free`.
+/// Alignment output buffers. Every field is optional. Matrices are row-major; the transformation
+/// array holds `transforms_cap` matrices and `transforms_count` receives the true count.
+#[repr(C)]
+pub struct AwNdtAlignOutput {
+    pub pose: *mut f32,
+    pub iteration_num: *mut i32,
+    pub transform_probability: *mut f32,
+    pub nearest_voxel_likelihood: *mut f32,
+    pub hessian: *mut f64,
+    pub transformation_array: *mut f32,
+    pub transforms_cap: u32,
+    pub transforms_count: *mut u32,
+}
+
+/// Create an engine with an immutable runtime work envelope. Returns null for invalid limits.
+/// Free a non-null result with `..._ndt_engine_free`.
 #[expect(unsafe_code, reason = "C ABI boundary; returns an owned handle")]
 #[unsafe(no_mangle)]
 pub extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_new(
-    resolution: f64,
-    min_points: i32,
-    eig_mult: f64,
-) -> *mut NdtEngine {
-    ffi_ptr::into_handle(NdtEngine::new(resolution, min_points, eig_mult))
-}
-
-/// Create a bounded engine handle (empty map). Returns null when the limits are invalid.
-///
-/// `max_source_points`, `max_active_leaves`, and `max_iterations` define the engine's runtime
-/// work envelope. Free a non-null result with `..._ndt_engine_free`.
-#[expect(unsafe_code, reason = "C ABI boundary; returns an owned handle")]
-#[unsafe(no_mangle)]
-pub extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(
     resolution: f64,
     min_points: i32,
     eig_mult: f64,
@@ -58,7 +58,7 @@ pub extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(
     max_active_leaves: usize,
     max_iterations: i32,
 ) -> *mut NdtEngine {
-    match NdtEngine::new_with_limits(
+    match NdtEngine::new(
         resolution,
         min_points,
         eig_mult,
@@ -71,31 +71,42 @@ pub extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(
     }
 }
 
+/// Preallocate one caller-owned alignment scratch. Returns null for invalid capacity or allocation
+/// failure. The scratch may be reused serially, but one handle must not be used concurrently.
+#[expect(unsafe_code, reason = "C ABI boundary; returns an owned handle")]
+#[unsafe(no_mangle)]
+pub extern "C" fn autoware_ndt_scan_matcher_rs_ndt_match_scratch_new(
+    max_source_points: usize,
+    max_iterations: usize,
+) -> *mut MatchScratch {
+    match MatchScratch::try_with_capacity(max_source_points, max_iterations) {
+        Ok(scratch) => ffi_ptr::into_handle(scratch),
+        Err(_) => core::ptr::null_mut(),
+    }
+}
+
 /// # Safety
-/// `engine` is a handle from `..._ndt_engine_new`, `..._new_with_limits`, or `_clone` (or null
-/// → no-op); not used afterwards.
+/// `scratch` is a handle from `..._ndt_match_scratch_new` or null and is not used afterwards.
+#[expect(unsafe_code, reason = "C ABI boundary; reclaims an owned handle")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(
+    scratch: *mut MatchScratch,
+) {
+    // SAFETY: the caller transfers a constructor-owned handle at most once.
+    unsafe { ffi_ptr::free_handle(scratch) };
+}
+
+/// # Safety
+/// `engine` is a handle from `..._ndt_engine_new` (or null → no-op) and is not used afterwards.
 #[expect(unsafe_code, reason = "C ABI boundary; reclaims an owned handle")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_free(engine: *mut NdtEngine) {
-    // SAFETY: `engine` is a handle from a constructor/clone (or null → no-op); reclaimed once in ffi_ptr.
+    // SAFETY: `engine` is a constructor-owned handle (or null); reclaimed once in ffi_ptr.
     unsafe { ffi_ptr::free_handle(engine) };
 }
 
-/// Deep-copy an engine (the node's map-update double-buffer). Null → null.
-/// # Safety
-/// `engine` is a valid handle or null.
-#[expect(unsafe_code, reason = "C ABI boundary; clones an owned handle")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_clone(
-    engine: *const NdtEngine,
-) -> *mut NdtEngine {
-    // SAFETY: `engine` is a valid handle or null; deep-copied once in ffi_ptr.
-    unsafe { ffi_ptr::clone_handle(engine) }
-}
-
-/// Build the staged map's kd-tree using the engine's configured `Lmax`. On rejection, the map state
-/// is left unchanged. This compatibility ABI has no status return; object-level APIs should be used
-/// when the caller must distinguish a limit violation from a build failure.
+/// Update alignment parameters. Runtime work limits remain immutable; alignment rejects any active
+/// iteration count above the constructor's `Imax`.
 ///
 /// # Safety
 /// `engine` is a valid handle (or null → no-op).
@@ -125,20 +136,6 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_set_params(
         outlier_ratio,
         num_threads.max(0) as usize,
     );
-}
-
-/// # Safety
-/// `engine` is a valid handle (or null → no-op).
-#[expect(unsafe_code, reason = "C ABI boundary; dereferences a shared handle")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_set_regularization(
-    engine: *const NdtEngine,
-    pose_x: f32,
-    pose_y: f32,
-    scale: f32,
-) {
-    let e = ffi_ref!(engine, else return);
-    e.set_regularization(pose_x, pose_y, scale);
 }
 
 /// Add a map tile of `n` xyz `f32` triples (`3 * n` floats) under `id`.
@@ -283,23 +280,6 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(
     ffi_ref!(engine, else return false).create_kdtree().is_ok()
 }
 
-/// Atomically publish `src`'s map state into `dst` (the map-update commit). No-op if either is null.
-/// # Safety
-/// `dst`/`src` are valid handles (or either null → no-op); both reborrowed as `&*ptr` only.
-#[expect(
-    unsafe_code,
-    reason = "C ABI boundary; dereferences two shared handles"
-)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_commit_from(
-    dst: *const NdtEngine,
-    src: *const NdtEngine,
-) {
-    let d = ffi_ref!(dst, else return);
-    let s = ffi_ref!(src, else return);
-    let _completed = d.commit_from(s).is_ok();
-}
-
 /// # Safety
 /// `engine` is a valid handle (or null → returns false).
 #[expect(unsafe_code, reason = "C ABI boundary; dereferences a shared handle")]
@@ -320,67 +300,36 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_max_iterations(
     ffi_ref!(engine, else return 0).max_iterations()
 }
 
-/// Align `source` (`3 * n` `f32`) from `guess` (16 row-major `f32`), storing the result in
-/// compatibility thread-local scratch for retrieval with `..._get_result`. The scratch may allocate
-/// on this call. Returns `false` for a null or invalid buffer and when allocation, arithmetic, numeric
-/// input, or a declared runtime bound causes alignment to fail. The object-level status-returning path
-/// with explicit scratch remains the deployment API when the caller needs the specific error.
+/// Align with caller-owned preallocated scratch. Returns false for invalid pointers, a capacity
+/// violation, arithmetic/numeric failure, or a declared runtime-bound violation.
 ///
 /// # Safety
-/// `engine` is a valid handle (or null → returns `false`); `guess` addresses 16 `f32`, `source`
-/// addresses `3 * n` `f32`.
+/// `engine` is a valid shared handle; `scratch` is a valid uniquely borrowed scratch handle;
+/// `guess` addresses 16 `f32`; `source` addresses `n` xyz triples. No pointer is retained.
 #[expect(
     unsafe_code,
-    reason = "C ABI boundary; reads caller-owned guess + cloud"
+    reason = "C ABI boundary; validates and reborrows caller-owned buffers"
 )]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_align(
     engine: *const NdtEngine,
+    scratch: *mut MatchScratch,
     guess: *const f32,
     source: *const f32,
     n: usize,
 ) -> bool {
     let e = ffi_ref!(engine, else return false);
+    let scr = ffi_mut!(scratch, else return false);
     let guess_buf = ffi_slice!(guess, 16, else return false);
     let src = ffi_slice!(source, n, [f32; 3], else return false);
-    e.align(&matrix4_from_row_major(guess_buf), src).is_ok()
+    e.align_with(&matrix4_from_row_major(guess_buf), src, scr)
+        .is_ok()
 }
 
-/// Score `cloud` (`3 * n` `f32`) without aligning.
+/// Write the scratch's last align result into null-skippable C output buffers.
 /// # Safety
-/// `engine` is a valid handle (or null → returns 0); `cloud` addresses `3 * n` readable `f32`.
-#[expect(unsafe_code, reason = "C ABI boundary; reads a caller-owned cloud")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_calc_transformation_probability(
-    engine: *const NdtEngine,
-    cloud: *const f32,
-    n: usize,
-) -> f64 {
-    let e = ffi_ref!(engine, else return 0.0);
-    let c = ffi_slice!(cloud, n, [f32; 3], else return 0.0);
-    e.calc_transformation_probability(c).unwrap_or(f64::NAN)
-}
-
-/// Nearest-voxel likelihood of `cloud` (`3 * n` `f32`) without aligning.
-/// # Safety
-/// `engine` is a valid handle (or null → returns 0); `cloud` addresses `3 * n` readable `f32`.
-#[expect(unsafe_code, reason = "C ABI boundary; reads a caller-owned cloud")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_calc_nearest_voxel_likelihood(
-    engine: *const NdtEngine,
-    cloud: *const f32,
-    n: usize,
-) -> f64 {
-    let e = ffi_ref!(engine, else return 0.0);
-    let c = ffi_slice!(cloud, n, [f32; 3], else return 0.0);
-    e.calc_nearest_voxel_likelihood(c).unwrap_or(f64::NAN)
-}
-
-/// Write the last align result into the C output buffers (same shape/contract as the `ndt_align`
-/// FFI; each field null-skippable).
-/// # Safety
-/// `engine` is a valid handle (or null → no-op); `output` is a valid `AwNdtAlignOutput` whose
-/// non-null pointers address their documented lengths.
+/// `scratch` is a valid shared handle or null; `output` is a valid `AwNdtAlignOutput` whose non-null
+/// pointers address their documented lengths. Neither pointer is retained.
 #[expect(
     unsafe_code,
     reason = "C ABI boundary; writes caller-owned output buffers"
@@ -392,13 +341,13 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_calc_nearest_vo
     reason = "caps/counts cross the C ABI as u32; matrix marshaling is arithmetic-free (ffi_matrix)"
 )]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_result(
-    engine: *const NdtEngine,
+pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_result(
+    scratch: *const MatchScratch,
     output: *const AwNdtAlignOutput,
 ) {
-    let e = ffi_ref!(engine, else return);
+    let scr = ffi_ref!(scratch, else return);
     let out = ffi_ref!(output, else return);
-    let result = e.result();
+    let result = scr.result_ref();
     // SAFETY: each non-null output pointer addresses its documented length; the derefs are audited
     // in ffi_ptr (null → skipped: `opt_slice_mut` → None, `write_out` → false without writing).
     unsafe {
@@ -429,36 +378,11 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_result(
     }
 }
 
-/// Per-point nearest-voxel score for `cloud` (`3 * n` `f32`): writes `n` scores to `out_scores`
-/// (`out_scores[i] > 0` iff point `i` found a neighbor).
-/// # Safety
-/// `engine` is a valid handle (or null → no-op); `cloud` addresses `3 * n` `f32`, `out_scores` `n`.
-#[expect(
-    unsafe_code,
-    reason = "C ABI boundary; reads a cloud, writes per-point scores"
-)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_calc_nearest_voxel_score_each_point(
-    engine: *const NdtEngine,
-    cloud: *const f32,
-    n: usize,
-    out_scores: *mut f32,
-) {
-    let e = ffi_ref!(engine, else return);
-    let c = ffi_slice!(cloud, n, [f32; 3], else return);
-    let out = ffi_mut_slice!(out_scores, n, else return);
-    let mut scores = alloc::vec::Vec::new();
-    if e.nearest_voxel_score_each_point(c, &mut scores).is_err() {
-        return;
-    }
-    out.copy_from_slice(&scores);
-}
-
 /// Write the last align's per-iteration score traces. `out_tp`/`out_nvl` receive up to `cap` `f32`
 /// each; `*out_count` gets the true length (== `iteration_num + 1`).
 /// # Safety
-/// `engine` is a valid handle (or null → no-op); `out_tp`/`out_nvl` address `cap` `f32`, `out_count`
-/// one `u32`.
+/// `scratch` is a valid shared handle or null; `out_tp` and `out_nvl` each address `cap` writable
+/// `f32`, and `out_count` addresses one writable `u32`. No pointer is retained.
 #[expect(
     unsafe_code,
     reason = "C ABI boundary; writes caller-owned score-trace buffers"
@@ -471,18 +395,18 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_calc_nearest_vo
     reason = "trace length crosses the C ABI as u32; k = min(len, cap) bounds the slicing"
 )]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_score_arrays(
-    engine: *const NdtEngine,
+pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_score_arrays(
+    scratch: *const MatchScratch,
     out_tp: *mut f32,
     out_nvl: *mut f32,
     cap: u32,
     out_count: *mut u32,
 ) {
-    let e = ffi_ref!(engine, else return);
+    let scr = ffi_ref!(scratch, else return);
     let tp_out = ffi_mut_slice!(out_tp, cap as usize, else return);
     let nvl_out = ffi_mut_slice!(out_nvl, cap as usize, else return);
     let count = ffi_mut!(out_count, else return);
-    let (tp, nvl) = e.score_arrays();
+    let (tp, nvl) = scr.score_slices();
     let k = tp.len().min(cap as usize);
     tp_out[..k].copy_from_slice(&tp[..k]);
     nvl_out[..k].copy_from_slice(&nvl[..k]);
@@ -535,26 +459,33 @@ pub struct AwAlignOutcome {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_run_align(
     engine: *const NdtEngine,
+    scratch: *mut MatchScratch,
     guess: *const f32,
     source: *const f32,
     n: usize,
     params: *const AwAlignParams,
     out: *mut AwAlignOutcome,
 ) {
-    if engine.is_null() || guess.is_null() || source.is_null() || params.is_null() || out.is_null()
+    if engine.is_null()
+        || scratch.is_null()
+        || guess.is_null()
+        || source.is_null()
+        || params.is_null()
+        || out.is_null()
     {
         return;
     }
     // SAFETY: non-null per the check; caller guarantees the documented lengths + valid structs.
-    let (eng, guess_buf, src, prm) = unsafe {
+    let (eng, scr, guess_buf, src, prm) = unsafe {
         (
             &*engine,
+            &mut *scratch,
             core::slice::from_raw_parts(guess, 16),
             core::slice::from_raw_parts(source.cast::<[f32; 3]>(), n),
             &*params,
         )
     };
-    let Ok(outcome) = run_align(
+    let Ok(outcome) = run_align_with(
         eng,
         &matrix4_from_row_major(guess_buf),
         src,
@@ -564,6 +495,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_run_align(
             converged_param_nearest_voxel_transformation_likelihood: prm
                 .converged_param_nearest_voxel_transformation_likelihood,
         },
+        scr,
     ) else {
         return;
     };
@@ -802,7 +734,7 @@ mod tests {
             .chain(tile_b.iter())
             .map(|p| [p[0] + 0.1, p[1] - 0.05, p[2]])
             .collect();
-        let mut engine = NdtEngine::new(1.0, 6, 0.01);
+        let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
         engine.add_target(&tile_a, 0);
         engine.add_target(&tile_b, 1);
@@ -821,7 +753,10 @@ mod tests {
     fn ffi_run_align_matches_pure() {
         let (engine, source) = two_tile_engine();
         let guess = Matrix4::<f32>::identity();
-        let pure = run_align(&engine, &guess, &source, &TP_PARAMS).expect("pure align");
+        let mut pure_scratch =
+            MatchScratch::try_with_capacity(source.len(), 30).expect("reserve scratch");
+        let pure = run_align_with(&engine, &guess, &source, &TP_PARAMS, &mut pure_scratch)
+            .expect("pure align");
 
         let (ffi_engine, ffi_source) = two_tile_engine();
         let guess16 = [
@@ -834,10 +769,13 @@ mod tests {
             converged_param_nearest_voxel_transformation_likelihood: 0.0,
         };
         let mut out = AwAlignOutcome::default();
-        // SAFETY: engine valid; guess 16 f32; flat 3*n f32; params/out valid.
+        let mut ffi_scratch =
+            MatchScratch::try_with_capacity(ffi_source.len(), 30).expect("reserve scratch");
+        // SAFETY: engine/scratch valid; guess 16 f32; flat 3*n f32; params/out valid.
         unsafe {
             autoware_ndt_scan_matcher_rs_node_run_align(
                 &ffi_engine,
+                &mut ffi_scratch,
                 guess16.as_ptr(),
                 flat.as_ptr(),
                 ffi_source.len(),
@@ -872,6 +810,7 @@ mod tests {
         // SAFETY: a null engine must leave `out` untouched.
         unsafe {
             autoware_ndt_scan_matcher_rs_node_run_align(
+                core::ptr::null_mut(),
                 core::ptr::null_mut(),
                 guess16.as_ptr(),
                 guess16.as_ptr(),
@@ -919,7 +858,7 @@ mod tests {
         engine
             .align_with(&Matrix4::<f32>::identity(), &source, &mut scratch)
             .expect("align");
-        let pose = scratch.result().pose;
+        let pose = scratch.result_ref().pose;
         (engine, source, pose)
     }
 
@@ -1027,15 +966,12 @@ mod tests {
 
     #[test]
     fn ffi_bounded_constructor_validates_limits() {
-        let valid = autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(
-            1.0, 6, 0.01, 2_000, 418_000, 30,
-        );
+        let valid = autoware_ndt_scan_matcher_rs_ndt_engine_new(1.0, 6, 0.01, 2_000, 418_000, 30);
         assert!(!valid.is_null());
         // SAFETY: `valid` is the live handle returned immediately above.
         unsafe { autoware_ndt_scan_matcher_rs_ndt_engine_free(valid) };
 
-        let invalid =
-            autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(1.0, 6, 0.01, 0, 418_000, 30);
+        let invalid = autoware_ndt_scan_matcher_rs_ndt_engine_new(1.0, 6, 0.01, 0, 418_000, 30);
         assert!(invalid.is_null());
 
         // Null and map-capacity failures must cross the C ABI instead of being discarded.
@@ -1047,12 +983,12 @@ mod tests {
             ));
             assert!(!autoware_ndt_scan_matcher_rs_ndt_engine_align(
                 core::ptr::null(),
+                core::ptr::null_mut(),
                 core::ptr::null(),
                 core::ptr::null(),
                 0,
             ));
-            let limited =
-                autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(1.0, 6, 0.01, 64, 1, 30);
+            let limited = autoware_ndt_scan_matcher_rs_ndt_engine_new(1.0, 6, 0.01, 64, 1, 30);
             assert!(!limited.is_null());
             let mut tile = dense_cluster(0.0, 0.0, 0.0);
             tile.extend(dense_cluster(3.0, 0.0, 0.0));
@@ -1070,7 +1006,7 @@ mod tests {
         }
     }
 
-    // FFI handle round-trip == the pure engine API (marshaling check).
+    // FFI handle + explicit scratch round-trip equals the pure engine API.
     #[test]
     fn ffi_engine_matches_pure() {
         let tile = dense_cluster(0.5, 0.5, 0.5);
@@ -1081,39 +1017,33 @@ mod tests {
             1.0_f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ];
 
-        // pure
-        let mut pure = NdtEngine::new(1.0, 6, 0.01);
+        let mut pure = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut pure);
         pure.add_target(&tile, 0);
         pure.create_kdtree().expect("build kd-tree");
-        pure.align(&matrix4_from_row_major(&guess16), &source)
-            .expect("align");
-        let want = pure.result().clone();
-        let want_tp_score = pure
-            .calc_transformation_probability(&source)
-            .expect("pure transformation probability");
-        let want_nvl_score = pure
-            .calc_nearest_voxel_likelihood(&source)
-            .expect("pure nearest-voxel likelihood");
-        let want_maxit = pure.max_iterations();
-        let mut want_scores = Vec::new();
-        pure.nearest_voxel_score_each_point(&source, &mut want_scores)
-            .expect("point scores");
-        let (want_tp_arr, want_nvl_arr) = {
-            let (a, b) = pure.score_arrays();
-            (a.clone(), b.clone())
-        };
+        let mut pure_scratch =
+            MatchScratch::try_with_capacity(source.len(), 30).expect("reserve scratch");
+        pure.align_with(
+            &matrix4_from_row_major(&guess16),
+            &source,
+            &mut pure_scratch,
+        )
+        .expect("align");
+        let want = pure_scratch.result_ref();
+        let want_tp_arr = want.transform_probability_array.clone();
+        let want_nvl_arr = want.nearest_voxel_likelihood_array.clone();
 
-        // FFI
-        // SAFETY: every pointer below addresses its documented length.
+        // SAFETY: every pointer below addresses its documented length and each handle is freed once.
         unsafe {
-            let e = autoware_ndt_scan_matcher_rs_ndt_engine_new(1.0, 6, 0.01);
+            let e = autoware_ndt_scan_matcher_rs_ndt_engine_new(1.0, 6, 0.01, 2_000, 418_000, 30);
+            let scratch = autoware_ndt_scan_matcher_rs_ndt_match_scratch_new(2_000, 30);
+            assert!(!e.is_null() && !scratch.is_null());
             autoware_ndt_scan_matcher_rs_ndt_engine_set_params(e, 0.01, 0.1, 1.0, 30, 0.55, 1);
             autoware_ndt_scan_matcher_rs_ndt_engine_add_target(e, flat.as_ptr(), tile.len(), 0);
             assert!(autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(e));
-            assert!(autoware_ndt_scan_matcher_rs_ndt_engine_has_target(e));
             assert!(autoware_ndt_scan_matcher_rs_ndt_engine_align(
                 e,
+                scratch,
                 guess16.as_ptr(),
                 src_flat.as_ptr(),
                 source.len(),
@@ -1135,8 +1065,7 @@ mod tests {
                 transforms_cap: 0,
                 transforms_count: &mut count,
             };
-            autoware_ndt_scan_matcher_rs_ndt_engine_get_result(e, &out);
-
+            autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_result(scratch, &out);
             assert_eq!(iter, want.iteration_num);
             assert_eq!(tp, want.transform_probability);
             assert_eq!(nvl, want.nearest_voxel_likelihood);
@@ -1146,60 +1075,22 @@ mod tests {
                 }
             }
 
-            // Remaining shims marshal to the same values as the pure API.
-            assert_eq!(
-                autoware_ndt_scan_matcher_rs_ndt_engine_max_iterations(e),
-                want_maxit
-            );
-            assert_eq!(
-                autoware_ndt_scan_matcher_rs_ndt_engine_calc_transformation_probability(
-                    e,
-                    src_flat.as_ptr(),
-                    source.len()
-                ),
-                want_tp_score
-            );
-            assert_eq!(
-                autoware_ndt_scan_matcher_rs_ndt_engine_calc_nearest_voxel_likelihood(
-                    e,
-                    src_flat.as_ptr(),
-                    source.len()
-                ),
-                want_nvl_score
-            );
-            // set_regularization shim (no-op with scale 0); clone is an independent live handle.
-            autoware_ndt_scan_matcher_rs_ndt_engine_set_regularization(e, 0.0, 0.0, 0.0);
-            let e2 = autoware_ndt_scan_matcher_rs_ndt_engine_clone(e);
-            assert!(autoware_ndt_scan_matcher_rs_ndt_engine_has_target(e2));
-            autoware_ndt_scan_matcher_rs_ndt_engine_free(e2);
-            // remove the only tile -> no target left.
-            // per-point score + per-iteration score arrays marshal to the pure values.
-            let mut ffi_scores = vec![0.0_f32; source.len()];
-            autoware_ndt_scan_matcher_rs_ndt_engine_calc_nearest_voxel_score_each_point(
-                e,
-                src_flat.as_ptr(),
-                source.len(),
-                ffi_scores.as_mut_ptr(),
-            );
-            assert_eq!(ffi_scores, want_scores);
-
-            let cap = (want_tp_arr.len() as u32) + 4;
+            let cap = u32::try_from(want_tp_arr.len() + 4).expect("small trace");
             let mut tp_arr = vec![0.0_f32; cap as usize];
             let mut nvl_arr = vec![0.0_f32; cap as usize];
-            let mut scount = 0_u32;
-            autoware_ndt_scan_matcher_rs_ndt_engine_get_score_arrays(
-                e,
+            let mut score_count = 0_u32;
+            autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_score_arrays(
+                scratch,
                 tp_arr.as_mut_ptr(),
                 nvl_arr.as_mut_ptr(),
                 cap,
-                &mut scount,
+                &mut score_count,
             );
-            assert_eq!(scount as usize, want_tp_arr.len());
-            assert_eq!(&tp_arr[..scount as usize], want_tp_arr.as_slice());
-            assert_eq!(&nvl_arr[..scount as usize], want_nvl_arr.as_slice());
+            assert_eq!(score_count as usize, want_tp_arr.len());
+            assert_eq!(&tp_arr[..score_count as usize], want_tp_arr.as_slice());
+            assert_eq!(&nvl_arr[..score_count as usize], want_nvl_arr.as_slice());
 
-            autoware_ndt_scan_matcher_rs_ndt_engine_remove_target(e, 0);
-            assert!(!autoware_ndt_scan_matcher_rs_ndt_engine_has_target(e));
+            autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
             autoware_ndt_scan_matcher_rs_ndt_engine_free(e);
         }
     }
@@ -1208,7 +1099,7 @@ mod tests {
     fn ffi_string_id_map_roundtrip() {
         let tile = dense_cluster(0.5, 0.5, 0.5);
         let flat: Vec<f32> = tile.iter().flat_map(|p| *p).collect();
-        let mut engine = NdtEngine::new(1.0, 6, 0.01);
+        let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
         // SAFETY: valid engine; flat is 3*n f32; ids are valid byte slices.
         unsafe {
@@ -1314,16 +1205,16 @@ pub struct AwNdtPassTrace {
     reason = "C ABI boundary; writes caller-owned output buffers"
 )]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_get_trace(
-    engine: *const NdtEngine,
+pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_trace(
+    scratch: *const MatchScratch,
     out: *mut AwNdtPassTrace,
     cap: u64,
     total_out: *mut u64,
 ) -> bool {
     use realtime_ndt_scan_matcher::wcet::MAX_TRACE_PASSES;
 
-    let e = ffi_ref!(engine, else return false);
-    let trace = e.result().trace;
+    let scr = ffi_ref!(scratch, else return false);
+    let trace = scr.result_ref().trace;
     let total = u64::try_from(trace.len).unwrap_or(u64::MAX);
     let stored = trace.len.min(MAX_TRACE_PASSES);
     // SAFETY: each non-null output pointer addresses its documented length; the derefs are

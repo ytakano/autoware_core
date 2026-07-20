@@ -21,40 +21,41 @@ use realtime_ndt_scan_matcher::engine::NdtEngine;
 use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 
 // Empty engine: 2.0 m voxels; MultiVoxelGridCovariance defaults (min 6 points / eig 0.01).
-let engine = NdtEngine::new(2.0, 6, 0.01);
+let engine = NdtEngine::new(2.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
 
 // Register a target map tile (id 0) and build the kd-tree over the voxel centroids.
 let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
 engine.add_target(&target, 0);
-engine.create_kdtree();
+engine.create_kdtree().expect("map fits the leaf limit");
 assert!(engine.has_target());
 
-// Align a source cloud from an identity initial guess, then read the result back.
+// Align with caller-owned scratch and read the result from that same scratch.
 let source = target.clone();
-engine.align(&Matrix4::identity(), &source);
-let result = engine.result();
+let mut scratch = realtime_ndt_scan_matcher::engine::MatchScratch::try_for_limits(engine.limits())
+    .expect("reserve scratch");
+engine.align_with(&Matrix4::identity(), &source, &mut scratch).expect("align");
+let result = scratch.result_ref();
 assert!(result.iteration_num >= 0);
 ```
 
-### Scratch and the `_with` methods
+### Caller-owned scratch
 
 The align scratch (workspace + last result) is a [`engine::MatchScratch`](../arch/scratch.md).
-The `_with` methods take one you own — reuse it across frames to stay allocation-free after
-warmup. These are the **only** align entry points under the `mt` feature (the implicit-scratch
-variants are compiled out):
+Every alignment method takes scratch owned by the caller. Reuse it across frames to keep the serial
+path allocation-free from the first call:
 
 ```rust
 use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine};
 use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 
-let engine = NdtEngine::new(2.0, 6, 0.01);
+let engine = NdtEngine::new(2.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
 let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
 engine.add_target(&target, 0);
-engine.create_kdtree();
+engine.create_kdtree().expect("map fits the leaf limit");
 
-let mut scratch = MatchScratch::new();
-engine.align_with(&Matrix4::identity(), &target, &mut scratch);
-assert!(scratch.result().iteration_num >= 0);
+let mut scratch = MatchScratch::try_for_limits(engine.limits()).expect("reserve scratch");
+engine.align_with(&Matrix4::identity(), &target, &mut scratch).expect("align");
+assert!(scratch.result_ref().iteration_num >= 0);
 ```
 
 ## Portable orchestration: `ScanMatcher`
@@ -77,12 +78,12 @@ use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 let mut map = VoxelGridMap::new([2.0; 3], 6, 0.01);
 let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
 map.add_target(&target, 0);
-map.create_kdtree();
+map.try_create_kdtree(418_000).expect("map fits the leaf limit");
 
 let params = NdtParams { resolution: 2.0, ..NdtParams::default() };
-let mut ws = AlignWorkspace::new();
-let mut out = AlignResult::default();
-align(&map, &target, &Matrix4::identity(), &params, &mut ws, &mut out);
+let mut ws = AlignWorkspace::try_with_capacity(target.len()).expect("reserve workspace");
+let mut out = AlignResult::try_with_capacity(30).expect("reserve result");
+align(&map, &target, &Matrix4::identity(), &params, &mut ws, &mut out).expect("align");
 assert!(out.iteration_num >= 0);
 ```
 

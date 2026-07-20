@@ -20,18 +20,16 @@
 //!
 //! - **std** (default): target map + params in an `ArcSwap<EngineState>` (the read/align path loads
 //!   an immutable snapshot lock-free; map-update publishes a fresh state with an atomic store), the
-//!   optional regularization in a tiny `ArcSwap<Option<Regularization>>`. Explicit-scratch APIs use
-//!   caller-owned [`MatchScratch`]; compatibility APIs use thread-local scratch. `Sync`: a shared
-//!   `&NdtEngine` is sound across concurrent ROS callbacks **without** an external mutex.
-//! - **`no_std` single-core** (no features): `RefCell` cells instead of `ArcSwap`, scratch in the
-//!   engine. Intentionally `!Sync` — the compiler rejects sharing across threads.
+//!   optional regularization in a tiny `ArcSwap<Option<Regularization>>`. Alignment uses a
+//!   caller-owned [`MatchScratch`]. `Sync`: a shared `&NdtEngine` is sound across concurrent ROS
+//!   callbacks **without** an external mutex.
+//! - **`no_std` single-core** (no features): `RefCell` cells instead of `ArcSwap`. Alignment still
+//!   requires caller-owned scratch. The state cells make this configuration intentionally `!Sync`.
 //! - **`no_std` `mt`** (multi-core kernel): the cells are `awkernel_sync` mutexes whose guards
 //!   disable interrupts, so every critical section is a few instructions — an `Arc` refcount bump
 //!   (load) or a pointer swap (store); rcu builds the next state OUTSIDE the lock and publishes
 //!   with an optimistic `Arc::ptr_eq` retry; old snapshots drop outside the lock. There is **no
-//!   engine-owned scratch**: callers own a [`MatchScratch`] per task/thread and use the `_with`
-//!   methods (the implicit-scratch stateful API — `align`/`result`/`score_arrays`/… — is compiled
-//!   out, so a cross-call scratch dependency cannot even compile). `Sync`, like std.
+//!   engine-owned scratch**: callers own a [`MatchScratch`] per task/thread. `Sync`, like std.
 //!
 //! Deployment code fixes an immutable [`AlignLimits`] envelope at construction and uses explicit
 //! scratch. Map assembly is control-plane work: it may allocate, but a completed map is published
@@ -273,12 +271,10 @@ struct EngineState {
     cov_config: CovarianceConfig,
 }
 
-/// Per-align scratch: the reused workspace + the last align result. Never shared mutable state
-/// across threads — std keeps one per executor thread (the `SCRATCH` thread-local), the plain
-/// `no_std` single-core build keeps one in the engine, and the `mt` build has each task/thread own
-/// one and pass it to the engine's `_with` methods explicitly. Reuse is required for predictable
-/// serial execution; the `parallel` backend is a throughput option and may allocate worker-local
-/// storage.
+/// Per-align caller-owned scratch: the reused workspace, last result, and convergence history.
+/// Own one instance per task or thread and pass it explicitly to every alignment. Reuse is required
+/// for predictable serial execution; the `parallel` backend is a throughput option and may allocate
+/// worker-local storage.
 ///
 /// # Examples
 ///
@@ -288,7 +284,7 @@ struct EngineState {
 /// use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine};
 /// use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 ///
-/// let engine = NdtEngine::new_with_limits(2.0, 6, 0.01, 64, 64, 30)
+/// let engine = NdtEngine::new(2.0, 6, 0.01, 64, 64, 30)
 ///     .expect("valid work envelope");
 /// engine.set_params(0.01, 0.1, 2.0, 30, 0.55, 1);
 /// let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
@@ -298,8 +294,9 @@ struct EngineState {
 /// let mut scratch = MatchScratch::try_for_limits(engine.limits()).expect("reserve scratch");
 /// // Frame 1, then frame 2 reuse the same preallocated scratch.
 /// engine.align_with(&Matrix4::identity(), &target, &mut scratch).expect("align");
-/// engine.align_with(&scratch.result().pose, &target, &mut scratch).expect("align");
-/// assert!(scratch.result().iteration_num >= 0);
+/// let next_guess = scratch.result_ref().pose;
+/// engine.align_with(&next_guess, &target, &mut scratch).expect("align");
+/// assert!(scratch.result_ref().iteration_num >= 0);
 /// ```
 pub struct MatchScratch {
     workspace: AlignWorkspace,
@@ -308,16 +305,6 @@ pub struct MatchScratch {
 }
 
 impl MatchScratch {
-    /// Empty compatibility scratch. Bounded alignment requires [`Self::try_with_capacity`].
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            workspace: AlignWorkspace::new(),
-            last: AlignResult::default(),
-            oscillation_positions: alloc::vec::Vec::new(),
-        }
-    }
-
     /// Scratch pre-reserved for clouds of up to `max_points` and up to `max_iterations` Newton
     /// iterations. In the serial backend, this makes the align-plus-verdict path allocation-free
     /// including its first frame. It reserves the point workspace, neighbor indices, per-iteration
@@ -419,36 +406,6 @@ impl MatchScratch {
             &self.last.nearest_voxel_likelihood_array,
         )
     }
-
-    /// Owned copy of the last align result run through this scratch (the C++ `getResult`).
-    #[must_use]
-    pub fn result(&self) -> AlignResult {
-        self.last.clone()
-    }
-
-    /// The per-iteration score traces of the last align run through this scratch
-    /// (`transform_probability_array` / `nearest_voxel_likelihood_array` of the C++ `NdtResult`).
-    #[must_use]
-    pub fn score_arrays(&self) -> (alloc::vec::Vec<f32>, alloc::vec::Vec<f32>) {
-        (
-            self.last.transform_probability_array.clone(),
-            self.last.nearest_voxel_likelihood_array.clone(),
-        )
-    }
-}
-
-impl Default for MatchScratch {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(feature = "std")]
-std::thread_local! {
-    /// One reused scratch per executor thread. At most one align runs per thread at a time, so this
-    /// is exclusive without a lock. This backs compatibility APIs; deployment code uses an
-    /// explicitly preallocated [`MatchScratch`] instead.
-    static SCRATCH: core::cell::RefCell<MatchScratch> = core::cell::RefCell::new(MatchScratch::new());
 }
 
 /// Persistent NDT engine: a `Swap` cell of the target map + params and the
@@ -465,7 +422,7 @@ std::thread_local! {
 /// use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 ///
 /// let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
-/// let engine = NdtEngine::new_with_limits(2.0, 6, 0.01, target.len(), target.len(), 30)
+/// let engine = NdtEngine::new(2.0, 6, 0.01, target.len(), target.len(), 30)
 ///     .expect("valid work envelope");
 /// // trans_epsilon, step_size, resolution, max_iterations, outlier_ratio, num_threads
 /// engine.set_params(0.01, 0.1, 2.0, 30, 0.55, 1);
@@ -475,7 +432,7 @@ std::thread_local! {
 ///
 /// let mut scratch = MatchScratch::try_for_limits(engine.limits()).expect("reserve scratch");
 /// engine.align_with(&Matrix4::identity(), &target, &mut scratch).expect("align");
-/// assert!(scratch.result().iteration_num >= 0);
+/// assert!(scratch.result_ref().iteration_num >= 0);
 /// ```
 pub struct NdtEngine {
     state: Swap<EngineState>,
@@ -486,13 +443,10 @@ pub struct NdtEngine {
     min_points: i32,
     eig_mult: f64,
     limits: AlignLimits,
-    /// `no_std` (single-core) keeps the scratch here; std uses the thread-local `SCRATCH`.
-    #[cfg(all(not(feature = "std"), not(feature = "mt")))]
-    scratch: core::cell::RefCell<MatchScratch>,
 }
 
 /// Compile-time proof that the engine is shareable across threads in the two concurrent configs
-/// (std: arc-swap + thread-local scratch; `mt`: `awkernel_sync` cells + caller-owned scratch). The
+/// (std: arc-swap; `mt`: `awkernel_sync` cells; both use caller-owned scratch). The
 /// plain `no_std` single-core engine stays intentionally `!Sync` (`RefCell`), so it is excluded.
 #[cfg(any(feature = "std", feature = "mt"))]
 const fn assert_send_sync<T: Send + Sync>() {}
@@ -502,7 +456,7 @@ const _: () = assert_send_sync::<NdtEngine>();
 impl Clone for NdtEngine {
     fn clone(&self) -> Self {
         // Deep-copy the published state + regularization (the map-update double-buffer clones the
-        // whole engine). The scratch is not state — a clone starts fresh (re-warms on first align).
+        // whole engine). Caller-owned scratch is not engine state.
         let st = swap_load(&self.state);
         Self {
             state: swap_new((*st).clone()),
@@ -510,8 +464,6 @@ impl Clone for NdtEngine {
             min_points: self.min_points,
             eig_mult: self.eig_mult,
             limits: self.limits,
-            #[cfg(all(not(feature = "std"), not(feature = "mt")))]
-            scratch: core::cell::RefCell::new(MatchScratch::new()),
         }
     }
 }
@@ -535,44 +487,6 @@ impl NdtEngine {
             min_points: self.min_points,
             eig_mult: self.eig_mult,
             limits: self.limits,
-            #[cfg(all(not(feature = "std"), not(feature = "mt")))]
-            scratch: core::cell::RefCell::new(MatchScratch::new()),
-        }
-    }
-
-    /// New compatibility engine with an empty map and effectively unbounded point/leaf admission.
-    ///
-    /// This constructor does not establish a useful deployment work envelope. Real-time callers
-    /// should use [`Self::new_with_limits`] and explicit caller-owned scratch.
-    ///
-    /// # Arguments
-    /// * `resolution` — voxel/leaf size in metres; also the neighbor search radius.
-    /// * `min_points` — minimum points per voxel for it to contribute a Gaussian (C++
-    ///   `MultiVoxelGridCovariance` default: 6).
-    /// * `eig_mult` — eigenvalue-inflation multiplier conditioning each voxel covariance (C++
-    ///   default: 0.01).
-    #[must_use]
-    pub fn new(resolution: f64, min_points: i32, eig_mult: f64) -> Self {
-        Self {
-            state: swap_new(EngineState {
-                map: VoxelGridMap::new([resolution; 3], min_points, eig_mult),
-                params: NdtParams {
-                    resolution,
-                    ..NdtParams::default()
-                },
-                conv: ConvergenceParams::default(),
-                cov_config: CovarianceConfig::new(),
-            }),
-            reg: swap_new(None),
-            min_points,
-            eig_mult,
-            limits: AlignLimits {
-                max_source_points: usize::MAX,
-                max_active_leaves: usize::MAX,
-                max_iterations: 30,
-            },
-            #[cfg(all(not(feature = "std"), not(feature = "mt")))]
-            scratch: core::cell::RefCell::new(MatchScratch::new()),
         }
     }
 
@@ -582,9 +496,18 @@ impl NdtEngine {
     /// published-map admission bound, and `max_iterations` is constrained to `0..=30`. The leaf
     /// bound does not reserve map storage; memory follows the leaves actually built. Choose it from
     /// the largest deployment map plus an operational margin.
+    ///
+    /// # Arguments
+    /// * `resolution` — voxel/leaf size in metres; also the neighbor search radius.
+    /// * `min_points` — minimum points per voxel for it to contribute a Gaussian.
+    /// * `eig_mult` — eigenvalue-inflation multiplier conditioning each voxel covariance.
+    /// * `max_source_points` — maximum accepted source points per alignment.
+    /// * `max_active_leaves` — maximum active Gaussian leaves in a published map.
+    /// * `max_iterations` — maximum optimizer iterations, in `0..=30`.
+    ///
     /// # Errors
     /// Returns the validation errors documented by [`AlignLimits::new`].
-    pub fn new_with_limits(
+    pub fn new(
         resolution: f64,
         min_points: i32,
         eig_mult: f64,
@@ -593,10 +516,22 @@ impl NdtEngine {
         max_iterations: i32,
     ) -> Result<Self, AlignError> {
         let limits = AlignLimits::new(max_source_points, max_active_leaves, max_iterations)?;
-        let mut engine = Self::new(resolution, min_points, eig_mult);
-        engine.limits = limits;
-        engine.set_params(0.1, 0.1, resolution, max_iterations, 0.55, 1);
-        Ok(engine)
+        Ok(Self {
+            state: swap_new(EngineState {
+                map: VoxelGridMap::new([resolution; 3], min_points, eig_mult),
+                params: NdtParams {
+                    resolution,
+                    max_iterations,
+                    ..NdtParams::default()
+                },
+                conv: ConvergenceParams::default(),
+                cov_config: CovarianceConfig::new(),
+            }),
+            reg: swap_new(None),
+            min_points,
+            eig_mult,
+            limits,
+        })
     }
 
     /// Return the immutable work envelope configured for this engine.
@@ -608,20 +543,6 @@ impl NdtEngine {
     /// The current published state snapshot (lock-free under std).
     fn load_state(&self) -> Arc<EngineState> {
         swap_load(&self.state)
-    }
-
-    /// Run `f` with the per-align scratch (thread-local under std; engine-owned under `no_std`).
-    ///
-    /// The std scratch is a thread-local, so `&self` is unused here; the signature is kept uniform
-    /// with the `no_std` variant (which borrows `self.scratch`). `unused_self` does not fire because
-    /// this is now exported API.
-    #[cfg(feature = "std")]
-    pub fn with_scratch<R>(&self, f: impl FnOnce(&mut MatchScratch) -> R) -> R {
-        SCRATCH.with(|s| f(&mut s.borrow_mut()))
-    }
-    #[cfg(all(not(feature = "std"), not(feature = "mt")))]
-    pub fn with_scratch<R>(&self, f: impl FnOnce(&mut MatchScratch) -> R) -> R {
-        f(&mut self.scratch.borrow_mut())
     }
 
     /// Update the alignment params (the C++ `setParams`). The regularization is preserved — it is
@@ -690,32 +611,10 @@ impl NdtEngine {
         });
     }
 
-    /// Align from `guess` and derive the full [`AlignOutcome`] (oscillation + convergence verdict),
-    /// reading the engine's own [`ConvergenceParams`]. The self-contained counterpart of [`run_align`]
-    /// (which takes the params explicitly for the C++ FFI). Uses the implicit per-thread/engine
-    /// scratch; absent under `mt`, where callers use [`Self::align_outcome_with`].
-    #[cfg(any(feature = "std", not(feature = "mt")))]
+    /// Align from `guess` and derive the full [`AlignOutcome`] with caller-owned scratch.
     /// # Errors
-    /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
-    pub fn align_outcome(
-        &self,
-        guess: &Matrix4<f32>,
-        source: &[[f32; 3]],
-    ) -> Result<AlignOutcome, AlignError> {
-        {
-            let max_iterations = usize::try_from(self.max_iterations())
-                .map_err(|_| AlignError::IterationLimitExceeded)?;
-            self.with_scratch(|scr| {
-                *scr = MatchScratch::try_with_capacity(source.len(), max_iterations)?;
-                self.align_outcome_with(guess, source, scr)
-            })
-        }
-    }
-
-    /// [`Self::align_outcome`] with an explicit caller-owned scratch — what the portable
-    /// `ScanMatcher` calls; the only align entry point under `mt`.
-    /// # Errors
-    /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
+    /// Returns the source, iteration, numeric, arithmetic, kd-stack, and workspace errors documented
+    /// by [`Self::align_with`].
     pub fn align_outcome_with(
         &self,
         guess: &Matrix4<f32>,
@@ -760,7 +659,7 @@ impl NdtEngine {
     ///
     /// # Arguments
     /// * `result_pose` — the converged align pose; its rotation block seeds the covariance rotation.
-    /// * `hessian` — the align's 6×6 Hessian (from [`MatchScratch::result`]'s `AlignResult`).
+    /// * `hessian` — the align's 6×6 Hessian (from [`MatchScratch::result_ref`]'s `AlignResult`).
     /// * `initial_pose` — the initial guess the align started from (the candidate-search origin).
     /// * `source` — the same sensor cloud that was aligned (`base_link` frame).
     /// * `main_nvtl` — the main result's nearest-voxel transformation likelihood (softmax reference).
@@ -947,7 +846,7 @@ impl NdtEngine {
     }
 
     /// Align `source` from `guess` into the caller-owned `scratch` (result lands in
-    /// [`MatchScratch::result`]) — the core align entry point, and the only one under `mt`.
+    /// [`MatchScratch::result_ref`]) — the core align entry point, and the only one under `mt`.
     /// Reusing scratch created by [`MatchScratch::try_for_limits`] makes the serial kernel
     /// allocation-free from the first frame.
     ///
@@ -994,40 +893,6 @@ impl NdtEngine {
         )
     }
 
-    /// Align `source` from `guess`, storing the result in the implicit per-thread/engine scratch
-    /// (the C++ `align(out, guess, source)`; retrieve via [`Self::result`]). Absent under `mt` —
-    /// use [`Self::align_with`]. This compatibility API may allocate scratch on every call; it is
-    /// not the real-time deployment entry point.
-    ///
-    /// # Arguments
-    /// * `guess` — initial pose estimate as a 4×4 homogeneous transform.
-    /// * `source` — the sensor cloud to align, in the `base_link` frame (`[x, y, z]`, metres).
-    #[cfg(any(feature = "std", not(feature = "mt")))]
-    /// # Errors
-    /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
-    pub fn align(
-        &self,
-        guess: &Matrix4<f32>,
-        source: &[[f32; 3]],
-    ) -> Result<AlignDiagnostics, AlignError> {
-        {
-            let max_iterations = usize::try_from(self.max_iterations())
-                .map_err(|_| AlignError::IterationLimitExceeded)?;
-            self.with_scratch(|scr| {
-                *scr = MatchScratch::try_with_capacity(source.len(), max_iterations)?;
-                self.align_with(guess, source, scr)
-            })
-        }
-    }
-
-    /// The most recent align result (the C++ `getResult`); an owned copy of the implicit scratch.
-    /// Absent under `mt` — read [`MatchScratch::result`] from the scratch you aligned with.
-    #[cfg(any(feature = "std", not(feature = "mt")))]
-    #[must_use]
-    pub fn result(&self) -> AlignResult {
-        self.with_scratch(|scr| scr.result())
-    }
-
     /// Score `cloud` (already in the target frame) without aligning, using the caller-owned
     /// `scratch` workspace — the C++ `calculateTransformationProbability`.
     /// # Errors
@@ -1048,14 +913,6 @@ impl NdtEngine {
         )
     }
 
-    /// [`Self::calc_transformation_probability_with`] on the implicit scratch (absent under `mt`).
-    #[cfg(any(feature = "std", not(feature = "mt")))]
-    /// # Errors
-    /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
-    pub fn calc_transformation_probability(&self, cloud: &[[f32; 3]]) -> Result<f64, AlignError> {
-        self.with_scratch(|scr| self.calc_transformation_probability_with(cloud, scr))
-    }
-
     /// Nearest-voxel likelihood of `cloud` without aligning, using the caller-owned `scratch`
     /// workspace — the C++ `calculateNearestVoxelTransformationLikelihood`.
     /// # Errors
@@ -1074,14 +931,6 @@ impl NdtEngine {
             &gauss,
             &mut scratch.workspace,
         )
-    }
-
-    /// [`Self::calc_nearest_voxel_likelihood_with`] on the implicit scratch (absent under `mt`).
-    #[cfg(any(feature = "std", not(feature = "mt")))]
-    /// # Errors
-    /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
-    pub fn calc_nearest_voxel_likelihood(&self, cloud: &[[f32; 3]]) -> Result<f64, AlignError> {
-        self.with_scratch(|scr| self.calc_nearest_voxel_likelihood_with(cloud, scr))
     }
 
     /// Per-point nearest-voxel score (the C++ `calculateNearestVoxelScoreEachPoint`) using the
@@ -1107,31 +956,10 @@ impl NdtEngine {
         )
     }
 
-    /// [`Self::nearest_voxel_score_each_point_with`] on the implicit scratch (absent under `mt`).
-    #[cfg(any(feature = "std", not(feature = "mt")))]
-    /// # Errors
-    /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
-    pub fn nearest_voxel_score_each_point(
-        &self,
-        cloud: &[[f32; 3]],
-        out: &mut alloc::vec::Vec<f32>,
-    ) -> Result<(), AlignError> {
-        self.with_scratch(|scr| self.nearest_voxel_score_each_point_with(cloud, out, scr))
-    }
-
     /// The configured iteration cap (the C++ `getMaximumIterations`).
     #[must_use]
     pub fn max_iterations(&self) -> i32 {
         self.load_state().params.max_iterations
-    }
-
-    /// The per-iteration score traces from the last align (`transform_probability_array` /
-    /// `nearest_voxel_likelihood_array` of the C++ `NdtResult`); owned copies of the implicit
-    /// scratch. Absent under `mt` — read [`MatchScratch::score_arrays`] instead.
-    #[cfg(any(feature = "std", not(feature = "mt")))]
-    #[must_use]
-    pub fn score_arrays(&self) -> (alloc::vec::Vec<f32>, alloc::vec::Vec<f32>) {
-        self.with_scratch(|scr| scr.score_arrays())
     }
 }
 
@@ -1167,36 +995,11 @@ pub struct AlignOutcome {
     pub diagnostics: AlignDiagnostics,
 }
 
-/// Align the live engine from `guess`, then derive the oscillation count (from the iteration
-/// trajectory translations, matching the C++ `count_oscillation(transformation_msg_array)`) and the
-/// convergence verdict. Pure orchestration over existing ports — no new math. Runs on the implicit
-/// per-thread/engine scratch; absent under `mt` (use [`run_align_with`]). This compatibility path
-/// allocates scratch for the call and is not the production real-time entry point.
-#[cfg(any(feature = "std", not(feature = "mt")))]
-/// # Errors
-/// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
-pub fn run_align(
-    engine: &NdtEngine,
-    guess: &Matrix4<f32>,
-    source: &[[f32; 3]],
-    conv: &ConvergenceParams,
-) -> Result<AlignOutcome, AlignError> {
-    {
-        let max_iterations = usize::try_from(engine.max_iterations())
-            .map_err(|_| AlignError::IterationLimitExceeded)?;
-        engine.with_scratch(|scr| {
-            *scr = MatchScratch::try_with_capacity(source.len(), max_iterations)?;
-            run_align_with(engine, guess, source, conv, scr)
-        })
-    }
-}
-
-/// [`run_align`] with an explicit caller-owned scratch — the whole align + verdict reads one
-/// scratch session, so it is safe under concurrent aligns in every config (the only variant
-/// available under `mt`). The full [`AlignResult`] (e.g. the hessian) stays readable from
-/// `scratch` afterwards via [`MatchScratch::result`]. With `num_threads == 1` and scratch created by
-/// [`MatchScratch::try_for_limits`], the complete align-plus-verdict path performs no heap
-/// allocation from its first call. A neighbor-limit diagnostic forces a non-converged verdict.
+/// Align the live engine from `guess`, derive the oscillation count and convergence verdict, and
+/// keep the full result in caller-owned scratch. The whole align plus verdict reads one scratch
+/// session, so concurrent callers cannot observe cross-call state. With `num_threads == 1` and
+/// scratch created by [`MatchScratch::try_for_limits`], the path performs no heap allocation from
+/// its first call. A neighbor-limit diagnostic forces a non-converged verdict.
 /// # Errors
 /// Returns the errors documented by [`NdtEngine::align_with`], plus
 /// [`AlignError::WorkspaceCapacityExceeded`] if convergence-history capacity is insufficient.
@@ -1461,7 +1264,7 @@ mod tests {
 
     #[test]
     fn bounded_engine_rejects_source_and_map_without_partial_publish() {
-        let engine = NdtEngine::new_with_limits(1.0, 6, 0.01, 1, 1, 30).expect("bounded engine");
+        let engine = NdtEngine::new(1.0, 6, 0.01, 1, 1, 30).expect("bounded engine");
         let source = [[0.0_f32; 3]; 2];
         let mut scratch =
             MatchScratch::try_with_capacity(source.len(), 30).expect("reserve scratch");
@@ -1504,7 +1307,7 @@ mod tests {
             .collect();
         let guess = Matrix4::<f32>::identity();
 
-        let mut engine = NdtEngine::new(1.0, 6, 0.01);
+        let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
         engine.add_target(&tile_a, 0);
         engine.add_target(&tile_b, 1);
@@ -1514,12 +1317,12 @@ mod tests {
         engine
             .align_with(&guess, &source, &mut scratch)
             .expect("align");
-        let got = scratch.result();
+        let got = scratch.result_ref();
 
         let mut map = VoxelGridMap::new([1.0; 3], 6, 0.01);
         map.add_target(&tile_a, 0);
         map.add_target(&tile_b, 1);
-        map.create_kdtree().expect("build kd-tree");
+        map.try_create_kdtree(418_000).expect("build kd-tree");
         let params = NdtParams {
             trans_epsilon: 0.01,
             step_size: 0.1,
@@ -1548,7 +1351,7 @@ mod tests {
             .chain(tile_b.iter())
             .map(|p| [p[0] + 0.1, p[1] - 0.05, p[2]])
             .collect();
-        let mut engine = NdtEngine::new(1.0, 6, 0.01);
+        let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
         engine.add_target(&tile_a, 0);
         engine.add_target(&tile_b, 1);
@@ -1609,7 +1412,7 @@ mod tests {
             .align_with(&guess, &ref_source, &mut ref_scratch)
             .expect("align");
         let max_it = ref_engine.max_iterations();
-        let r = ref_scratch.result();
+        let r = ref_scratch.result_ref();
         let positions: Vec<[f64; 3]> = r
             .transformation_array
             .iter()
@@ -1678,7 +1481,7 @@ mod tests {
         engine
             .align_with(&Matrix4::<f32>::identity(), &source, &mut scratch)
             .expect("align");
-        let pose = scratch.result().pose;
+        let pose = scratch.result_ref().pose;
         (engine, source, pose)
     }
 
@@ -1809,7 +1612,7 @@ mod tests {
         let source: Vec<[f32; 3]> = tile_a.iter().map(|p| [p[0] + 0.1, p[1], p[2]]).collect();
         let guess = Matrix4::<f32>::identity();
 
-        let mut original = NdtEngine::new(1.0, 6, 0.01);
+        let mut original = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut original);
         original.add_target(&tile_a, 0);
         original.add_target(&tile_b, 1);
@@ -1820,7 +1623,7 @@ mod tests {
         clone
             .align_with(&guess, &source, &mut scratch)
             .expect("align");
-        let clone_before = scratch.result().pose;
+        let clone_before = scratch.result_ref().pose;
 
         // Mutate the original after the clone; the clone must be unaffected.
         original.remove_target(1);
@@ -1833,7 +1636,7 @@ mod tests {
             .align_with(&guess, &source, &mut scratch)
             .expect("align");
         assert_eq!(
-            scratch.result().pose,
+            scratch.result_ref().pose,
             clone_before,
             "clone shares state with original"
         );
@@ -1841,7 +1644,7 @@ mod tests {
 
     #[test]
     fn engine_remove_target_and_has_target() {
-        let engine = NdtEngine::new(1.0, 6, 0.01);
+        let engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         assert!(!engine.has_target());
         engine.add_target(&dense_cluster(0.5, 0.5, 0.5), 0);
         engine.add_target(&dense_cluster(4.5, 0.5, 0.5), 1);
@@ -1860,7 +1663,7 @@ mod tests {
     #[test]
     fn cell_id_add_remove_and_sorted_ids() {
         let tile = dense_cluster(0.5, 0.5, 0.5);
-        let mut engine = NdtEngine::new(1.0, 6, 0.01);
+        let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
         engine.add_target_bytes(&tile, b"beta");
         engine.add_target_bytes(&tile, b"alpha");
@@ -1878,7 +1681,7 @@ mod tests {
     #[test]
     fn cell_id_replaces_existing_tile() {
         let tile = dense_cluster(0.5, 0.5, 0.5);
-        let mut engine = NdtEngine::new(1.0, 6, 0.01);
+        let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
         engine.add_target_bytes(&tile, b"0");
         engine.add_target_bytes(&tile, b"0"); // same cell-id replaces the tile
@@ -1888,7 +1691,7 @@ mod tests {
     #[test]
     fn clone_carries_cell_ids() {
         let tile = dense_cluster(0.5, 0.5, 0.5);
-        let mut engine = NdtEngine::new(1.0, 6, 0.01);
+        let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
         engine.add_target_bytes(&tile, b"0");
         engine.add_target_bytes(&tile, b"1");
@@ -1959,7 +1762,7 @@ mod tests {
     }
 
     fn cell_engine(tiles: &[([u8; 5], Vec<[f32; 3]>); 3], order: [usize; 3]) -> NdtEngine {
-        let mut engine = NdtEngine::new(1.0, 6, 0.01);
+        let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
         for index in order {
             let (id, points) = &tiles[index];
@@ -1982,7 +1785,7 @@ mod tests {
         baseline
             .align_with(&guess, &source, &mut baseline_scratch)
             .expect("align");
-        let baseline_result = baseline_scratch.result();
+        let baseline_result = baseline_scratch.result_ref();
 
         for order in [
             [0, 1, 2],
@@ -1999,7 +1802,7 @@ mod tests {
             candidate
                 .align_with(&guess, &source, &mut scratch)
                 .expect("align");
-            let result = scratch.result();
+            let result = scratch.result_ref();
             assert_eq!(result.pose, baseline_result.pose);
             assert_eq!(result.hessian, baseline_result.hessian);
             assert_eq!(result.iteration_num, baseline_result.iteration_num);
@@ -2019,7 +1822,8 @@ mod tests {
         let tiles = canonical_tiles();
         let baseline = cell_engine(&tiles, [0, 1, 2]);
 
-        let mut historical = NdtEngine::new(1.0, 6, 0.01);
+        let mut historical =
+            NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut historical);
         for index in [2, 0] {
             let (id, points) = &tiles[index];
@@ -2048,13 +1852,13 @@ mod tests {
         engine
             .align_with(&guess, &source, &mut scratch)
             .expect("align");
-        let pose_none = scratch.result().pose;
+        let pose_none = scratch.result_ref().pose;
 
         engine.set_regularization(5.0, 5.0, 10.0); // strong pull toward (5, 5)
         engine
             .align_with(&guess, &source, &mut scratch)
             .expect("align");
-        let pose_reg = scratch.result().pose;
+        let pose_reg = scratch.result_ref().pose;
 
         assert!(
             (pose_reg - pose_none).norm() > 1e-4_f32,

@@ -294,14 +294,6 @@ if(BUILD_TESTING)
     target_link_libraries(test_voxel_grid
       multigrid_ndt_omp ${PCL_LIBRARIES} autoware_ndt_scan_matcher_rs)
 
-    ament_auto_add_gtest(test_align test/test_align.cpp)
-    target_link_libraries(test_align
-      multigrid_ndt_omp ${PCL_LIBRARIES} autoware_ndt_scan_matcher_rs)
-
-    ament_auto_add_gtest(test_estimate_covariance_multi test/test_estimate_covariance_multi.cpp)
-    target_link_libraries(test_estimate_covariance_multi
-      multigrid_ndt_omp ${PCL_LIBRARIES} autoware_ndt_scan_matcher_rs)
-
     ament_auto_add_gtest(test_ndt_engine test/test_ndt_engine.cpp)
     target_link_libraries(test_ndt_engine
       multigrid_ndt_omp ${PCL_LIBRARIES} autoware_ndt_scan_matcher_rs)

@@ -327,7 +327,7 @@ fn probe(name: &str, fx: &Fixture) {
     for (id, tile) in fx.tiles.iter().enumerate() {
         map.add_target(tile, id as u64);
     }
-    map.create_kdtree().expect("build kd-tree");
+    map.try_create_kdtree(418_000).expect("build kd-tree");
     let mut ws = AlignWorkspace::try_with_capacity(fx.source.len()).expect("reserve workspace");
     let mut out = AlignResult::try_with_capacity(30).expect("reserve result");
     align(&map, &fx.source, &fx.guess, &fx.params, &mut ws, &mut out).expect("align fixture");

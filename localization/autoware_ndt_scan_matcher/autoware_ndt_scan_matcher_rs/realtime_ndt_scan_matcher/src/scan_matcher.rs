@@ -22,9 +22,8 @@
 //! The match methods take a caller-owned `&mut MatchScratch` (one per task/thread, reused across
 //! frames): the matcher itself holds no per-align mutable state, so a shared `&ScanMatcher` is
 //! sound across concurrent tasks in the std and `mt` configs (map updates included — `update_map`
-//! publishes atomically), with no scratch lock held across an align anywhere. This portable facade
-//! currently uses the compatibility engine constructor; the ROS deployment node constructs its
-//! engine with explicit `Pmax`, `Lmax`, and `Imax` limits.
+//! publishes atomically), with no scratch lock held across an align anywhere. Construction requires
+//! explicit `Pmax`, `Lmax`, and `Imax` limits.
 
 use nalgebra::Matrix4;
 
@@ -56,7 +55,7 @@ use crate::ndt::AlignError;
 /// }
 ///
 /// async fn run() {
-///     let matcher = ScanMatcher::new(2.0, 6, 0.01);
+///     let matcher = ScanMatcher::new(2.0, 6, 0.01, 64, 64, 30).expect("valid limits");
 ///     matcher.set_params(0.01, 0.1, 2.0, 30, 0.55, 1);
 ///     matcher.update_map(&Synthetic, [0.0, 0.0], 100.0).await.expect("map update");
 ///
@@ -78,16 +77,28 @@ const fn assert_send_sync<T: Send + Sync>() {}
 const _: () = assert_send_sync::<ScanMatcher>();
 
 impl ScanMatcher {
-    /// New compatibility matcher with an empty map (`resolution` voxel/neighbor size;
-    /// `min_points`/`eig_mult` the `MultiVoxelGridCovariance` defaults 6 / 0.01).
+    /// Construct a matcher with an empty map and an immutable runtime work envelope.
     ///
-    /// This facade does not establish a deployment leaf/point envelope. The Autoware node uses a
-    /// bounded [`NdtEngine`] directly.
-    #[must_use]
-    pub fn new(resolution: f64, min_points: i32, eig_mult: f64) -> Self {
-        Self {
-            engine: NdtEngine::new(resolution, min_points, eig_mult),
-        }
+    /// # Errors
+    /// Returns the limit-validation errors documented by [`NdtEngine::new`].
+    pub fn new(
+        resolution: f64,
+        min_points: i32,
+        eig_mult: f64,
+        max_source_points: usize,
+        max_active_leaves: usize,
+        max_iterations: i32,
+    ) -> Result<Self, AlignError> {
+        Ok(Self {
+            engine: NdtEngine::new(
+                resolution,
+                min_points,
+                eig_mult,
+                max_source_points,
+                max_active_leaves,
+                max_iterations,
+            )?,
+        })
     }
 
     /// Set the alignment params (the C++ `setParams`).
@@ -228,13 +239,16 @@ impl ScanMatcher {
         let o = self.engine.align_outcome_with(guess, source, scratch)?;
         // The full align result (carries the hessian the covariance estimate needs) — read from
         // THIS scratch session, so it is the hessian of the align above.
-        let r = scratch.result();
+        let (result_pose, hessian, main_nvtl) = {
+            let result = scratch.result_ref();
+            (result.pose, result.hessian, result.nearest_voxel_likelihood)
+        };
         let cov = self.engine.estimate_covariance(
-            &r.pose,
-            &r.hessian,
+            &result_pose,
+            &hessian,
             guess,
             source,
-            r.nearest_voxel_likelihood,
+            main_nvtl,
             scratch,
         )?;
         let match_result = MatchResult {

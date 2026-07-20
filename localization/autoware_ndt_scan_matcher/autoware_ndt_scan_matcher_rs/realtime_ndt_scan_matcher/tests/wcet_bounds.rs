@@ -57,7 +57,7 @@ fn make_map(clusters: usize, spacing: f32) -> (VoxelGridMap, Vec<[f32; 3]>) {
     }
     let mut map = VoxelGridMap::new([2.0, 2.0, 2.0], 6, 0.01);
     map.add_target(&pts, 0);
-    map.create_kdtree();
+    map.try_create_kdtree(418_000).expect("build kd-tree");
     (map, pts)
 }
 
@@ -92,7 +92,7 @@ proptest! {
             regularization: None,
             num_threads: 1, // serial WCET baseline
         };
-        let mut ws = AlignWorkspace::new();
+        let mut ws = AlignWorkspace::try_with_capacity(2_000).expect("reserve workspace");
         let mut out = AlignResult::default();
         align(&map, &source, &guess, &params, &mut ws, &mut out);
         let c = out.counters;
@@ -147,7 +147,7 @@ fn parallel_counters_match_serial() {
         regularization: None,
         num_threads: threads,
     };
-    let mut ws = AlignWorkspace::new();
+    let mut ws = AlignWorkspace::try_with_capacity(2_000).expect("reserve workspace");
     let mut serial = AlignResult::default();
     align(&map, &source, &guess, &mk(1), &mut ws, &mut serial);
     let mut parallel = AlignResult::default();

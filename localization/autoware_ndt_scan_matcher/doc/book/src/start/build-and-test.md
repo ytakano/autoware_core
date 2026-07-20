@@ -50,7 +50,7 @@ colcon test-result --verbose
 > integration gtests, and the fast `test_estimate_covariance` / `test_ndt_scan_matcher_helper`).
 > Building with `-DNDT_USE_RUST=ON` additionally registers the crate's own `cargo test` (run through
 > CTest as `autoware_ndt_scan_matcher_rs_cargo_test`) **plus the ~17 Rust differential/FFI gtests**
-> (`test_voxel_grid`, `test_align`, `test_ndt_engine`, `test_estimate_covariance_multi`,
+> (`test_voxel_grid`, `test_ndt_engine`,
 > `test_tpe_ffi`, `test_convergence_verdict`, `test_map_update_verdict`, `test_sensor_points_match`,
 > …). So to exercise the port through colcon, build with `-DNDT_USE_RUST=ON` first.
 

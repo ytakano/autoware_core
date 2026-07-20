@@ -24,9 +24,9 @@ Because the map is built off to the side and swapped in with a single atomic ste
 
 ## C++ / Rust split
 
-Rust owns the decision/state and the staging build; C++ keeps the ROS pcd-loader service I/O, the
-tile-apply, and the debug-map publish (`node_map_update.rs` bridges the C-ABI map-source vtable to
-the async port).
+Rust owns the canonical map state, staging build, and atomic publication. C++ retains the ROS
+pcd-loader service I/O and debug-map publication, then supplies loaded tiles through the
+status-returning `node_map_update` boundary.
 
 > Source: `src/scan_matcher.rs` (`apply_map_update`), `../src/node_map_update.rs`, `src/engine.rs`
 > (`commit_from`, `clone_empty`), `../src/node_handle.rs` (`MapUpdateState`).

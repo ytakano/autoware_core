@@ -195,21 +195,6 @@ pub unsafe fn free_handle<T>(p: *mut T) {
     drop(unsafe { Box::from_raw(p) });
 }
 
-/// Deep-copy a shared handle into a fresh owning handle; null → null. (Shape: `..._clone`.)
-///
-/// # Safety
-/// `p` is null, or a valid, live handle (see the [module master contract](self)).
-#[inline]
-#[must_use]
-#[expect(unsafe_code, reason = "the crate's single audited handle clone")]
-pub unsafe fn clone_handle<T: Clone>(p: *const T) -> *mut T {
-    // SAFETY: caller upholds the master contract; null is handled by `opt_ref`.
-    match unsafe { opt_ref(p) } {
-        Some(r) => into_handle(r.clone()),
-        None => core::ptr::null_mut(),
-    }
-}
-
 /// Borrow a shared handle/struct, else bail out. Two forms:
 /// - `ffi_ref!(ptr, else <expr>)` — C-ABI no-op guard: `ptr` null → run `<expr>` (typically
 ///   `return` / `return <default>`), else bind `&*ptr`.
@@ -394,21 +379,6 @@ mod tests {
         unsafe { free_handle(p) };
         // Null free is a no-op.
         unsafe { free_handle::<Vec<u32>>(core::ptr::null_mut()) };
-    }
-
-    #[test]
-    fn clone_handle_null_is_null_else_deep_copies() {
-        let orig = into_handle(Vec::from([4_u8, 5, 6]));
-        // SAFETY: `orig` is a valid handle / null.
-        let copy = unsafe { clone_handle(orig.cast_const()) };
-        assert!(!copy.is_null());
-        // SAFETY: both handles are live and distinct; free each exactly once.
-        unsafe {
-            assert_eq!(&*orig, &*copy);
-            free_handle(orig);
-            free_handle(copy);
-        }
-        assert!(unsafe { clone_handle::<Vec<u8>>(core::ptr::null()) }.is_null());
     }
 
     #[test]

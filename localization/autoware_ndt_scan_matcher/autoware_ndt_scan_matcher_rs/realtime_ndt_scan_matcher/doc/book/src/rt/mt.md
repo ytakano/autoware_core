@@ -18,9 +18,9 @@ converges immediately. See [Concurrency](../arch/concurrency.md).
 
 ## Caller-owned scratch
 
-There is no engine-owned or thread-local scratch under `mt`: each task/thread owns a
-[`MatchScratch`](../arch/scratch.md) and uses the `_with` align methods. The implicit-scratch API is
-`#[cfg]`-compiled out, so a cross-call scratch dependency cannot even compile.
+There is no engine-owned or thread-local scratch in any configuration. Each task or thread owns a
+[`MatchScratch`](../arch/scratch.md) and passes it to every alignment call, so cross-call mutable
+scratch dependencies are explicit in the type system.
 
 ## Building it
 

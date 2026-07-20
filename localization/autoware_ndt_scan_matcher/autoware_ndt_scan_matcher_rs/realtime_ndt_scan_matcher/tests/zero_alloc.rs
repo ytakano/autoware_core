@@ -111,7 +111,7 @@ fn engine_allocations_after_warmup() {
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
         map.add_target(&dense_cluster(0.5, 0.5, 0.5), 0);
         map.add_target(&dense_cluster(2.5, 0.5, 0.5), 1);
-        map.create_kdtree().expect("build kd-tree");
+        map.try_create_kdtree(418_000).expect("build kd-tree");
 
         let source: Vec<[f32; 3]> = vec![[0.55, 0.5, 0.5], [0.5, 0.45, 0.52], [2.55, 0.5, 0.5]];
         let p = Vector6::new(0.05, -0.03, 0.02, 0.04, -0.02, 0.03);
@@ -171,7 +171,7 @@ fn engine_allocations_after_warmup() {
     {
         map.add_target(&dense_cluster(cx, cy, cz), id as u64);
     }
-    map.create_kdtree().expect("build kd-tree");
+    map.try_create_kdtree(418_000).expect("build kd-tree");
 
     // ~40-point source (8 per cluster) translated by a known offset — large enough that an O(P)
     // per-frame allocation would show up clearly.
@@ -251,7 +251,7 @@ fn engine_allocations_after_warmup() {
         use realtime_ndt_scan_matcher::engine::{
             ConvergenceParams, MatchScratch, NdtEngine, run_align_with,
         };
-        let engine = NdtEngine::new(2.0, 6, 0.01);
+        let engine = NdtEngine::new(2.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         for (id, &(cx, cy, cz)) in centers.iter().enumerate() {
             engine.add_target(&dense_cluster(cx, cy, cz), id as u64);
         }

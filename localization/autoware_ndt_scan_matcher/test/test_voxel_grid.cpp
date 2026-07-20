@@ -163,7 +163,7 @@ TEST(VoxelGrid, MultiGridRadiusSearchMatchesCpp)  // NOLINT
   cpp_grid.removeCloud("b");
   autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_target(map, 1);
   cpp_grid.createKdtree();
-  autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(map);
+  autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(map, 418000);
 
   for (size_t g = 0; g < centers.size(); ++g) {
     pcl::PointXYZ q;

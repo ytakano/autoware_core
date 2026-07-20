@@ -15,15 +15,14 @@
 // Differential test: the persistent Rust engine handle, driven through the C ABI
 // with an INCREMENTAL map (addTarget by id x2 + createVoxelKdtree), must match the C++
 // MultiGridNormalDistributionsTransform built the same way, on the same guess/source/params. This
-// validates the node-facing handle + the per-id add/createVoxelKdtree path (the one-shot align is
-// already covered by test_align).
-
-#include <autoware/ndt_scan_matcher/ndt_omp/multigrid_ndt_omp.h>
+// validates the bounded node-facing handle, explicit scratch, and the per-id
+// add/createVoxelKdtree path.
 
 #include "autoware_ndt_scan_matcher_rs.h"
 
 #include <Eigen/Core>
 
+#include <autoware/ndt_scan_matcher/ndt_omp/multigrid_ndt_omp.h>
 #include <gtest/gtest.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -61,7 +60,8 @@ void make_tile(
 TEST(NdtEngine, IncrementalMapMatchesCppEngine)  // NOLINT
 {
   std::mt19937 rng(11);
-  const std::array<std::array<float, 3>, 2> centers = {{{{0.0F, 0.0F, 0.0F}}, {{8.0F, 4.0F, 0.0F}}}};
+  const std::array<std::array<float, 3>, 2> centers = {
+    {{{0.0F, 0.0F, 0.0F}}, {{8.0F, 4.0F, 0.0F}}}};
 
   // Two map tiles (id 0 and 1), each a PCL cloud + a flat buffer for the Rust handle.
   std::array<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>, 2> tiles;
@@ -108,8 +108,11 @@ TEST(NdtEngine, IncrementalMapMatchesCppEngine)  // NOLINT
   const pclomp::NdtResult cpp = ndt.getResult();
 
   // ---- Rust engine handle: incremental add_target by id via the C ABI ----
-  AwNdtEngine * engine = autoware_ndt_scan_matcher_rs_ndt_engine_new(2.0, 6, 0.01);
+  AwNdtEngine * engine =
+    autoware_ndt_scan_matcher_rs_ndt_engine_new(2.0, 6, 0.01, 2000, 418000, 30);
   ASSERT_NE(engine, nullptr);
+  AwNdtMatchScratch * scratch = autoware_ndt_scan_matcher_rs_ndt_match_scratch_new(2000, 30);
+  ASSERT_NE(scratch, nullptr);
   autoware_ndt_scan_matcher_rs_ndt_engine_set_params(engine, 0.01, 0.1, 2.0, 30, 0.55, 1);
   autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
     engine, tiles_flat[0].data(), tiles[0]->size(), 0);
@@ -125,7 +128,7 @@ TEST(NdtEngine, IncrementalMapMatchesCppEngine)  // NOLINT
     }
   }
   autoware_ndt_scan_matcher_rs_ndt_engine_align(
-    engine, guess16.data(), source_flat.data(), source->size());
+    engine, scratch, guess16.data(), source_flat.data(), source->size());
 
   std::array<float, 16> rs_pose{};
   int32_t rs_iter = 0;
@@ -141,7 +144,7 @@ TEST(NdtEngine, IncrementalMapMatchesCppEngine)  // NOLINT
   out.transformation_array = nullptr;
   out.transforms_cap = 0;
   out.transforms_count = nullptr;
-  autoware_ndt_scan_matcher_rs_ndt_engine_get_result(engine, &out);
+  autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_result(scratch, &out);
 
   // remove one tile -> still has a target; remove both -> none (mirrors removeTarget).
   autoware_ndt_scan_matcher_rs_ndt_engine_remove_target(engine, 0);
@@ -149,9 +152,10 @@ TEST(NdtEngine, IncrementalMapMatchesCppEngine)  // NOLINT
   autoware_ndt_scan_matcher_rs_ndt_engine_remove_target(engine, 1);
   EXPECT_FALSE(autoware_ndt_scan_matcher_rs_ndt_engine_has_target(engine));
 
+  autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
   autoware_ndt_scan_matcher_rs_ndt_engine_free(engine);
 
-  // ---- Compare within tolerance (same as test_align) ----
+  // ---- Compare within tolerance (the differential tolerance) ----
   for (int r = 0; r < 4; ++r) {
     for (int c = 0; c < 4; ++c) {
       EXPECT_NEAR(cpp.pose(r, c), rs_pose[(r * 4) + c], 2e-2) << "pose(" << r << "," << c << ")";

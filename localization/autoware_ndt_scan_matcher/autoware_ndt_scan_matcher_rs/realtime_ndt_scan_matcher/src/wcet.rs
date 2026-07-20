@@ -45,7 +45,7 @@ pub struct WcetCounters {
 }
 
 impl WcetCounters {
-    /// All-zero counters (`const`, usable from `AlignWorkspace::new`).
+    /// All-zero counters for preallocated alignment workspaces.
     #[must_use]
     pub const fn new() -> Self {
         Self {

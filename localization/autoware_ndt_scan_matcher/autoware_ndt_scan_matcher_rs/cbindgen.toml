@@ -36,6 +36,7 @@ autogen_warning = "// C ABI exported by the `autoware_ndt_scan_matcher_rs` Rust 
 # The opaque handles + vtables whose Rust names lack the `Aw` prefix the C++ side uses. Every other
 # FFI struct is already named `Aw*` in Rust and needs no rename.
 "NdtEngine" = "AwNdtEngine"
+"MatchScratch" = "AwNdtMatchScratch"
 "VoxelGrid" = "AwNdtVoxelGrid"
 "VoxelGridMap" = "AwNdtVoxelGridMap"
 "NdtHost" = "AwNdtHost"

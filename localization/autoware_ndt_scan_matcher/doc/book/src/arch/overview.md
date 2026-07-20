@@ -46,7 +46,7 @@ under a `no_std` kernel:
 2. **Node crate — `autoware_ndt_scan_matcher_rs` (always `std`).** `NdtScanMatcherRs` is the opaque
    handle C++ holds. It depends on the engine crate, owns the *node-level* state the engine does not
    (pose buffers, activation flag, map-update bookkeeping), and adapts everything to the C ABI in
-   its `node` / `node_map_update` / `node_align_service` modules. It is never part of the `no_std`
+   its `node` / `node_handle` / `node_map_update` / `node_align_service` modules. It is never part of the `no_std`
    build.
 
 New algorithmic code goes in the engine crate so the kernel build keeps it; only ROS/FFI glue lives

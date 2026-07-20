@@ -148,8 +148,11 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_targ
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(
     map: *mut VoxelGridMap,
-) {
-    let _completed = ffi_mut!(map, else return).create_kdtree().is_ok();
+    max_active_leaves: usize,
+) -> bool {
+    ffi_mut!(map, else return false)
+        .try_create_kdtree(max_active_leaves)
+        .is_ok()
 }
 
 /// # Safety
@@ -339,7 +342,7 @@ mod tests {
         let mut pure = VoxelGridMap::new(leaf_size, 6, 0.01);
         pure.add_target(&a, 0);
         pure.add_target(&b, 1);
-        pure.create_kdtree().expect("build kd-tree");
+        pure.try_create_kdtree(418_000).expect("build kd-tree");
 
         // FFI map, same inputs.
         let fa: alloc::vec::Vec<f32> = a.iter().flat_map(|p| p.iter().copied()).collect();
@@ -350,7 +353,9 @@ mod tests {
         unsafe {
             autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(map, fa.as_ptr(), a.len(), 0);
             autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(map, fb.as_ptr(), b.len(), 1);
-            autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(map);
+            assert!(autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(
+                map, 418_000
+            ));
         }
 
         // Query near A: FFI count == pure count, and the returned leaf mean/icov match pure.
@@ -443,7 +448,10 @@ mod tests {
                 0,
             );
             autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_target(core::ptr::null_mut(), 0);
-            autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(core::ptr::null_mut());
+            assert!(!autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(
+                core::ptr::null_mut(),
+                418_000
+            ));
         }
 
         // Four clusters in four adjacent voxels (leaf_size 1.0), all within the query radius.
@@ -464,7 +472,7 @@ mod tests {
         }
         // Remove the first cluster via the FFI shim (the dispatch path under test).
         unsafe { autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_target(map, 0) };
-        unsafe { autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(map) };
+        unsafe { autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(map, 418_000) };
 
         let q = [1.9_f32, 0.4, 0.4];
         // cap smaller than the number found: only `cap` indices written, rest stay sentinel,

@@ -15,8 +15,7 @@
 //! The opaque object-level node handle (`NdtScanMatcherRs`) + its C ABI lifecycle, and the
 //! `AwNdtParams` struct that crosses the boundary once at construction.
 //!
-//! Foundation slice: this introduced the opaque
-//! handle plus a single validated [`Params`] conversion replacing piecemeal scalar-by-scalar engine
+//! a single validated [`Params`] conversion replacing piecemeal scalar-by-scalar engine
 //! configuration. The handle now owns the migrated node state (activation, pose buffers, latest EKF,
 //! and map-update policy state) and drives the Rust callback bodies. It also owns the live Rust
 //! engine used by Rust-mode callbacks and map updates. std-only: it is the ROS-node shell, excluded
@@ -81,7 +80,7 @@ pub struct Params {
 
 impl Params {
     fn make_engine(&self) -> Result<NdtEngine, Error> {
-        let engine = NdtEngine::new_with_limits(
+        let engine = NdtEngine::new(
             self.resolution,
             self.min_points,
             self.eig_mult,
@@ -629,43 +628,6 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_latest_sensor_points_count
     ffi_ref!(handle, else return 0).latest_sensor_points_count()
 }
 
-/// Copy the latest Rust-owned base-link sensor cloud into a caller-owned flat xyz buffer. Returns the
-/// number of copied points, or zero on null pointers, no latest cloud, or insufficient capacity.
-///
-/// # Safety
-/// `handle` must be a valid, live `NdtScanMatcherRs` from `_new` (or null -> zero). `out_xyz` must
-/// address `3 * out_points_capacity` writable, aligned `f32` values when capacity is nonzero.
-#[expect(
-    unsafe_code,
-    reason = "C ABI boundary; writes caller-owned flat xyz buffer after pointer/capacity checks"
-)]
-#[expect(
-    clippy::indexing_slicing,
-    reason = "chunks_exact_mut(3) yields fixed three-element chunks for xyz writes"
-)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_latest_sensor_points_copy(
-    handle: *const NdtScanMatcherRs,
-    out_xyz: *mut f32,
-    out_points_capacity: usize,
-) -> usize {
-    let handle = ffi_ref!(handle, else return 0);
-    let Some(points) = handle.latest_sensor_points_snapshot() else {
-        return 0;
-    };
-    if out_points_capacity < points.len() {
-        return 0;
-    }
-    let flat_len = out_points_capacity.saturating_mul(3);
-    let out = ffi_mut_slice!(out_xyz, flat_len, else return 0);
-    for (dst, point) in out.chunks_exact_mut(3).zip(points.iter()) {
-        dst[0] = point[0];
-        dst[1] = point[1];
-        dst[2] = point[2];
-    }
-    points.len()
-}
-
 /// Borrow the Rust-owned live NDT engine from the node handle. The returned pointer is owned by the
 /// handle and must not be freed by C++; it is valid only while `handle` is alive.
 ///
@@ -1051,40 +1013,6 @@ mod tests {
         h.store_latest_sensor_points(&[]);
         assert_eq!(h.latest_sensor_points_count(), 0);
         assert!(h.latest_sensor_points_snapshot().is_none());
-        // SAFETY: freed once.
-        unsafe { autoware_ndt_scan_matcher_rs_free(handle) };
-    }
-
-    #[test]
-    fn latest_sensor_points_copy_checks_capacity() {
-        let ox: [f64; 0] = [];
-        let oy: [f64; 0] = [];
-        let p = sample_params(&ox, &oy);
-        // SAFETY: valid params.
-        let handle = unsafe { autoware_ndt_scan_matcher_rs_new(&raw const p) };
-        // SAFETY: live handle.
-        let h = unsafe { &*handle };
-        h.store_latest_sensor_points(&[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
-
-        let mut too_small = [0.0_f32; 3];
-        // SAFETY: output buffer is valid for one point, which is intentionally insufficient.
-        let copied = unsafe {
-            autoware_ndt_scan_matcher_rs_latest_sensor_points_copy(
-                handle,
-                too_small.as_mut_ptr(),
-                1,
-            )
-        };
-        assert_eq!(copied, 0);
-        assert_eq!(too_small, [0.0, 0.0, 0.0]);
-
-        let mut flat = [0.0_f32; 6];
-        // SAFETY: output buffer is valid for two points.
-        let copied = unsafe {
-            autoware_ndt_scan_matcher_rs_latest_sensor_points_copy(handle, flat.as_mut_ptr(), 2)
-        };
-        assert_eq!(copied, 2);
-        assert_eq!(flat, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         // SAFETY: freed once.
         unsafe { autoware_ndt_scan_matcher_rs_free(handle) };
     }

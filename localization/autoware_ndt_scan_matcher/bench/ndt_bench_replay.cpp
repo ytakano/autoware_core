@@ -15,11 +15,12 @@
 // L3 offline replay benchmark. A single executable drives BOTH NDT engines
 // on identical inputs: the C++ `MultiGridNormalDistributionsTransform` and the Rust port over the C
 // ABI. The target map + kd-tree is built ONCE per engine; only the repeated `align` loop is timed
-// (steady_clock), so this measures the align kernel, not map construction. Both engines see the same
-// synthetic geometry from the same buffers, so the comparison is apples-to-apples by construction.
+// (steady_clock), so this measures the align kernel, not map construction. Both engines see the
+// same synthetic geometry from the same buffers, so the comparison is apples-to-apples by
+// construction.
 //
-// Output: a JSON file with per-align latency samples (ms) + iteration_num + run metadata, consumed by
-// bench/gen_report.py to render a self-contained HTML report.
+// Output: a JSON file with per-align latency samples (ms) + iteration_num + run metadata, consumed
+// by bench/gen_report.py to render a self-contained HTML report.
 //
 // Usage: ndt_bench_replay [iters=200] [warmup=20] [out.json=ndt_bench.json] [interval=0.2]
 //   `interval` sets the synthetic point spacing → point count (default 0.2 m ⇒ ~30,603 pts).
@@ -41,16 +42,16 @@
 // reported) + an iteration-equality check. Rust-side counters come from
 // `wcet_frame --capture` (separate pass); merge with bench/wcet_realdata.py.
 
-#include <autoware/ndt_scan_matcher/ndt_omp/multigrid_ndt_omp.h>
-
 #include "autoware_ndt_scan_matcher_rs.h"
+
+#include <autoware/ndt_scan_matcher/ndt_omp/multigrid_ndt_omp.h>
 
 #ifdef NDT_TRACE
 // Cross-language work-shape analysis: per-pass trace comparison between the traced C++
 // engine (bench/traced/, ndt_trace.hpp) and the Rust engine's mirrored `wcet-trace` records.
 #include <ndt_trace.hpp>
 
-// The Rust trace FFI (struct AwNdtPassTrace + ..._ndt_engine_get_trace) comes from the
+// The Rust trace FFI (struct AwNdtPassTrace + ..._ndt_match_scratch_get_trace) comes from the
 // cbindgen-generated header above; the symbol itself exists only in `wcet-trace` builds,
 // which NDT_BUILD_TRACED enables.
 #endif
@@ -58,10 +59,9 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
+#include <dlfcn.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
-
-#include <dlfcn.h>
 
 #include <algorithm>
 #include <array>
@@ -328,13 +328,13 @@ TraceSnap snap_cpp()
   return out;
 }
 
-TraceSnap snap_rust(struct AwNdtEngine * eng)
+TraceSnap snap_rust(const AwNdtMatchScratch * scratch)
 {
   TraceSnap out;
   std::array<AwNdtPassTrace, ndt_trace::kMaxPasses> buf{};
   uint64_t total = 0;
-  const bool ok = autoware_ndt_scan_matcher_rs_ndt_engine_get_trace(
-    eng, buf.data(), buf.size(), &total);
+  const bool ok = autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_trace(
+    scratch, buf.data(), buf.size(), &total);
   out.passes = total;
   out.poisoned = !ok;
   out.stored = static_cast<size_t>(std::min<uint64_t>(total, ndt_trace::kMaxPasses));
@@ -359,17 +359,18 @@ TraceSnap snap_rust(struct AwNdtEngine * eng)
 }
 
 // Per-leg comparison result. Structural legs compare pass count, per-pass point/neighbor
-// counts, and canonical leaf-ID digests. Payload and numeric legs are independent diagnostics. kd counters are engine-own metrics, recorded but never compared.
+// counts, and canonical leaf-ID digests. Payload and numeric legs are independent diagnostics. kd
+// counters are engine-own metrics, recorded but never compared.
 struct TraceCert
 {
-  bool valid = false;        // both traces present, unpoisoned
+  bool valid = false;  // both traces present, unpoisoned
   bool structural = false;
   bool payload = false;
   bool score = false;
   bool grad = false;
   bool hess = false;
   uint64_t score_max_ulp = 0;  // max per-pass score ULP distance (0 == bit-identical)
-  int first_div_pass = -1;   // first pass where any compared leg diverges
+  int first_div_pass = -1;     // first pass where any compared leg diverges
   const char * first_div_leg = "";
 };
 
@@ -404,9 +405,12 @@ TraceCert compare_traces(const TraceSnap & c, const TraceSnap & r)
     const auto & a = c.pass[i];
     const auto & b = r.pass[i];
     const char * leg = nullptr;
-    if (a.points != b.points) leg = "points";
-    else if (a.neighbors != b.neighbors) leg = "neighbors";
-    else if (a.shape_digest != b.shape_digest) leg = "shape_digest";
+    if (a.points != b.points)
+      leg = "points";
+    else if (a.neighbors != b.neighbors)
+      leg = "neighbors";
+    else if (a.shape_digest != b.shape_digest)
+      leg = "shape_digest";
     if (leg != nullptr) {
       out.structural = out.payload = out.score = out.grad = out.hess = false;
       out.first_div_pass = static_cast<int>(i);
@@ -424,16 +428,25 @@ TraceCert compare_traces(const TraceSnap & c, const TraceSnap & r)
       out.score_max_ulp = std::max(out.score_max_ulp, ulp_delta_f64(a.score_bits, b.score_bits));
       if (out.score) {
         out.score = false;
-        if (out.first_div_pass < 0) { out.first_div_pass = static_cast<int>(i); out.first_div_leg = "score"; }
+        if (out.first_div_pass < 0) {
+          out.first_div_pass = static_cast<int>(i);
+          out.first_div_leg = "score";
+        }
       }
     }
     if (out.grad && a.grad_hash != b.grad_hash) {
       out.grad = false;
-      if (out.first_div_pass < 0) { out.first_div_pass = static_cast<int>(i); out.first_div_leg = "grad"; }
+      if (out.first_div_pass < 0) {
+        out.first_div_pass = static_cast<int>(i);
+        out.first_div_leg = "grad";
+      }
     }
     if (out.hess && a.hess_hash != b.hess_hash) {
       out.hess = false;
-      if (out.first_div_pass < 0) { out.first_div_pass = static_cast<int>(i); out.first_div_leg = "hess"; }
+      if (out.first_div_pass < 0) {
+        out.first_div_pass = static_cast<int>(i);
+        out.first_div_leg = "hess";
+      }
     }
   }
   return out;
@@ -441,7 +454,8 @@ TraceCert compare_traces(const TraceSnap & c, const TraceSnap & r)
 
 void write_trace_json(FILE * f, const TraceSnap & c, const TraceSnap & r, const TraceCert & t)
 {
-  std::fprintf(f,
+  std::fprintf(
+    f,
     "\"trace\": { \"valid\": %s, \"passes_cpp\": %llu, \"passes_rust\": %llu, "
     "\"structural_match\": %s, \"payload_match\": %s, \"score_match\": %s, "
     "\"grad_match\": %s, \"hess_match\": %s, \"first_div_pass\": %d, "
@@ -452,14 +466,14 @@ void write_trace_json(FILE * f, const TraceSnap & c, const TraceSnap & r, const 
     static_cast<unsigned long long>(r.passes), t.structural ? "true" : "false",
     t.payload ? "true" : "false", t.score ? "true" : "false", t.grad ? "true" : "false",
     t.hess ? "true" : "false", t.first_div_pass, t.first_div_leg,
-    static_cast<unsigned long long>(c.line_search_loops),
-    static_cast<unsigned long long>(c.kd_a), static_cast<unsigned long long>(c.kd_b),
-    static_cast<unsigned long long>(r.kd_a), static_cast<unsigned long long>(t.score_max_ulp),
-    static_cast<unsigned long long>(c.nbr_total), static_cast<unsigned long long>(r.nbr_total));
+    static_cast<unsigned long long>(c.line_search_loops), static_cast<unsigned long long>(c.kd_a),
+    static_cast<unsigned long long>(c.kd_b), static_cast<unsigned long long>(r.kd_a),
+    static_cast<unsigned long long>(t.score_max_ulp), static_cast<unsigned long long>(c.nbr_total),
+    static_cast<unsigned long long>(r.nbr_total));
 }
 
-// Startup self-test: the C++ FNV-1a numeric diagnostics and SHA-256 implementation must reproduce the Rust crate's shared vectors
-// (realtime_ndt_scan_matcher::wcet trace_tests).
+// Startup self-test: the C++ FNV-1a numeric diagnostics and SHA-256 implementation must reproduce
+// the Rust crate's shared vectors (realtime_ndt_scan_matcher::wcet trace_tests).
 bool trace_selftest()
 {
   using ndt_trace::fnv1a_u64;
@@ -475,9 +489,8 @@ bool trace_selftest()
   sha.bytes(kAbc, sizeof(kAbc));
   ndt_trace::Digest digest{};
   static constexpr ndt_trace::Digest kExpected{
-    0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40,
-    0xde, 0x5d, 0xae, 0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17,
-    0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad};
+    0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+    0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad};
   ok = ok && sha.finish(digest) && digest == kExpected;
   if (!ok) std::fprintf(stderr, "trace: digest self-test FAILED (C++/Rust mirror broken)\n");
   return ok;
@@ -512,9 +525,8 @@ BaseAgreement compare_base(
     out.trans_delta_m += dt * dt;
     for (int c = 0; c < 3; ++c) {
       cpp_rotation(r, c) = static_cast<double>(cpp.pose(r, c));
-      rust_rotation(r, c) =
-        static_cast<double>(rust_pose[(static_cast<std::size_t>(r) * 4U) +
-                                      static_cast<std::size_t>(c)]);
+      rust_rotation(r, c) = static_cast<double>(
+        rust_pose[(static_cast<std::size_t>(r) * 4U) + static_cast<std::size_t>(c)]);
     }
   }
   out.trans_delta_m = std::sqrt(out.trans_delta_m);
@@ -522,8 +534,7 @@ BaseAgreement compare_base(
   Eigen::Quaterniond rust_quaternion(rust_rotation);
   cpp_quaternion.normalize();
   rust_quaternion.normalize();
-  const double cosine =
-    std::clamp(std::abs(cpp_quaternion.dot(rust_quaternion)), 0.0, 1.0);
+  const double cosine = std::clamp(std::abs(cpp_quaternion.dot(rust_quaternion)), 0.0, 1.0);
   out.rot_delta_rad = 2.0 * std::acos(cosine);
   out.tp_delta =
     std::abs(static_cast<double>(cpp.transform_probability) - static_cast<double>(rust_tp));
@@ -532,8 +543,7 @@ BaseAgreement compare_base(
     static_cast<double>(rust_nvtl));
   out.match = out.iteration_match && std::isfinite(out.trans_delta_m) &&
               std::isfinite(out.rot_delta_rad) && std::isfinite(out.tp_delta) &&
-              std::isfinite(out.nvtl_delta) &&
-              out.trans_delta_m <= kBaseTranslationToleranceM &&
+              std::isfinite(out.nvtl_delta) && out.trans_delta_m <= kBaseTranslationToleranceM &&
               out.rot_delta_rad <= kBaseRotationToleranceRad &&
               out.tp_delta <= kBaseScoreTolerance && out.nvtl_delta <= kBaseScoreTolerance;
   return out;
@@ -556,8 +566,8 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
   const char * eng_env = std::getenv("WCET_ENGINE");
   const std::string engine_sel = (eng_env != nullptr) ? eng_env : "both";
   if (engine_sel != "both" && engine_sel != "cpp" && engine_sel != "rust") {
-    std::fprintf(stderr, "wcet: WCET_ENGINE must be cpp|rust|both (got '%s')\n",
-      engine_sel.c_str());
+    std::fprintf(
+      stderr, "wcet: WCET_ENGINE must be cpp|rust|both (got '%s')\n", engine_sel.c_str());
     return 1;
   }
   const bool run_cpp = engine_sel != "rust";
@@ -581,20 +591,22 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
   std::fprintf(f, "    \"num_threads\": %d,\n", wcet_threads());
   std::fprintf(f, "    \"clock\": \"steady_clock\",\n");
   std::fprintf(f, "    \"unit\": \"ms\",\n");
-  std::fprintf(
-    f, "    \"alloc_counting\": %s,\n", (hooks.reset && hooks.get) ? "true" : "false");
+  std::fprintf(f, "    \"alloc_counting\": %s,\n", (hooks.reset && hooks.get) ? "true" : "false");
   std::fprintf(f, "    \"engine\": \"%s\",\n", engine_sel.c_str());
   std::fprintf(f, "    \"evict_bytes\": %lld,\n", evict_bytes);
   std::fprintf(f, "    \"cache_condition\": \"%s\",\n", evict_bytes > 0 ? "cold" : "warm");
 #ifdef NDT_TRACE
-  std::fprintf(f, "    \"note\": \"align loop only; map+kdtree built once per engine per fixture\",\n");
+  std::fprintf(
+    f, "    \"note\": \"align loop only; map+kdtree built once per engine per fixture\",\n");
   std::fprintf(f, "    \"trace_digest\": \"SHA-256\",\n");
   std::fprintf(f, "    \"shape_fields\": [\"grid_ordinal\", \"voxel_id\"],\n");
   std::fprintf(
-    f, "    \"payload_fields\": [\"grid_ordinal\", \"voxel_id\", \"mean\", "
-       "\"inverse_covariance\"]\n");
+    f,
+    "    \"payload_fields\": [\"grid_ordinal\", \"voxel_id\", \"mean\", "
+    "\"inverse_covariance\"]\n");
 #else
-  std::fprintf(f, "    \"note\": \"align loop only; map+kdtree built once per engine per fixture\"\n");
+  std::fprintf(
+    f, "    \"note\": \"align loop only; map+kdtree built once per engine per fixture\"\n");
 #endif
   std::fprintf(f, "  },\n");
   std::fprintf(f, "  \"fixtures\": {\n");
@@ -610,7 +622,8 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     // The C++ engine hardcodes outlier_ratio_ = 0.55 (no setter); a fixture with any other value
     // cannot be replayed comparably.
     if (fx.outlier_ratio != 0.55) {
-      std::fprintf(stderr, "wcet: %s: outlier_ratio %.3f != 0.55 (C++ hardcoded)\n", path.c_str(),
+      std::fprintf(
+        stderr, "wcet: %s: outlier_ratio %.3f != 0.55 (C++ hardcoded)\n", path.c_str(),
         fx.outlier_ratio);
       rc = 1;
       continue;
@@ -621,8 +634,8 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     const size_t rust_p_max = wcet_max_source_points(n_src);
     const size_t rust_l_max = wcet_max_active_leaves();
     if (rust_p_max == 0 || rust_l_max == 0 || n_src > rust_p_max) {
-      std::fprintf(stderr,
-        "wcet: %s: invalid Rust limits Pmax=%zu Lmax=%zu for %zu source points\n",
+      std::fprintf(
+        stderr, "wcet: %s: invalid Rust limits Pmax=%zu Lmax=%zu for %zu source points\n",
         path.c_str(), rust_p_max, rust_l_max, n_src);
       rc = 1;
       continue;
@@ -697,10 +710,19 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     float rs_tp = 0.0F;
     float rs_nvtl = 0.0F;
     if (run_rust) {
-      struct AwNdtEngine * eng = autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(
+      struct AwNdtEngine * eng = autoware_ndt_scan_matcher_rs_ndt_engine_new(
         fx.resolution, 6, 0.01, rust_p_max, rust_l_max, fx.max_iterations);
       if (eng == nullptr) {
         std::fprintf(stderr, "wcet: %s: bounded Rust engine construction failed\n", path.c_str());
+        rc = 1;
+        continue;
+      }
+      AwNdtMatchScratch * scratch =
+        autoware_ndt_scan_matcher_rs_ndt_match_scratch_new(rust_p_max, fx.max_iterations);
+      if (scratch == nullptr) {
+        std::fprintf(stderr, "wcet: %s: Rust scratch allocation failed\n", path.c_str());
+        autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
+        autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
         rc = 1;
         continue;
       }
@@ -713,6 +735,7 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
       }
       if (!autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng)) {
         std::fprintf(stderr, "wcet: %s: bounded Rust kd-tree construction failed\n", path.c_str());
+        autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
         autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
         rc = 1;
         continue;
@@ -720,13 +743,14 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
       bool rust_align_ok = true;
       for (int i = 0; i < warmup; ++i) {
         if (!autoware_ndt_scan_matcher_rs_ndt_engine_align(
-              eng, fx.guess16.data(), fx.source.data(), n_src)) {
+              eng, scratch, fx.guess16.data(), fx.source.data(), n_src)) {
           rust_align_ok = false;
           break;
         }
       }
       if (!rust_align_ok) {
         std::fprintf(stderr, "wcet: %s: bounded Rust warm-up alignment failed\n", path.c_str());
+        autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
         autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
         rc = 1;
         continue;
@@ -737,7 +761,7 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
         if (!evict_buf.empty()) evict_caches(evict_buf);
         const auto t0 = Clock::now();
         const bool completed = autoware_ndt_scan_matcher_rs_ndt_engine_align(
-          eng, fx.guess16.data(), fx.source.data(), n_src);
+          eng, scratch, fx.guess16.data(), fx.source.data(), n_src);
         const double elapsed_ms = ms_since(t0);
         if (!completed) {
           rust_align_ok = false;
@@ -747,6 +771,7 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
       }
       if (!rust_align_ok) {
         std::fprintf(stderr, "wcet: %s: bounded Rust measured alignment failed\n", path.c_str());
+        autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
         autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
         rc = 1;
         continue;
@@ -760,18 +785,20 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
       rout.pose = rs_pose.data();
       rout.transform_probability = &rs_tp;
       rout.nearest_voxel_likelihood = &rs_nvtl;
-      autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &rout);
+      autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_result(scratch, &rout);
 #ifdef NDT_TRACE
       if (!autoware_ndt_scan_matcher_rs_ndt_engine_align(
-            eng, fx.guess16.data(), fx.source.data(), n_src)) {
+            eng, scratch, fx.guess16.data(), fx.source.data(), n_src)) {
         std::fprintf(stderr, "wcet: %s: bounded Rust trace alignment failed\n", path.c_str());
+        autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
         autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
         rc = 1;
         continue;
       }
-      trace_rust = snap_rust(eng);
+      trace_rust = snap_rust(scratch);
       have_trace_rust = true;
 #endif
+      autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
       autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
     }
     const bool both = run_cpp && run_rust;
@@ -784,8 +811,8 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     if (both) {
       base = compare_base(cpp_res, rs_iter, rs_pose, rs_tp, rs_nvtl);
       if (!base.match) {
-        std::fprintf(stderr,
-          "wcet: BASE MISMATCH on %s: iter=%s dtrans=%.3e drot=%.3e dtp=%.3e dnvtl=%.3e\n",
+        std::fprintf(
+          stderr, "wcet: BASE MISMATCH on %s: iter=%s dtrans=%.3e drot=%.3e dtp=%.3e dnvtl=%.3e\n",
           path.c_str(), base.iteration_match ? "OK" : "DIFF", base.trans_delta_m,
           base.rot_delta_rad, base.tp_delta, base.nvtl_delta);
         rc = 1;
@@ -799,13 +826,13 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     std::fprintf(f, "      \"n_tiles\": %zu,\n", fx.tiles.size());
     std::fprintf(f, "      \"n_source\": %zu,\n", n_src);
     std::fprintf(f, "      \"max_iterations\": %d,\n", fx.max_iterations);
-    std::fprintf(f,
+    std::fprintf(
+      f,
       "      \"rust_limits\": { \"max_source_points\": %zu, "
       "\"max_active_leaves\": %zu, \"max_iterations\": %d },\n",
       rust_p_max, rust_l_max, fx.max_iterations);
     if (both) {
-      std::fprintf(
-        f, "      \"iter_match\": %s,\n", base.iteration_match ? "true" : "false");
+      std::fprintf(f, "      \"iter_match\": %s,\n", base.iteration_match ? "true" : "false");
       std::fprintf(
         f,
         "      \"cert\": { \"base_match\": %s, \"trans_delta_m\": %.3e, "
@@ -818,7 +845,8 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
         std::fprintf(f, "      ");
         write_trace_json(f, trace_cpp, trace_rust, tc);
         std::fprintf(f, ",\n");
-        std::fprintf(stderr,
+        std::fprintf(
+          stderr,
           "trace: %-18s passes %llu/%llu structural %s score %s grad %s hess %s ls=%llu "
           "kd_cpp=%llu+%llu kd_rust=%llu%s%s\n",
           fixture_stem(path).c_str(), static_cast<unsigned long long>(trace_cpp.passes),
@@ -830,7 +858,8 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
           static_cast<unsigned long long>(trace_rust.kd_a),
           tc.first_div_pass >= 0 ? " first_div=" : "",
           tc.first_div_pass >= 0 ? tc.first_div_leg : "");
-        std::fprintf(stderr, "trace: %-18s score_max_ulp=%llu\n", fixture_stem(path).c_str(),
+        std::fprintf(
+          stderr, "trace: %-18s score_max_ulp=%llu\n", fixture_stem(path).c_str(),
           static_cast<unsigned long long>(tc.score_max_ulp));
         if (!tc.structural) rc = 1;
       }
@@ -856,14 +885,14 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     std::fprintf(f, "\n    }");
 
     if (both) {
-      std::fprintf(stderr,
-        "wcet: %-18s map=%zu src=%zu iter cpp=%d rust=%d %s base %s (dtrans=%.1e)\n",
-        name.c_str(), n_map, n_src, cpp_iter, rs_iter,
-        base.iteration_match ? "OK" : "MISMATCH", base.match ? "OK" : "MISMATCH",
-        base.trans_delta_m);
+      std::fprintf(
+        stderr, "wcet: %-18s map=%zu src=%zu iter cpp=%d rust=%d %s base %s (dtrans=%.1e)\n",
+        name.c_str(), n_map, n_src, cpp_iter, rs_iter, base.iteration_match ? "OK" : "MISMATCH",
+        base.match ? "OK" : "MISMATCH", base.trans_delta_m);
     } else {
-      std::fprintf(stderr, "wcet: %-18s map=%zu src=%zu engine=%s iter=%d\n", name.c_str(),
-        n_map, n_src, engine_sel.c_str(), run_cpp ? cpp_iter : static_cast<int>(rs_iter));
+      std::fprintf(
+        stderr, "wcet: %-18s map=%zu src=%zu engine=%s iter=%d\n", name.c_str(), n_map, n_src,
+        engine_sel.c_str(), run_cpp ? cpp_iter : static_cast<int>(rs_iter));
     }
   }
   std::fprintf(f, "\n  }\n}\n");
@@ -941,8 +970,7 @@ bool read_capture_frame(const std::string & path, CaptureFrame & fr)
     uint64_t n_src = 0;
     if (!read_exact(f, &n_src, 8) || n_src > 50'000'000ULL) break;
     fr.source.resize(static_cast<size_t>(n_src) * 3);
-    if (!fr.source.empty() &&
-        !read_exact(f, fr.source.data(), fr.source.size() * sizeof(float)))
+    if (!fr.source.empty() && !read_exact(f, fr.source.data(), fr.source.size() * sizeof(float)))
       break;
     ok = true;
   } while (false);
@@ -966,10 +994,11 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     const char * seed = std::getenv("WCET_CHAIN_SEED");
     if (seed != nullptr) {
       double v[7] = {0, 0, 0, 0, 0, 0, 1};
-      std::sscanf(seed, "%lf,%lf,%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5],
-        &v[6]);
-      const Eigen::Quaternionf q(static_cast<float>(v[6]), static_cast<float>(v[3]),
-        static_cast<float>(v[4]), static_cast<float>(v[5]));
+      std::sscanf(
+        seed, "%lf,%lf,%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6]);
+      const Eigen::Quaternionf q(
+        static_cast<float>(v[6]), static_cast<float>(v[3]), static_cast<float>(v[4]),
+        static_cast<float>(v[5]));
       chain_guess.topLeftCorner<3, 3>() = q.normalized().toRotationMatrix();
       chain_guess(0, 3) = static_cast<float>(v[0]);
       chain_guess(1, 3) = static_cast<float>(v[1]);
@@ -994,12 +1023,14 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
                                 ? static_cast<std::size_t>(std::strtoull(end_env, nullptr, 10))
                                 : frame_paths.size();
   if (seq_begin > seq_end || seq_end > frame_paths.size()) {
-    std::fprintf(stderr, "capture: invalid seq range [%zu,%zu) for %zu frames\n", seq_begin,
-      seq_end, frame_paths.size());
+    std::fprintf(
+      stderr, "capture: invalid seq range [%zu,%zu) for %zu frames\n", seq_begin, seq_end,
+      frame_paths.size());
     return 1;
   }
-  std::fprintf(stderr, "capture: %zu frames, range [%zu,%zu), %d repeats/frame\n",
-    frame_paths.size(), seq_begin, seq_end, repeats);
+  std::fprintf(
+    stderr, "capture: %zu frames, range [%zu,%zu), %d repeats/frame\n", frame_paths.size(),
+    seq_begin, seq_end, repeats);
 
   // Tile cache: hex id -> (pcl cloud, flat xyz).
   std::map<std::string, std::pair<pcl::PointCloud<pcl::PointXYZ>::Ptr, std::vector<float>>>
@@ -1038,7 +1069,8 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     return 1;
   }
   std::fprintf(f, "{\n  \"schema_version\": 3,\n");
-  std::fprintf(f,
+  std::fprintf(
+    f,
     "  \"rust_limits\": { \"max_source_points\": %zu, \"max_active_leaves\": %zu, "
     "\"max_iterations\": %d },\n  \"frames\": [\n",
     kDefaultMaxSourcePoints, kDefaultMaxActiveLeaves, cp.max_iterations);
@@ -1050,6 +1082,7 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
   std::vector<std::string> cur_ids;
   std::unique_ptr<Ndt> ndt;
   struct AwNdtEngine * eng = nullptr;
+  AwNdtMatchScratch * scratch = nullptr;
   auto aligned = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
 
   for (size_t fi = 0; fi < frame_paths.size(); ++fi) {
@@ -1066,18 +1099,31 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
       // zero-padded numeric names (C++ std::map string order == Rust numeric id order).
       ndt = std::make_unique<Ndt>();
       ndt->setParams(params);
-      if (eng != nullptr) autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
-      eng = autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(cp.resolution, 6, 0.01,
-        kDefaultMaxSourcePoints, kDefaultMaxActiveLeaves, cp.max_iterations);
+      if (eng != nullptr) {
+        autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
+        autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+      }
+      eng = autoware_ndt_scan_matcher_rs_ndt_engine_new(
+        cp.resolution, 6, 0.01, kDefaultMaxSourcePoints, kDefaultMaxActiveLeaves,
+        cp.max_iterations);
       if (eng == nullptr) {
         std::fprintf(stderr, "capture: bounded Rust engine construction failed at frame %zu\n", fi);
         rc = 1;
         cur_ids.clear();
         continue;
       }
+      scratch = autoware_ndt_scan_matcher_rs_ndt_match_scratch_new(
+        kDefaultMaxSourcePoints, cp.max_iterations);
+      if (scratch == nullptr) {
+        std::fprintf(stderr, "capture: Rust scratch allocation failed at frame %zu\n", fi);
+        autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+        eng = nullptr;
+        rc = 1;
+        cur_ids.clear();
+        continue;
+      }
       autoware_ndt_scan_matcher_rs_ndt_engine_set_params(
-        eng, cp.trans_epsilon, cp.step_size, cp.resolution, cp.max_iterations, cp.outlier_ratio,
-        1);
+        eng, cp.trans_epsilon, cp.step_size, cp.resolution, cp.max_iterations, cp.outlier_ratio, 1);
       bool tiles_ok = true;
       for (size_t i = 0; i < fr.ids.size(); ++i) {
         if (!load_tile(fr.ids[i])) {
@@ -1099,7 +1145,8 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
       }
       ndt->createVoxelKdtree();
       if (!autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng)) {
-        std::fprintf(stderr, "capture: bounded Rust kd-tree construction failed at frame %zu\n", fi);
+        std::fprintf(
+          stderr, "capture: bounded Rust kd-tree construction failed at frame %zu\n", fi);
         rc = 1;
         cur_ids.clear();
         continue;
@@ -1117,21 +1164,23 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
           autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
             rmap, e2.second.data(), e2.second.size() / 3, static_cast<uint64_t>(i));
         }
-        autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(rmap);
+        autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(rmap, 418000);
         std::vector<std::array<float, 3>> rustm;
         for (uint32_t i = 0;; ++i) {
           double mean[3];
           double icov[9];
           if (!autoware_ndt_scan_matcher_rs_voxel_grid_map_leaf(rmap, i, mean, icov)) break;
-          rustm.push_back({static_cast<float>(mean[0]), static_cast<float>(mean[1]),
-            static_cast<float>(mean[2])});
+          rustm.push_back(
+            {static_cast<float>(mean[0]), static_cast<float>(mean[1]),
+             static_cast<float>(mean[2])});
         }
         autoware_ndt_scan_matcher_rs_voxel_grid_map_free(rmap);
         // icov comparison: fetch each Rust leaf's C++ counterpart via a tiny radiusSearch on a
         // standalone MultiVoxelGridCovariance built exactly as the NDT builds its target cells.
         {
           pclomp::MultiVoxelGridCovariance<pcl::PointXYZ> mv;
-          mv.setLeafSize(static_cast<float>(cp.resolution), static_cast<float>(cp.resolution),
+          mv.setLeafSize(
+            static_cast<float>(cp.resolution), static_cast<float>(cp.resolution),
             static_cast<float>(cp.resolution));
           for (size_t i = 0; i < fr.ids.size(); ++i) {
             const auto & e2 = tile_cache.at(hex_of(fr.ids[i]));
@@ -1140,14 +1189,14 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
             mv.setInputCloudAndFilter(e2.first, name);
           }
           mv.createKdtree();
-          struct AwNdtVoxelGridMap * rmap2 = autoware_ndt_scan_matcher_rs_voxel_grid_map_new(
-            leaf3, 6, 0.01);
+          struct AwNdtVoxelGridMap * rmap2 =
+            autoware_ndt_scan_matcher_rs_voxel_grid_map_new(leaf3, 6, 0.01);
           for (size_t i = 0; i < fr.ids.size(); ++i) {
             const auto & e2 = tile_cache.at(hex_of(fr.ids[i]));
             autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
               rmap2, e2.second.data(), e2.second.size() / 3, static_cast<uint64_t>(i));
           }
-          autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(rmap2);
+          autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(rmap2, 418000);
           size_t checked = 0, icov_exact = 0, icov_small = 0, icov_big = 0, mean_exact = 0;
           double worst = 0.0;
           for (uint32_t i = 0; i < 400000U; ++i) {
@@ -1175,12 +1224,16 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
                 const double denom = std::max(std::abs(a), 1e-12);
                 rel = std::max(rel, std::abs(a - b) / denom);
               }
-            if (exact) ++icov_exact;
-            else if (rel < 1e-6) ++icov_small;
-            else ++icov_big;
+            if (exact)
+              ++icov_exact;
+            else if (rel < 1e-6)
+              ++icov_small;
+            else
+              ++icov_big;
             worst = std::max(worst, rel);
           }
-          std::fprintf(stderr,
+          std::fprintf(
+            stderr,
             "DUMP icov: checked=%zu mean_exact=%zu icov_exact=%zu small(<1e-6)=%zu big=%zu "
             "worst_rel=%.3e\n",
             checked, mean_exact, icov_exact, icov_small, icov_big, worst);
@@ -1224,15 +1277,15 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
               } else {
                 ++k_diff;
                 if (k_diff <= 3) {
-                  std::fprintf(stderr,
-                    "  nbr-diff at pt %zu: cpp K=%zu rust K=%u (query %.6f,%.6f,%.6f)\n", pi / 3,
-                    ls.size(), rk, static_cast<double>(q.x), static_cast<double>(q.y),
+                  std::fprintf(
+                    stderr, "  nbr-diff at pt %zu: cpp K=%zu rust K=%u (query %.6f,%.6f,%.6f)\n",
+                    pi / 3, ls.size(), rk, static_cast<double>(q.x), static_cast<double>(q.y),
                     static_cast<double>(q.z));
                 }
               }
             }
-            std::fprintf(stderr,
-              "DUMP nbr: pts=%zu K-equal=%zu set-equal=%zu K-diff=%zu\n", pts, k_equal,
+            std::fprintf(
+              stderr, "DUMP nbr: pts=%zu K-equal=%zu set-equal=%zu K-diff=%zu\n", pts, k_equal,
               set_equal, k_diff);
           }
           autoware_ndt_scan_matcher_rs_voxel_grid_map_free(rmap2);
@@ -1243,14 +1296,15 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
         for (size_t i = 0; i < std::min(cppm.size(), rustm.size()); ++i) {
           if (std::memcmp(cppm[i].data(), rustm[i].data(), 12) != 0) ++diff;
         }
-        std::fprintf(stderr, "DUMP map: cpp leaves=%zu rust leaves=%zu mean-mismatches=%zu\n",
-          cppm.size(), rustm.size(), diff);
+        std::fprintf(
+          stderr, "DUMP map: cpp leaves=%zu rust leaves=%zu mean-mismatches=%zu\n", cppm.size(),
+          rustm.size(), diff);
         if (diff > 0) {
-          for (size_t i = 0, shown = 0; i < std::min(cppm.size(), rustm.size()) && shown < 3;
-               ++i) {
+          for (size_t i = 0, shown = 0; i < std::min(cppm.size(), rustm.size()) && shown < 3; ++i) {
             if (std::memcmp(cppm[i].data(), rustm[i].data(), 12) != 0) {
-              std::fprintf(stderr, "  leaf %zu: cpp (%.9g,%.9g,%.9g) rust (%.9g,%.9g,%.9g)\n", i,
-                cppm[i][0], cppm[i][1], cppm[i][2], rustm[i][0], rustm[i][1], rustm[i][2]);
+              std::fprintf(
+                stderr, "  leaf %zu: cpp (%.9g,%.9g,%.9g) rust (%.9g,%.9g,%.9g)\n", i, cppm[i][0],
+                cppm[i][1], cppm[i][2], rustm[i][0], rustm[i][1], rustm[i][2]);
               ++shown;
             }
           }
@@ -1288,7 +1342,7 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     for (int k = 0; k < repeats; ++k) {
       const auto t0 = Clock::now();
       const bool completed = autoware_ndt_scan_matcher_rs_ndt_engine_align(
-        eng, fr.guess16.data(), fr.source.data(), n_src);
+        eng, scratch, fr.guess16.data(), fr.source.data(), n_src);
       const double elapsed_ms = ms_since(t0);
       if (!completed) {
         rust_align_ok = false;
@@ -1297,8 +1351,8 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
       rs_ms_v.push_back(elapsed_ms);
     }
     if (!rust_align_ok) {
-      std::fprintf(stderr,
-        "capture: bounded Rust alignment failed at frame %zu (source=%zu, Pmax=%zu)\n", fi,
+      std::fprintf(
+        stderr, "capture: bounded Rust alignment failed at frame %zu (source=%zu, Pmax=%zu)\n", fi,
         n_src, kDefaultMaxSourcePoints);
       rc = 1;
       continue;
@@ -1312,10 +1366,10 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
       const auto res = ndt->getResult();
       std::vector<float> rtp(64), rnvl(64);
       uint32_t rcount = 0;
-      autoware_ndt_scan_matcher_rs_ndt_engine_get_score_arrays(
-        eng, rtp.data(), rnvl.data(), 64, &rcount);
-      std::fprintf(stderr, "DUMP frame %zu: cpp iters=%d rust iters(arrays)=%u\n", fi, cpp_iter,
-        rcount);
+      autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_score_arrays(
+        scratch, rtp.data(), rnvl.data(), 64, &rcount);
+      std::fprintf(
+        stderr, "DUMP frame %zu: cpp iters=%d rust iters(arrays)=%u\n", fi, cpp_iter, rcount);
       // First-step pose fork: translation delta between engines after Newton step 1.
       {
         std::vector<float> rtf(16 * 40);
@@ -1324,7 +1378,7 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
         ro2.transformation_array = rtf.data();
         ro2.transforms_cap = 40;
         ro2.transforms_count = &rtn;
-        autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &ro2);
+        autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_result(scratch, &ro2);
         if (!res.transformation_array.empty() && rtn > 0) {
           const auto & cp1 = res.transformation_array[0];
           const double dx = static_cast<double>(cp1(0, 3)) - static_cast<double>(rtf[3]);
@@ -1336,9 +1390,8 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
       const size_t n_it =
         std::max(res.transform_probability_array.size(), static_cast<size_t>(rcount));
       for (size_t i = 0; i < n_it; ++i) {
-        const float ct = i < res.transform_probability_array.size()
-                           ? res.transform_probability_array[i]
-                           : -1.0F;
+        const float ct =
+          i < res.transform_probability_array.size() ? res.transform_probability_array[i] : -1.0F;
         const float cn = i < res.nearest_voxel_transformation_likelihood_array.size()
                            ? res.nearest_voxel_transformation_likelihood_array[i]
                            : -1.0F;
@@ -1348,10 +1401,16 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
         uint32_t rtb;
         std::memcpy(&ctb, &ct, 4);
         std::memcpy(&rtb, &rt, 4);
-        std::fprintf(stderr,
+        std::fprintf(
+          stderr,
           "  it %2zu: tp cpp=%.9e rust=%.9e %s (bits %08x/%08x)  nvl cpp=%.9e rust=%.9e %s\n", i,
           ct, rt, (ctb == rtb ? "==" : "DIFF"), ctb, rtb, cn, rn,
-          ([&] { uint32_t a, b; std::memcpy(&a, &cn, 4); std::memcpy(&b, &rn, 4); return a == b; }()
+          ([&] {
+            uint32_t a, b;
+            std::memcpy(&a, &cn, 4);
+            std::memcpy(&b, &rn, 4);
+            return a == b;
+          }()
              ? "=="
              : "DIFF"));
       }
@@ -1365,7 +1424,7 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     rout.pose = rs_pose.data();
     rout.transform_probability = &rs_tp;
     rout.nearest_voxel_likelihood = &rs_nvtl;
-    autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &rout);
+    autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_result(scratch, &rout);
     if (chain) {
       Eigen::Matrix4f pose = Eigen::Matrix4f::Identity();
       for (int r = 0; r < 4; ++r)
@@ -1378,19 +1437,20 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     const BaseAgreement base = compare_base(cpp_result, rs_iter, rs_pose, rs_tp, rs_nvtl);
     if (!base.iteration_match) ++mismatches;
 
-    std::fprintf(f,
+    std::fprintf(
+      f,
       "%s    { \"seq\": %zu, \"n_source\": %zu, \"n_tiles\": %zu, \"cpp_ms\": %.4f, "
       "\"rust_ms\": %.4f, \"iter_cpp\": %d, \"iter_rust\": %d, "
       "\"iteration_match\": %s, \"base_match\": %s, \"trans_delta_m\": %.9e, "
       "\"rot_delta_rad\": %.9e, \"tp_delta\": %.9e, \"nvtl_delta\": %.9e",
       (first ? "" : ",\n"), fi, n_src, fr.ids.size(), cpp_ms_v[cpp_ms_v.size() / 2],
-      rs_ms_v[rs_ms_v.size() / 2], cpp_iter, rs_iter,
-      base.iteration_match ? "true" : "false", base.match ? "true" : "false",
-      base.trans_delta_m, base.rot_delta_rad, base.tp_delta, base.nvtl_delta);
+      rs_ms_v[rs_ms_v.size() / 2], cpp_iter, rs_iter, base.iteration_match ? "true" : "false",
+      base.match ? "true" : "false", base.trans_delta_m, base.rot_delta_rad, base.tp_delta,
+      base.nvtl_delta);
 #ifdef NDT_TRACE
     {
       const TraceSnap tc_cpp = snap_cpp();
-      const TraceSnap tc_rust = snap_rust(eng);
+      const TraceSnap tc_rust = snap_rust(scratch);
       const TraceCert tc = compare_traces(tc_cpp, tc_rust);
       std::fprintf(f, ", ");
       write_trace_json(f, tc_cpp, tc_rust, tc);
@@ -1399,11 +1459,15 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     std::fprintf(f, " }");
     first = false;
   }
-  if (eng != nullptr) autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+  if (eng != nullptr) {
+    autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
+    autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+  }
   std::fprintf(f, "\n  ]\n}\n");
   std::fclose(f);
-  std::fprintf(stderr, "capture: %zu epochs, %zu iteration mismatches -> %s\n", epochs,
-    mismatches, out_path.c_str());
+  std::fprintf(
+    stderr, "capture: %zu epochs, %zu iteration mismatches -> %s\n", epochs, mismatches,
+    out_path.c_str());
   return (rc != 0 || mismatches > 0) ? 1 : 0;
 }
 }  // namespace
@@ -1486,23 +1550,32 @@ int main(int argc, char ** argv)
   const int cpp_iter = ndt.getResult().iteration_num;
 
   // ---- Rust engine (over the C ABI): build map once, time the align loop ----
-  struct AwNdtEngine * eng = autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(
-    2.0, 6, 0.01, n_pts, kDefaultMaxActiveLeaves, 30);
+  struct AwNdtEngine * eng =
+    autoware_ndt_scan_matcher_rs_ndt_engine_new(2.0, 6, 0.01, n_pts, kDefaultMaxActiveLeaves, 30);
   if (eng == nullptr) {
     std::fprintf(stderr, "ndt_bench_replay: bounded Rust engine construction failed\n");
+    return 1;
+  }
+  AwNdtMatchScratch * scratch = autoware_ndt_scan_matcher_rs_ndt_match_scratch_new(n_pts, 30);
+  if (scratch == nullptr) {
+    std::fprintf(stderr, "ndt_bench_replay: Rust scratch allocation failed\n");
+    autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
+    autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
     return 1;
   }
   autoware_ndt_scan_matcher_rs_ndt_engine_set_params(eng, 0.01, 0.1, 2.0, 30, 0.55, 1);
   autoware_ndt_scan_matcher_rs_ndt_engine_add_target(eng, target_flat.data(), n_pts, 0);
   if (!autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng)) {
     std::fprintf(stderr, "ndt_bench_replay: bounded Rust kd-tree construction failed\n");
+    autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
     autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
     return 1;
   }
   for (int i = 0; i < warmup; ++i) {
     if (!autoware_ndt_scan_matcher_rs_ndt_engine_align(
-          eng, guess16.data(), source_flat.data(), n_pts)) {
+          eng, scratch, guess16.data(), source_flat.data(), n_pts)) {
       std::fprintf(stderr, "ndt_bench_replay: bounded Rust warm-up alignment failed\n");
+      autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
       autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
       return 1;
     }
@@ -1512,10 +1585,11 @@ int main(int argc, char ** argv)
   for (int i = 0; i < iters; ++i) {
     const auto t0 = Clock::now();
     const bool completed = autoware_ndt_scan_matcher_rs_ndt_engine_align(
-      eng, guess16.data(), source_flat.data(), n_pts);
+      eng, scratch, guess16.data(), source_flat.data(), n_pts);
     const double elapsed_ms = ms_since(t0);
     if (!completed) {
       std::fprintf(stderr, "ndt_bench_replay: bounded Rust measured alignment failed\n");
+      autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
       autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
       return 1;
     }
@@ -1524,7 +1598,8 @@ int main(int argc, char ** argv)
   int32_t rs_iter = 0;
   AwNdtAlignOutput rout{};
   rout.iteration_num = &rs_iter;
-  autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &rout);
+  autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_result(scratch, &rout);
+  autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);
   autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
 
   // ---- emit JSON ----
@@ -1547,10 +1622,18 @@ int main(int argc, char ** argv)
   std::fprintf(f, "    \"note\": \"align loop only; map+kdtree built once per engine\"\n");
   std::fprintf(f, "  },\n");
   std::fprintf(f, "  \"engines\": {\n");
-  std::fprintf(f, "    \"cpp\": { \"label\": \"C++ (multigrid_ndt_omp)\", \"iteration_num\": %d, \"samples_ms\": ", cpp_iter);
+  std::fprintf(
+    f,
+    "    \"cpp\": { \"label\": \"C++ (multigrid_ndt_omp)\", \"iteration_num\": %d, "
+    "\"samples_ms\": ",
+    cpp_iter);
   write_samples(f, cpp_ms);
   std::fprintf(f, " },\n");
-  std::fprintf(f, "    \"rust\": { \"label\": \"Rust (autoware_ndt_scan_matcher_rs)\", \"iteration_num\": %d, \"samples_ms\": ", rs_iter);
+  std::fprintf(
+    f,
+    "    \"rust\": { \"label\": \"Rust (autoware_ndt_scan_matcher_rs)\", \"iteration_num\": %d, "
+    "\"samples_ms\": ",
+    rs_iter);
   write_samples(f, rs_ms);
   std::fprintf(f, " }\n");
   std::fprintf(f, "  }\n");
@@ -1558,7 +1641,7 @@ int main(int argc, char ** argv)
   std::fclose(f);
 
   std::fprintf(
-    stderr, "ndt_bench_replay: %zu pts, %d aligns/engine (+%d warmup) -> %s\n", n_pts, iters, warmup,
-    out_path.c_str());
+    stderr, "ndt_bench_replay: %zu pts, %d aligns/engine (+%d warmup) -> %s\n", n_pts, iters,
+    warmup, out_path.c_str());
   return 0;
 }

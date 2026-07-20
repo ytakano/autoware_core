@@ -15,20 +15,18 @@ its book.
 - `ffi_host.rs` — the `AwHost` ROS side-effects vtable (clock / log / TF) + `AwStr` / `AwPose`;
   the C-ABI adapter for the engine's portable `Host` seam.
 - `ffi_matrix.rs` — shared row-major matrix marshaling (chunked-slice based, no index arithmetic).
-- `ffi_engine.rs` / `ffi_ndt.rs` — C-ABI shims over `NdtEngine` and `ndt::align`.
-- `ffi_covariance.rs` / `ffi_cov_estimate.rs` — C-ABI shims over the covariance math + estimation.
+- `ffi_engine.rs` — bounded C-ABI handles for `NdtEngine` and caller-owned `MatchScratch`.
+- `ffi_covariance.rs` — stateless C-ABI shims over covariance math.
 - `ffi_tpe.rs` / `ffi_voxel_grid.rs` — C-ABI shims over the TPE search and the voxel grid.
 
 ## `std` ROS node shell
 
 - `node.rs` — thin pose/trigger callbacks + convergence FFI.
-- `node_handle.rs` — the opaque `NdtScanMatcherRs` handle, `Params` / `AwNdtParams`, node state.
-- `node_map_update.rs` — the map-source vtable that drives the engine's `apply_map_update`
-  (`MapSource` port) from C++.
+- `node_handle.rs` — the opaque `NdtScanMatcherRs` handle, validated `Params` / `AwNdtParams`, and
+  node state.
+- `node_map_update.rs` — status-returning staged map publication over the `MapSource` vtable.
 - `node_align_service.rs` — the align-service decisions + the Rust-owned TPE search + trace ABI.
 - `sensor_points.rs` — the sensor-callback prologue (decode / TF / transform / validation).
-- `helper_ros.rs` — ROS-gated `geometry_msgs::Pose` glue bridging to
-  `realtime_ndt_scan_matcher::helper` (`ros` feature).
 
 ## Generated
 

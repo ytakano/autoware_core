@@ -12,7 +12,7 @@ The engine holds its mutable state behind interior-mutability cells:
 - **`EngineState`** — the target `VoxelGridMap`, the `NdtParams`, the convergence params, the
   covariance config, and the cell-id → tile-id mapping.
 - **regularization** — a tiny separate cell, so setting it per frame never clones the map.
-- **align scratch** — the reused workspace + last result (see [MatchScratch](scratch.md)).
+- **align scratch** — caller-owned mutable workspace and result storage, not part of engine state (see [MatchScratch](scratch.md)).
 
 The config API is a set of `&self` setters that publish new state: `set_params`,
 `set_convergence_params`, `set_covariance_config`, `set_regularization`. Map lifecycle:
@@ -26,8 +26,8 @@ decision; the full treatment is in [Concurrency and interior mutability](concurr
 
 | Build | Cell | Read/align path | Scratch | `Sync` |
 |---|---|---|---|---|
-| **std** (default) | `ArcSwap<EngineState>` | `load` an immutable snapshot **lock-free** | thread-local | yes |
-| **`no_std` single-core** | `RefCell<Arc<…>>` | borrow | engine-owned | **no** |
+| **std** (default) | `ArcSwap<EngineState>` | `load` an immutable snapshot **lock-free** | caller-owned | yes |
+| **`no_std` single-core** | `RefCell<Arc<…>>` | borrow | caller-owned | **no** |
 | **`no_std` `mt`** | `awkernel_sync::Mutex<Arc<…>>` | short critical section (refcount bump) | **caller-owned** | yes |
 
 Key properties in the concurrent configs (std, `mt`):

@@ -495,16 +495,6 @@ impl VoxelGridMap {
         Ok(total_leaves)
     }
 
-    /// Effectively unbounded control-plane compatibility wrapper.
-    ///
-    /// Deployment code uses [`Self::try_create_kdtree`] through an engine with an explicit `Lmax`.
-    /// # Errors
-    /// Returns the errors documented by [`Self::try_create_kdtree`], except that this wrapper does
-    /// not impose a practical leaf-admission limit.
-    pub fn create_kdtree(&mut self) -> Result<usize, MapBuildError> {
-        self.try_create_kdtree(usize::MAX)
-    }
-
     /// Flat indices of leaves whose centroid is within `radius` of `point` (needs `create_kdtree`).
     ///
     /// # Arguments
@@ -730,7 +720,7 @@ mod tests {
         let mut map = VoxelGridMap::new([2.0, 2.0, 2.0], 6, 0.01);
         map.add_target(&dense_cluster(1.0, 1.0, 1.0), 0);
         map.add_target(&dense_cluster(21.0, 1.0, 1.0), 1);
-        map.create_kdtree().expect("build kd-tree");
+        map.try_create_kdtree(418_000).expect("build kd-tree");
 
         let mut hits = alloc::vec::Vec::new();
         map.radius_search([1.0, 1.0, 1.0], 1.5, 0, &mut hits)
@@ -752,7 +742,7 @@ mod tests {
         map.add_target(&dense_cluster(1.0, 1.0, 1.0), 0);
         map.add_target(&dense_cluster(21.0, 1.0, 1.0), 1);
         map.remove_target(0);
-        map.create_kdtree().expect("build kd-tree");
+        map.try_create_kdtree(418_000).expect("build kd-tree");
 
         let mut a = alloc::vec::Vec::new();
         map.radius_search([1.0, 1.0, 1.0], 1.5, 0, &mut a)
@@ -790,7 +780,7 @@ mod tests {
                 id += 1;
             }
         }
-        map.create_kdtree().expect("build kd-tree");
+        map.try_create_kdtree(418_000).expect("build kd-tree");
 
         // Deterministic queries spanning the populated region.
         let mut state = 0x9E37_79B9_u64;

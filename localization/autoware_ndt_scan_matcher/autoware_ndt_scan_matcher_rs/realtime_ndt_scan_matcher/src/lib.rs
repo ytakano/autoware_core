@@ -29,7 +29,7 @@
 //! - [`ndt::align`] — the RT-critical, WCET-bounded alignment kernel the engine drives.
 //! - [`tpe::TreeStructuredParzenEstimator`] — the align-service pose-search sampler.
 //!
-//! Deployment code constructs an engine with [`engine::NdtEngine::new_with_limits`]. Its immutable
+//! Deployment code constructs an engine with [`engine::NdtEngine::new`]. Its immutable
 //! work envelope contains the maximum source-point count (`Pmax`), maximum published active-leaf
 //! count (`Lmax`), and maximum Newton iterations (`Imax`, constrained to `0..=30`). `Pmax` sizes and
 //! checks caller-owned scratch; `Lmax` is a map-admission bound, not a reservation of `Lmax` leaves.
@@ -43,12 +43,12 @@
 //!
 //! | Feature | Default | Effect |
 //! |---|---|---|
-//! | `std` | yes | Host build: lock-free `ArcSwap` engine state + thread-local align scratch; the engine is `Sync`. |
+//! | `std` | yes | Host build: lock-free `ArcSwap` engine state + caller-owned [`engine::MatchScratch`]; the engine is `Sync`. |
 //! | `parallel` | yes | rayon-backed derivative reduction (implies `std`); bit-identical to serial, a pure throughput option. |
-//! | `mt` | no | Multi-core `no_std` (kernel): `awkernel_sync` mutex cells + **caller-owned** [`engine::MatchScratch`] (the implicit-scratch align API is compiled out); engine is `Sync`. Ignored when `std` is on. |
+//! | `mt` | no | Multi-core `no_std` (kernel): `awkernel_sync` mutex cells + caller-owned [`engine::MatchScratch`]; engine is `Sync`. Ignored when `std` is on. |
 //!
 //! With **no** features (`--no-default-features`) the engine is a single-core `no_std` build
-//! (`RefCell` cells, engine-owned scratch, intentionally `!Sync`). See the [`engine`] module docs for
+//! (`RefCell` state cells, caller-owned scratch, intentionally `!Sync`). See the [`engine`] module docs for
 //! the full interior-mutability matrix.
 //!
 //! # Example
@@ -60,7 +60,7 @@
 //! use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 //!
 //! // Empty engine: 2.0 m voxels; `MultiVoxelGridCovariance` defaults (min 6 points / eig 0.01).
-//! let engine = NdtEngine::new_with_limits(2.0, 6, 0.01, 64, 64, 30)
+//! let engine = NdtEngine::new(2.0, 6, 0.01, 64, 64, 30)
 //!     .expect("valid work envelope");
 //!
 //! // Register a target map tile (id 0) and build the kd-tree over the voxel centroids.
@@ -124,15 +124,6 @@ pub mod wcet;
 /// identities match the engine's — a locally pinned `nalgebra` of a different version would be a
 /// distinct, incompatible type.
 pub use nalgebra;
-
-/// Saturating `left + right` — a trivial build/link smoke test.
-///
-/// # Arguments
-/// * `left`, `right` — the addends; the sum saturates at [`u64::MAX`] instead of overflowing.
-#[must_use]
-pub fn add(left: u64, right: u64) -> u64 {
-    left.saturating_add(right)
-}
 
 /// Per-worker CPU-affinity plan for the `parallel` pool, resolved once from the environment.
 ///
@@ -326,11 +317,6 @@ fn pin_worker_to_cpuset(_idx: usize) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn it_works() {
-        assert_eq!(add(2, 2), 4);
-    }
 
     #[cfg(feature = "parallel")]
     #[test]

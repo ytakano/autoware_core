@@ -108,7 +108,7 @@ impl AlignDiagnostics {
 /// before entering the real-time path; alignment rejects rather than grows undersized scratch. The
 /// serial backend is allocation-free inside a correctly sized workspace. The parallel backend may
 /// allocate worker-local buffers and is outside that claim.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AlignWorkspace {
     neighbor_idx: Vec<usize>,
     trans_cloud: Vec<[f32; 3]>,
@@ -130,29 +130,8 @@ pub struct AlignWorkspace {
 }
 
 impl AlignWorkspace {
-    /// Empty compatibility workspace. Any non-empty alignment requires
-    /// [`Self::try_with_capacity`]; the kernel rejects rather than grows this workspace.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            neighbor_idx: Vec::new(),
-            trans_cloud: Vec::new(),
-            max_points: 0,
-            diagnostics: AlignDiagnostics {
-                neighbor_limit_exceeded: false,
-                neighbor_limit_exceeded_queries: 0,
-            },
-            #[cfg(feature = "parallel")]
-            contribs: Vec::new(),
-            #[cfg(feature = "wcet-count")]
-            counters: crate::wcet::WcetCounters::new(),
-            #[cfg(feature = "wcet-trace")]
-            trace: crate::wcet::AlignTrace::new(),
-        }
-    }
-
     /// A workspace pre-reserved for clouds of up to `max_points`. In the serial backend, no frame
-    /// allocates, including the first; [`Self::new`] is only an empty compatibility workspace.
+    /// allocates, including the first.
     /// # Errors
     /// Returns [`AlignError::WorkspaceCapacityExceeded`] if a reservation fails.
     pub fn try_with_capacity(max_points: usize) -> Result<Self, AlignError> {
@@ -1045,7 +1024,7 @@ fn validate_align_inputs(
 /// - rt-core (this runtime path) vs control-plane (map build/update) — the map is read-only here.
 ///
 /// # Arguments
-/// * `map` — the target voxel-grid map with its kd-tree already built ([`VoxelGridMap::create_kdtree`]).
+/// * `map` — the target voxel-grid map with its kd-tree already built ([`VoxelGridMap::try_create_kdtree`]).
 /// * `source` — the sensor cloud to align, in the `base_link` frame (`[x, y, z]`, metres).
 /// * `guess` — initial pose estimate as a 4×4 homogeneous transform (the C++ `Matrix4f` guess).
 /// * `params` — alignment parameters (resolution, epsilon, step size, iteration cap, …).
@@ -1062,7 +1041,7 @@ fn validate_align_inputs(
 /// let mut map = VoxelGridMap::new([2.0; 3], 6, 0.01);
 /// let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
 /// map.add_target(&target, 0);
-/// map.create_kdtree().expect("build kd-tree");
+/// map.try_create_kdtree(418_000).expect("build kd-tree");
 ///
 /// let params = NdtParams { resolution: 2.0, max_iterations: 30, ..NdtParams::default() };
 /// let mut ws = AlignWorkspace::try_with_capacity(target.len()).expect("reserve workspace");
@@ -1256,7 +1235,7 @@ mod tests {
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
         map.add_target(&dense_cluster(0.5, 0.5, 0.5), 0);
         map.add_target(&dense_cluster(2.5, 0.5, 0.5), 1);
-        map.create_kdtree().expect("build kd-tree");
+        map.try_create_kdtree(418_000).expect("build kd-tree");
         map
     }
 
@@ -1285,7 +1264,7 @@ mod tests {
         g: &GaussConstants,
     ) -> f64 {
         let mut s = 0.0_f64;
-        let mut ws = AlignWorkspace::new();
+        let mut ws = AlignWorkspace::try_with_capacity(2_000).expect("reserve workspace");
         for &sp in source {
             let xt = transform_point(p, &vec3(sp));
             let q = [xt[0] as f32, xt[1] as f32, xt[2] as f32];
@@ -1314,7 +1293,7 @@ mod tests {
         let p = Vector6::new(0.05, -0.03, 0.02, 0.04, -0.02, 0.03);
 
         let trans = transform_cloud(&source, &p);
-        let mut ws = AlignWorkspace::new();
+        let mut ws = AlignWorkspace::try_with_capacity(2_000).expect("reserve workspace");
         let d = compute_derivatives(
             &map,
             &source,
@@ -1391,7 +1370,7 @@ mod tests {
         let p = Vector6::new(0.05, -0.03, 0.02, 0.04, -0.02, 0.03);
         let trans = transform_cloud(&source, &p);
 
-        let mut ws = AlignWorkspace::new();
+        let mut ws = AlignWorkspace::try_with_capacity(2_000).expect("reserve workspace");
         let d = compute_derivatives(
             &map,
             &source,
@@ -1428,7 +1407,7 @@ mod tests {
         let map = test_map();
         let g = gauss_constants(0.55, 1.0);
         let p = Vector6::zeros();
-        let mut ws = AlignWorkspace::new();
+        let mut ws = AlignWorkspace::try_with_capacity(2_000).expect("reserve workspace");
 
         // Empty cloud.
         let d = compute_derivatives(
@@ -1495,7 +1474,7 @@ mod tests {
         let g = gauss_constants(0.55, 1.0);
         let p = Vector6::new(0.05, -0.03, 0.02, 0.04, -0.02, 0.03);
         let trans = transform_cloud(&source, &p);
-        let mut ws = AlignWorkspace::new();
+        let mut ws = AlignWorkspace::try_with_capacity(2_000).expect("reserve workspace");
 
         let d_none = compute_derivatives(
             &map,
@@ -1541,7 +1520,7 @@ mod tests {
         let g = gauss_constants(0.55, 1.0);
         let p = Vector6::new(0.05, -0.03, 0.02, 0.04, -0.02, 0.03);
         let trans = transform_cloud(&source, &p);
-        let mut ws = AlignWorkspace::new();
+        let mut ws = AlignWorkspace::try_with_capacity(2_000).expect("reserve workspace");
 
         let d_none = compute_derivatives(
             &map,
@@ -1600,7 +1579,7 @@ mod tests {
         }
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
         map.add_target(&pts, 0);
-        map.create_kdtree().expect("build kd-tree");
+        map.try_create_kdtree(418_000).expect("build kd-tree");
         (map, pts)
     }
 

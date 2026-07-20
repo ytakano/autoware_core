@@ -16,15 +16,14 @@
 // (autoware_ndt_scan_matcher_rs_node_estimate_pose_covariance) assembles rotate + dispatch +
 // scale + adjust against the live engine map. It is checked against a hand-composition built from
 // the same map/source setup: pclomp::estimate_xy_covariance_by_multi_ndt +
-// adjust_diagonal_covariance + the
-// Rust rotate_covariance FFI. This pins the C++ marshaling
+// adjust_diagonal_covariance. This pins the C++ marshaling
 // (pose/hessian/offsets/output_cov -> FFI) and the publish-kind asymmetry. The cov math itself is
-// differential-tested vs pure C++ in test_estimate_covariance_multi.
+// differential-tested vs pure C++ in the pure Rust covariance tests.
 
-#include <autoware/ndt_scan_matcher/ndt_omp/estimate_covariance.hpp>
 #include "autoware_ndt_scan_matcher_rs.h"
 
 #include <Eigen/Core>
+#include <autoware/ndt_scan_matcher/ndt_omp/estimate_covariance.hpp>
 
 #include <gtest/gtest.h>
 #include <pcl/point_cloud.h>
@@ -67,7 +66,10 @@ pclomp::NdtParams make_params()
 class RustEngine
 {
 public:
-  RustEngine() : handle_(autoware_ndt_scan_matcher_rs_ndt_engine_new(2.0, 6, 0.01)) {}
+  RustEngine()
+  : handle_(autoware_ndt_scan_matcher_rs_ndt_engine_new(2.0, 6, 0.01, 2000, 418000, 30))
+  {
+  }
 
   ~RustEngine() { autoware_ndt_scan_matcher_rs_ndt_engine_free(handle_); }
 
@@ -268,8 +270,8 @@ TEST(EstimatePoseCovariance, MultiNdtMatchesComposition)  // NOLINT
     pclomp::estimate_xy_covariance_by_multi_ndt(ndt_result, cpp, poses, source);
   const Eigen::Matrix2d adj = pclomp::adjust_diagonal_covariance(
     ref.covariance * scale, ndt_result.pose, output_cov[0], output_cov[7]);
-  std::array<double, 36> expected{};
-  autoware_ndt_scan_matcher_rs_rotate_covariance(output_cov.data(), kRotId.data(), expected.data());
+  // kRotId is the identity, so the independently configured covariance is unchanged.
+  std::array<double, 36> expected = output_cov;
   expected[0] = adj(0, 0);
   expected[7] = adj(1, 1);
   expected[1] = adj(1, 0);
@@ -280,7 +282,7 @@ TEST(EstimatePoseCovariance, MultiNdtMatchesComposition)  // NOLINT
   EXPECT_EQ(ic, kOffsetX.size() + 1);  // main + per-candidate initial poses
   // The non-2x2 entries are the rotated configured covariance (identity rotation → exact). The
   // 2x2 block matches within the established multi-NDT cov tolerance
-  // (test_estimate_covariance_multi): abs(diff) <= 5e-2 + 0.2*abs(expected). The two
+  // (the pure Rust covariance tests): abs(diff) <= 5e-2 + 0.2*abs(expected). The two
   // estimators are not bit-identical.
   for (int i = 0; i < 36; ++i) {
     const bool in_xy_block = (i == 0 || i == 1 || i == 6 || i == 7);

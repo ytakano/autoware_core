@@ -25,8 +25,7 @@
 //!
 //! Map publication is staged. If the resulting active map exceeds the engine's configured `Lmax`,
 //! or tree construction otherwise fails, the staged state is discarded and the previously
-//! published map remains available. The legacy void C ABI below does not report that failure to its
-//! caller; status-returning object-level entry points should be used when rejection must be observed.
+//! published map remains available. The C ABI returns whether staging and publication completed.
 
 use core::ffi::c_void;
 use core::future::Future;
@@ -156,13 +155,13 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_map_delta_remove(
 /// portable [`apply_map_update`] (staging engine + `commit_from`). `rebuild != 0` starts staging empty
 /// (drops the current tiles in the staging engine); otherwise it is incremental. A staged map that
 /// exceeds `Lmax`, or cannot be built, is not committed, so the currently published map remains
-/// unchanged. This compatibility function has no status return and therefore does not expose the
-/// rejection to C++. It is a no-op if either pointer is null.
+/// unchanged. Returns `true` only when loading, staging, and publication complete. Invalid pointers
+/// return `false`.
 ///
 /// # Safety
-/// `engine` is a valid, live `NdtEngine` handle (or null → no-op); it is reborrowed as `&NdtEngine` (the
-/// engine is `Sync`). `source` is a valid [`AwMapSource`] whose `fill` + `ctx` outlive the call (or null
-/// → no-op). Rust does not retain either pointer past the call.
+/// `engine` is a valid, live `NdtEngine` handle or null; it is reborrowed as `&NdtEngine` and is
+/// `Sync`. `source` is a valid [`AwMapSource`] whose `fill` and `ctx` outlive the call, or null. Rust
+/// does not retain either pointer past the call.
 #[expect(
     unsafe_code,
     reason = "C ABI boundary; reborrows the live engine + map-source vtable, validated per rust-c-ffi-safety"
@@ -175,9 +174,106 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_update_map(
     cy: f64,
     radius: f64,
     rebuild: bool,
-) {
-    let eng = ffi_ref!(engine, else return);
-    let src = ffi_ref!(source, else return);
+) -> bool {
+    let eng = ffi_ref!(engine, else return false);
+    let src = ffi_ref!(source, else return false);
     let host = FfiHost { src };
-    let _completed = block_on(apply_map_update(eng, &host, [cx, cy], radius, rebuild)).is_ok();
+    block_on(apply_map_update(eng, &host, [cx, cy], radius, rebuild)).is_ok()
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::float_arithmetic,
+    unsafe_code,
+    reason = "FFI regression tests"
+)]
+mod tests {
+    use super::*;
+
+    extern "C" fn fill_empty(
+        _ctx: *mut c_void,
+        _cx: f64,
+        _cy: f64,
+        _radius: f64,
+        _builder: *mut c_void,
+    ) {
+    }
+
+    extern "C" fn fill_two_leaves(
+        _ctx: *mut c_void,
+        _cx: f64,
+        _cy: f64,
+        _radius: f64,
+        builder: *mut c_void,
+    ) {
+        let mut points = Vec::new();
+        for center in [0.25_f32, 2.25_f32] {
+            for index in 0_u8..8 {
+                let offset = f32::from(index) * 0.01;
+                points.push([center + offset, offset, offset]);
+            }
+        }
+        // SAFETY: `builder` is the live MapDelta supplied to this synchronous callback; `id` and
+        // `points` remain alive for the duration of the call.
+        unsafe {
+            autoware_ndt_scan_matcher_rs_map_delta_add(
+                builder,
+                b"tile".as_ptr(),
+                4,
+                points.as_ptr().cast::<f32>(),
+                points.len(),
+            );
+        }
+    }
+
+    #[test]
+    fn update_map_reports_invalid_empty_and_leaf_limit_outcomes() {
+        let empty_source = AwMapSource {
+            ctx: core::ptr::null_mut(),
+            fill: fill_empty,
+        };
+        // SAFETY: null handles are accepted and return false.
+        assert!(!unsafe {
+            autoware_ndt_scan_matcher_rs_ndt_engine_update_map(
+                core::ptr::null(),
+                &raw const empty_source,
+                0.0,
+                0.0,
+                1.0,
+                false,
+            )
+        });
+
+        let engine = NdtEngine::new(1.0, 6, 0.01, 64, 1, 30).expect("valid limits");
+        // SAFETY: engine and source live for the complete synchronous call.
+        assert!(unsafe {
+            autoware_ndt_scan_matcher_rs_ndt_engine_update_map(
+                &raw const engine,
+                &raw const empty_source,
+                0.0,
+                0.0,
+                1.0,
+                false,
+            )
+        });
+        assert!(!engine.has_target());
+
+        let two_leaf_source = AwMapSource {
+            ctx: core::ptr::null_mut(),
+            fill: fill_two_leaves,
+        };
+        // SAFETY: engine and source live for the complete synchronous call.
+        assert!(!unsafe {
+            autoware_ndt_scan_matcher_rs_ndt_engine_update_map(
+                &raw const engine,
+                &raw const two_leaf_source,
+                0.0,
+                0.0,
+                1.0,
+                false,
+            )
+        });
+        assert!(!engine.has_target(), "rejected staging map was published");
+    }
 }

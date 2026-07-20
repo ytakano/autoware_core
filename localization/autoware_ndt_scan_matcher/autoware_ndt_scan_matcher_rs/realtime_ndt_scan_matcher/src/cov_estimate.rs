@@ -245,7 +245,7 @@ mod tests {
         }
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
         map.add_target(&pts, 0);
-        map.create_kdtree().expect("build kd-tree");
+        map.try_create_kdtree(418_000).expect("build kd-tree");
         (map, pts)
     }
 
@@ -338,7 +338,7 @@ mod tests {
         };
         let poses =
             propose_poses_to_search(&main_pose, &[0.2, -0.2, 0.0, 0.0], &[0.0, 0.0, 0.2, -0.2]);
-        let mut ws = AlignWorkspace::new();
+        let mut ws = AlignWorkspace::try_with_capacity(2_000).expect("reserve workspace");
         let r = estimate_xy_covariance_by_multi_ndt_score(
             &main_ndt,
             &poses,

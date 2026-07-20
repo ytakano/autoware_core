@@ -106,7 +106,7 @@ impl Clock for TokioHost {
 async fn main() {
     let host = TokioHost;
 
-    let matcher = ScanMatcher::new(2.0, 6, 0.01);
+    let matcher = ScanMatcher::new(2.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
     matcher.set_params(0.01, 0.1, 2.0, 30, 0.55, 1);
     // Gate convergence on the transform-probability score (type 0). A 0.0 threshold is the defensive
     // lower bound for this synthetic fit — a good recovery yields a clearly positive score.

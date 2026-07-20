@@ -14,8 +14,7 @@ the exact commands.
 ## Layers
 
 - **Unit / property gtests** — the pure kernels checked against a reference or a brute-force oracle:
-  `test_voxel_grid` (Rust `VoxelGridMap` vs C++ `MultiVoxelGridCovariance`), `test_align`
-  (Rust align vs the C++ NDT engine), `test_estimate_covariance_multi`, `test_ndt_engine`,
+  `test_voxel_grid` (Rust `VoxelGridMap` vs C++ `MultiVoxelGridCovariance`), `test_ndt_engine` (Rust align vs the C++ NDT engine),
   `test_convergence_verdict`, `test_map_update_verdict`, …
 - **FFI direct-call tests** — because `cargo llvm-cov` sees only Rust, the `extern "C"` shims get
   Rust-side direct-call tests too (see *Test taxonomy* in the node crate book).

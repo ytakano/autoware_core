@@ -335,7 +335,7 @@ fn evaluate(fx: &Fixture) -> Fitness {
     for (id, tile) in fx.tiles.iter().enumerate() {
         map.add_target(tile, id as u64);
     }
-    map.create_kdtree();
+    map.try_create_kdtree(418_000).expect("build kd-tree");
     let mut ws = AlignWorkspace::with_capacity(fx.source.len());
     let mut out = AlignResult::default();
     align(&map, &fx.source, &fx.guess, &fx.params, &mut ws, &mut out);

@@ -34,8 +34,7 @@ All passing (0 failed). Regenerate: `cargo test`.
 
 **Package (colcon, `-DNDT_USE_RUST=ON`):** the differential/FFI suite is registered only under the
 Rust backend — `autoware_ndt_scan_matcher_rs_cargo_test` (the crate's own `cargo test --features
-ros` via CTest) plus the Rust gtests `test_voxel_grid`, `test_align`, `test_ndt_engine`,
-`test_estimate_covariance_multi`, `test_tpe_ffi`, `test_convergence_verdict`,
+ros` via CTest) plus the Rust gtests `test_voxel_grid`, `test_ndt_engine`, `test_tpe_ffi`, `test_convergence_verdict`,
 `test_node_pose_callbacks`, `test_map_update_verdict`, `test_node_run_align`,
 `test_estimate_pose_covariance`, `test_ndt_align_service_decision`,
 `test_ndt_scan_matcher_rs_handle`, `test_regularization_buffer`, `test_initial_pose_buffer`,
@@ -60,10 +59,10 @@ autoware_ndt_scan_matcher` after a `-DNDT_USE_RUST=ON` build.
 | `tpe` / `pose_buffer` / `ffi` / `node` / `node_align_service` | 92–96% |
 | `node_handle` | 86% |
 | `sensor_points` | 24% |
-| `ffi_host` / `node_map_update` / `scan_matcher` | 0% |
+| `ffi_host` / `scan_matcher` | 0% |
 
 > **The `cargo llvm-cov` number observes only Rust `cargo test`.** The low/0% modules
-> (`ffi_host`, `node_map_update`, `scan_matcher`, and most of `sensor_points`) are the FFI-host
+> (`ffi_host`, `scan_matcher`, and most of `sensor_points`) are the FFI-host
 > vtable, the ROS map-update glue, and the async orchestration — exercised through the C++ gtests
 > (the `-DNDT_USE_RUST=ON` differential suite) or the `examples/tokio_ndt.rs` reference host, which
 > `cargo llvm-cov` does not instrument. They are **not** real coverage holes. Coverage here is a

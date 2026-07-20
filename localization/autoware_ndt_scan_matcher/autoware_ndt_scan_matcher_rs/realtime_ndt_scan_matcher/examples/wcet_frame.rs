@@ -127,7 +127,7 @@ fn run_synthetic() {
 
     let mut map = VoxelGridMap::new([2.0, 2.0, 2.0], 6, 0.01);
     map.add_target(&map_points, 0);
-    map.create_kdtree().expect("build synthetic map");
+    map.try_create_kdtree(418_000).expect("build synthetic map");
 
     let params = NdtParams {
         trans_epsilon: 0.01,
@@ -175,7 +175,7 @@ fn run_fixtures(paths: &[String]) {
         for (id, tile) in fx.tiles.iter().enumerate() {
             map.add_target(tile, id as u64);
         }
-        map.create_kdtree().expect("build fixture map");
+        map.try_create_kdtree(418_000).expect("build fixture map");
         let mut ws =
             AlignWorkspace::try_with_capacity(fx.source.len()).expect("reserve fixture workspace");
         let mut out = AlignResult::try_with_capacity(fx.params.max_iterations as usize)
@@ -401,7 +401,7 @@ fn run_capture(dir: &std::path::Path) {
                 let tile = capture::read_tile(dir, &capture::hex_id(id)).expect("read tile");
                 map.add_target(&tile, i as u64);
             }
-            map.create_kdtree().expect("build capture map");
+            map.try_create_kdtree(418_000).expect("build capture map");
             cur_ids = Some(fr.ids.clone());
             epochs += 1;
         }

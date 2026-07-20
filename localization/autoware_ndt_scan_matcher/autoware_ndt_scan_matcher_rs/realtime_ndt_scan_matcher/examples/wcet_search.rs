@@ -280,7 +280,7 @@ fn evaluate(fx: &Fixture) -> (Fitness, u128) {
     for (id, tile) in fx.tiles.iter().enumerate() {
         map.add_target(tile, id as u64);
     }
-    map.create_kdtree();
+    map.try_create_kdtree(418_000).expect("build kd-tree");
     let mut ws = AlignWorkspace::with_capacity(fx.source.len());
     let mut out = AlignResult::default();
     let t0 = std::time::Instant::now();

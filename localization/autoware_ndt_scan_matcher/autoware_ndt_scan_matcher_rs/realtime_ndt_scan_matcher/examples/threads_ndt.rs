@@ -142,7 +142,8 @@ fn main() {
     const ALIGNS_PER_WORKER: usize = 2000;
     const MAP_UPDATES: usize = 1000;
 
-    let matcher = Arc::new(ScanMatcher::new(2.0, 6, 0.01));
+    let matcher =
+        Arc::new(ScanMatcher::new(2.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits"));
     matcher.set_params(0.01, 0.1, 2.0, 30, 0.55, 1);
     // Gate convergence on the transform-probability score (type 0); 0.0 is the defensive threshold.
     matcher.set_convergence_params(0, 0.0, 0.0);

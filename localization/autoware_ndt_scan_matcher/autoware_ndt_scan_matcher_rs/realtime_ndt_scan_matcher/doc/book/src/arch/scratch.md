@@ -1,25 +1,17 @@
-# MatchScratch and the align entry points
+# MatchScratch and alignment
 
-`MatchScratch` is the per-align scratch — a reused `AlignWorkspace` plus the last `AlignResult`. It is
-never shared mutable state across threads; reusing it across frames keeps the align allocation-free
-after warmup ([Zero-allocation guarantees](../rt/zero-alloc.md)). It exposes `result()` (an owned
-copy of the last result) and `score_arrays()` (the per-iteration TP/NVTL traces).
+`MatchScratch` owns the mutable state for one alignment: a preallocated `AlignWorkspace`, the last
+`AlignResult`, and the per-iteration TP/NVTL traces. Construct it from the engine limits and reuse it
+across frames. `result_ref()` and `score_slices()` provide borrowed access to the completed result
+without allocating.
 
-## Two families of align methods
+Every engine alignment entry point requires a caller-owned `&mut MatchScratch`. This makes mutable
+workspace ownership explicit, permits independent alignment on multiple threads, and keeps the
+real-time path allocation-free from the first call when construction succeeds. A scratch instance
+must not be shared between concurrent calls; use one instance per task or worker.
 
-- **Implicit-scratch API** — `align`, `align_outcome`, `result`, `score_arrays`, the score helpers.
-  These use an implicit scratch and exist only in the std and single-core `no_std` builds. Under std
-  the scratch is a **thread-local** (`SCRATCH`, at most one align per thread → exclusive without a
-  lock); under single-core `no_std` it is owned by the engine.
-- **Explicit `_with` API** — `align_with`, `align_outcome_with`, `estimate_covariance`, the
-  `*_with` scorers. The caller passes a `&mut MatchScratch`. This is the **universal** path and the
-  **only** one under the `mt` feature.
+The scratch capacities are derived from `Pmax` and `Imax`. Alignment rejects a scratch whose
+capacities do not cover the engine's configured limits, rather than growing it in the real-time
+path. The same explicit contract applies in `std`, single-core `no_std`, and `mt` builds.
 
-## Why the implicit API is compiled out under `mt`
-
-A thread-local (std) or engine-owned (single-core) scratch can't be shared safely across the many
-tasks of a multi-core kernel. Under `mt` each task/thread owns its own `MatchScratch` and passes it
-in explicitly; the implicit variants are `#[cfg]`-compiled out, so a cross-call scratch dependency
-cannot even compile. Reuse one scratch per task/thread across frames; never share it.
-
-> Source: `src/engine.rs` (`MatchScratch`, `align*`, the `SCRATCH` thread-local).
+> Source: `src/engine.rs` (`MatchScratch`, `align_with`, and `align_outcome_with`).

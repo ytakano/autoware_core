@@ -1070,30 +1070,6 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_decide_align_service_
     *out = result;
 }
 
-/// Decide the deterministic align-service branch/response state.
-///
-/// # Safety
-/// `input` must point to a valid, aligned [`AwNdtAlignServiceInput`] and `out` to a valid, aligned,
-/// writable [`AwNdtAlignServiceDecision`]. If either pointer is null, this function is a no-op.
-#[expect(
-    unsafe_code,
-    reason = "C ABI boundary; compatibility wrapper over the traced FFI"
-)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_decide_align_service(
-    input: *const AwNdtAlignServiceInput,
-    out: *mut AwNdtAlignServiceDecision,
-) {
-    // SAFETY: this wrapper preserves the same pointer contract and passes a null trace pointer.
-    unsafe {
-        autoware_ndt_scan_matcher_rs_node_decide_align_service_traced(
-            input,
-            core::ptr::null_mut(),
-            out,
-        );
-    }
-}
-
 /// Assemble the successful align-service response payload after the align search has completed.
 ///
 /// # Safety
@@ -1340,7 +1316,11 @@ mod tests {
         // SAFETY: tests pass either null pointers to verify the no-op contract or pointers to local
         // valid, aligned structs that live for the duration of the call.
         unsafe {
-            autoware_ndt_scan_matcher_rs_node_decide_align_service(input, out);
+            autoware_ndt_scan_matcher_rs_node_decide_align_service_traced(
+                input,
+                core::ptr::null_mut(),
+                out,
+            );
         }
     }
 
@@ -2053,7 +2033,7 @@ mod search_loop_tests {
                 cloud.push([cx + d, cy - d, cz + d]);
             }
         }
-        let engine = NdtEngine::new(1.0, 6, 0.01);
+        let engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         engine.set_params(0.01, 0.1, 1.0, 30, 0.55, 1);
         engine.add_target(&cloud, 0);
         engine.create_kdtree().expect("build kd-tree");
