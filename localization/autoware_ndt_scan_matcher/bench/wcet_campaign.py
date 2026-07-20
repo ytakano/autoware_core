@@ -136,6 +136,29 @@ def validate_config(cfg):
     for section in ("cold", "corunner"):
         if cfg[section].get("samples", 0) < 1:
             raise ValueError(f"{section} samples must be positive")
+    enabled_series = cfg.get("series")
+    valid_series = {"warm", "cold"} | {
+        f"corunner:{mode}" for mode in cfg["corunner"]["modes"]
+    }
+    if enabled_series is not None:
+        if not enabled_series or len(enabled_series) != len(set(enabled_series)):
+            raise ValueError("series must be a non-empty list without duplicates")
+        unknown_series = sorted(set(enabled_series) - valid_series)
+        if unknown_series:
+            raise ValueError(f"unknown enabled series: {unknown_series}")
+    benchmark_env = cfg.get("benchmark_env", {})
+    allowed_env = {"WCET_MAX_SOURCE_POINTS", "WCET_MAX_ACTIVE_LEAVES"}
+    if not isinstance(benchmark_env, dict) or set(benchmark_env) - allowed_env:
+        raise ValueError(f"benchmark_env may contain only {sorted(allowed_env)}")
+    if any(not isinstance(value, str) or not value for value in benchmark_env.values()):
+        raise ValueError("benchmark_env values must be non-empty strings")
+    p_limit = benchmark_env.get("WCET_MAX_SOURCE_POINTS")
+    if (p_limit is not None and p_limit != "source"
+            and (not p_limit.isdigit() or int(p_limit) < 1)):
+        raise ValueError("WCET_MAX_SOURCE_POINTS must be source or a positive integer")
+    leaf_limit = benchmark_env.get("WCET_MAX_ACTIVE_LEAVES")
+    if leaf_limit is not None and (not leaf_limit.isdigit() or int(leaf_limit) < 1):
+        raise ValueError("WCET_MAX_ACTIVE_LEAVES must be a positive integer")
     minimum = cfg["abort"].get("min_mem_available_mib", 0)
     critical = cfg["abort"].get("critical_mem_available_mib", 0)
     if minimum and critical and critical >= minimum:
@@ -485,6 +508,7 @@ def build_manifest(cfg, root, session_id, series, cell=None, env_snap=None, env_
         "target_board": None,
         "firmware": None,
         "qemu_version": None,
+        "benchmark_env": cfg.get("benchmark_env", {}),
         "notes": cfg.get("note"),
     }
     return m
@@ -510,7 +534,10 @@ def build_plan(cfg, session):
     """Return randomized single-engine cells for one session."""
     rng = random.Random(0xC0FFEE ^ session)
     all_fixtures = all_fixture_names(cfg)
-    series_list = ["warm", "cold"] + [f"corunner:{m}" for m in cfg["corunner"]["modes"]]
+    default_series = ["warm", "cold"] + [
+        f"corunner:{mode}" for mode in cfg["corunner"]["modes"]
+    ]
+    series_list = cfg.get("series", default_series)
     cells = []
     for series in series_list:
         fixtures = (list(all_fixtures) if series in ("warm", "cold")
@@ -637,7 +664,7 @@ def load_json(path):
         return None
 
 
-def measurement_problem(path, cell):
+def measurement_problem(cfg, path, cell):
     doc = load_json(path)
     if doc is None:
         return "measurement JSON is missing or malformed"
@@ -649,14 +676,29 @@ def measurement_problem(path, cell):
     fixtures = doc.get("fixtures") or {}
     if set(fixtures) != {cell["fixture"]}:
         return f"fixture set is {sorted(fixtures)}, expected {[cell['fixture']]}"
-    samples = (fixtures[cell["fixture"]].get(cell["engine"]) or {}).get("samples_ms")
+    fixture = fixtures[cell["fixture"]]
+    samples = (fixture.get(cell["engine"]) or {}).get("samples_ms")
     if not isinstance(samples, list) or len(samples) != cell["samples"]:
         return f"sample array length is {len(samples) if isinstance(samples, list) else None}"
+    benchmark_env = cfg.get("benchmark_env", {})
+    if benchmark_env:
+        limits = fixture.get("rust_limits") or {}
+        p_setting = benchmark_env.get("WCET_MAX_SOURCE_POINTS", "2000")
+        expected_p = fixture.get("n_source") if p_setting == "source" else int(p_setting)
+        expected_l = int(benchmark_env.get("WCET_MAX_ACTIVE_LEAVES", "418000"))
+        expected_i = fixture.get("max_iterations")
+        expected = {
+            "max_source_points": expected_p,
+            "max_active_leaves": expected_l,
+            "max_iterations": expected_i,
+        }
+        if limits != expected:
+            return f"Rust limits are {limits}, expected {expected}"
     return None
 
 
 def completed_cell_problem(cfg, out_json, sidecar_json, cell):
-    problem = measurement_problem(out_json, cell)
+    problem = measurement_problem(cfg, out_json, cell)
     if problem:
         return problem
     sidecar = load_json(sidecar_json)
@@ -849,6 +891,7 @@ def cmd_run(cfg, args):
             "WCET_ITERS": str(cell["samples"]), "WCET_WARMUP": str(cell["warmup"]),
             "WCET_ENGINE": cell["engine"], "WCET_EVICT_BYTES": str(cell["evict_bytes"]),
         })
+        env.update(cfg.get("benchmark_env", {}))
         pin = ([] if cfg.get("profile") == "A"
                else ["taskset", "-c", str(cfg["benchmark_cpu"])])
         argv = pin + [str(exe), "--fixture", str(out_json), str(fixture_path(cfg, cell["fixture"]))]
@@ -887,7 +930,7 @@ def cmd_run(cfg, args):
                 problems.append("swap I/O occurred during the cell")
         if proc_rc != 0:
             problems.append(f"replay exited {proc_rc}")
-        output_problem = measurement_problem(out_json, cell)
+        output_problem = measurement_problem(cfg, out_json, cell)
         if output_problem:
             problems.append(output_problem)
         nominal, nominal_source = nominal_freq_khz(cfg)

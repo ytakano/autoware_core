@@ -1,0 +1,68 @@
+{
+ "campaign_id": "profile-b-psweep-3x100-bounded-v1",
+ "profile": "B",
+ "benchmark_cpu": 2,
+ "corunner_cpu": 4,
+ "corunner_cpu_note": "different physical core sharing the L3; cpu3, the SMT sibling of cpu2, must be offline",
+ "fixtures_dir": "fixtures",
+ "fixture_paths": {
+  "psweep_p00250": "fixtures/psweep/psweep_p00250.ndtfix",
+  "psweep_p00500": "fixtures/psweep/psweep_p00500.ndtfix",
+  "psweep_p01000": "fixtures/psweep/psweep_p01000.ndtfix",
+  "psweep_p02000": "fixtures/psweep/psweep_p02000.ndtfix",
+  "psweep_p04000": "fixtures/psweep/psweep_p04000.ndtfix",
+  "psweep_p08000": "fixtures/psweep/psweep_p08000.ndtfix"
+ },
+ "tiers": {
+  "psweep": {
+   "fixtures": [
+    "psweep_p00250",
+    "psweep_p00500",
+    "psweep_p01000",
+    "psweep_p02000",
+    "psweep_p04000",
+    "psweep_p08000"
+   ],
+   "samples": 100
+  }
+ },
+ "warmup": 10,
+ "cold": {
+  "samples": 1000,
+  "warmup": 0,
+  "evict_mib": 64
+ },
+ "corunner": {
+  "fixtures": [],
+  "modes": [
+   "membw",
+   "llc",
+   "fp"
+  ],
+  "samples": 1000,
+  "mib": {
+   "membw": 256,
+   "llc": 32
+  }
+ },
+ "abort": {
+  "min_freq_frac": 0.9,
+  "nominal_khz": 3200000,
+  "max_temp_c": 85,
+  "nominal_note": "operator pins scaling_min_freq and scaling_max_freq to 3.2 GHz after every boot",
+  "max_calib_slowdown": 1.1,
+  "min_mem_available_mib": 8192,
+  "critical_mem_available_mib": 4096,
+  "abort_on_swap_io": true
+ },
+ "sessions": 3,
+ "output_dir": "campaign_runs/psweep_3x100_bounded",
+ "note": "Capacity-parameterized P-sweep: Pmax equals each fixture source count; warm Profile-B timing, 100 samples per engine and fixture in each of three boots.",
+ "series": [
+  "warm"
+ ],
+ "benchmark_env": {
+  "WCET_MAX_SOURCE_POINTS": "source",
+  "WCET_MAX_ACTIVE_LEAVES": "418000"
+ }
+}

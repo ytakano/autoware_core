@@ -92,6 +92,28 @@ int wcet_threads()
   return k > 0 ? k : 1;
 }
 
+constexpr size_t kDefaultMaxSourcePoints = 2000;
+constexpr size_t kDefaultMaxActiveLeaves = 418000;
+
+// The paper's deployed envelope defaults to Pmax=2000. A capacity-parameterized sweep opts in
+// with WCET_MAX_SOURCE_POINTS=source, making Pmax equal to each frozen fixture's source count.
+size_t wcet_max_source_points(size_t n_source)
+{
+  const char * value = std::getenv("WCET_MAX_SOURCE_POINTS");
+  if (value == nullptr) return kDefaultMaxSourcePoints;
+  if (std::strcmp(value, "source") == 0) return n_source;
+  const unsigned long long parsed = std::strtoull(value, nullptr, 10);
+  return static_cast<size_t>(parsed);
+}
+
+size_t wcet_max_active_leaves()
+{
+  const char * value = std::getenv("WCET_MAX_ACTIVE_LEAVES");
+  if (value == nullptr) return kDefaultMaxActiveLeaves;
+  const unsigned long long parsed = std::strtoull(value, nullptr, 10);
+  return static_cast<size_t>(parsed);
+}
+
 // Three orthogonal planes over [0, length] at `interval` spacing — the standard-sequence fixture
 // geometry. Fills both a PCL cloud (C++ engine) and the flat xyz buffer (Rust FFI) from identical
 // points.
@@ -596,6 +618,15 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     size_t n_map = 0;
     for (const auto & t : fx.tiles) n_map += t.size() / 3;
     const size_t n_src = fx.source.size() / 3;
+    const size_t rust_p_max = wcet_max_source_points(n_src);
+    const size_t rust_l_max = wcet_max_active_leaves();
+    if (rust_p_max == 0 || rust_l_max == 0 || n_src > rust_p_max) {
+      std::fprintf(stderr,
+        "wcet: %s: invalid Rust limits Pmax=%zu Lmax=%zu for %zu source points\n",
+        path.c_str(), rust_p_max, rust_l_max, n_src);
+      rc = 1;
+      continue;
+    }
 
     Eigen::Matrix4f guess = Eigen::Matrix4f::Identity();
     for (int r = 0; r < 4; ++r) {
@@ -666,8 +697,13 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     float rs_tp = 0.0F;
     float rs_nvtl = 0.0F;
     if (run_rust) {
-      struct AwNdtEngine * eng =
-        autoware_ndt_scan_matcher_rs_ndt_engine_new(fx.resolution, 6, 0.01);
+      struct AwNdtEngine * eng = autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(
+        fx.resolution, 6, 0.01, rust_p_max, rust_l_max, fx.max_iterations);
+      if (eng == nullptr) {
+        std::fprintf(stderr, "wcet: %s: bounded Rust engine construction failed\n", path.c_str());
+        rc = 1;
+        continue;
+      }
       autoware_ndt_scan_matcher_rs_ndt_engine_set_params(
         eng, fx.trans_epsilon, fx.step_size, fx.resolution, fx.max_iterations, fx.outlier_ratio,
         wcet_threads());
@@ -675,19 +711,45 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
         autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
           eng, fx.tiles[t].data(), fx.tiles[t].size() / 3, t);
       }
-      autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng);
+      if (!autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng)) {
+        std::fprintf(stderr, "wcet: %s: bounded Rust kd-tree construction failed\n", path.c_str());
+        autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+        rc = 1;
+        continue;
+      }
+      bool rust_align_ok = true;
       for (int i = 0; i < warmup; ++i) {
-        autoware_ndt_scan_matcher_rs_ndt_engine_align(
-          eng, fx.guess16.data(), fx.source.data(), n_src);
+        if (!autoware_ndt_scan_matcher_rs_ndt_engine_align(
+              eng, fx.guess16.data(), fx.source.data(), n_src)) {
+          rust_align_ok = false;
+          break;
+        }
+      }
+      if (!rust_align_ok) {
+        std::fprintf(stderr, "wcet: %s: bounded Rust warm-up alignment failed\n", path.c_str());
+        autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+        rc = 1;
+        continue;
       }
       if (hooks.reset && hooks.get) hooks.reset();
       rs_ms.reserve(static_cast<size_t>(iters));
       for (int i = 0; i < iters; ++i) {
         if (!evict_buf.empty()) evict_caches(evict_buf);
         const auto t0 = Clock::now();
-        autoware_ndt_scan_matcher_rs_ndt_engine_align(
+        const bool completed = autoware_ndt_scan_matcher_rs_ndt_engine_align(
           eng, fx.guess16.data(), fx.source.data(), n_src);
-        rs_ms.push_back(ms_since(t0));
+        const double elapsed_ms = ms_since(t0);
+        if (!completed) {
+          rust_align_ok = false;
+          break;
+        }
+        rs_ms.push_back(elapsed_ms);
+      }
+      if (!rust_align_ok) {
+        std::fprintf(stderr, "wcet: %s: bounded Rust measured alignment failed\n", path.c_str());
+        autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+        rc = 1;
+        continue;
       }
       if (hooks.reset && hooks.get) {
         rs_allocs = static_cast<long long>(hooks.get() / static_cast<unsigned long long>(iters));
@@ -700,6 +762,13 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
       rout.nearest_voxel_likelihood = &rs_nvtl;
       autoware_ndt_scan_matcher_rs_ndt_engine_get_result(eng, &rout);
 #ifdef NDT_TRACE
+      if (!autoware_ndt_scan_matcher_rs_ndt_engine_align(
+            eng, fx.guess16.data(), fx.source.data(), n_src)) {
+        std::fprintf(stderr, "wcet: %s: bounded Rust trace alignment failed\n", path.c_str());
+        autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+        rc = 1;
+        continue;
+      }
       trace_rust = snap_rust(eng);
       have_trace_rust = true;
 #endif
@@ -730,6 +799,10 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
     std::fprintf(f, "      \"n_tiles\": %zu,\n", fx.tiles.size());
     std::fprintf(f, "      \"n_source\": %zu,\n", n_src);
     std::fprintf(f, "      \"max_iterations\": %d,\n", fx.max_iterations);
+    std::fprintf(f,
+      "      \"rust_limits\": { \"max_source_points\": %zu, "
+      "\"max_active_leaves\": %zu, \"max_iterations\": %d },\n",
+      rust_p_max, rust_l_max, fx.max_iterations);
     if (both) {
       std::fprintf(
         f, "      \"iter_match\": %s,\n", base.iteration_match ? "true" : "false");
@@ -964,7 +1037,11 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
     std::fprintf(stderr, "capture: cannot open %s\n", out_path.c_str());
     return 1;
   }
-  std::fprintf(f, "{\n  \"schema_version\": 2,\n  \"frames\": [\n");
+  std::fprintf(f, "{\n  \"schema_version\": 3,\n");
+  std::fprintf(f,
+    "  \"rust_limits\": { \"max_source_points\": %zu, \"max_active_leaves\": %zu, "
+    "\"max_iterations\": %d },\n  \"frames\": [\n",
+    kDefaultMaxSourcePoints, kDefaultMaxActiveLeaves, cp.max_iterations);
 
   int rc = 0;
   bool first = true;
@@ -990,7 +1067,14 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
       ndt = std::make_unique<Ndt>();
       ndt->setParams(params);
       if (eng != nullptr) autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
-      eng = autoware_ndt_scan_matcher_rs_ndt_engine_new(cp.resolution, 6, 0.01);
+      eng = autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(cp.resolution, 6, 0.01,
+        kDefaultMaxSourcePoints, kDefaultMaxActiveLeaves, cp.max_iterations);
+      if (eng == nullptr) {
+        std::fprintf(stderr, "capture: bounded Rust engine construction failed at frame %zu\n", fi);
+        rc = 1;
+        cur_ids.clear();
+        continue;
+      }
       autoware_ndt_scan_matcher_rs_ndt_engine_set_params(
         eng, cp.trans_epsilon, cp.step_size, cp.resolution, cp.max_iterations, cp.outlier_ratio,
         1);
@@ -1014,7 +1098,12 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
         continue;
       }
       ndt->createVoxelKdtree();
-      autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng);
+      if (!autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng)) {
+        std::fprintf(stderr, "capture: bounded Rust kd-tree construction failed at frame %zu\n", fi);
+        rc = 1;
+        cur_ids.clear();
+        continue;
+      }
       // WCET_DUMP: compare the two engines' voxel maps (leaf means as sorted multisets).
       if (std::getenv("WCET_DUMP") != nullptr) {
         auto cpd = ndt->getVoxelPCD();
@@ -1195,11 +1284,24 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
       ndt->align(*aligned, guess, source);
       cpp_ms_v.push_back(ms_since(t0));
     }
+    bool rust_align_ok = true;
     for (int k = 0; k < repeats; ++k) {
       const auto t0 = Clock::now();
-      autoware_ndt_scan_matcher_rs_ndt_engine_align(eng, fr.guess16.data(), fr.source.data(),
-        n_src);
-      rs_ms_v.push_back(ms_since(t0));
+      const bool completed = autoware_ndt_scan_matcher_rs_ndt_engine_align(
+        eng, fr.guess16.data(), fr.source.data(), n_src);
+      const double elapsed_ms = ms_since(t0);
+      if (!completed) {
+        rust_align_ok = false;
+        break;
+      }
+      rs_ms_v.push_back(elapsed_ms);
+    }
+    if (!rust_align_ok) {
+      std::fprintf(stderr,
+        "capture: bounded Rust alignment failed at frame %zu (source=%zu, Pmax=%zu)\n", fi,
+        n_src, kDefaultMaxSourcePoints);
+      rc = 1;
+      continue;
     }
     std::sort(cpp_ms_v.begin(), cpp_ms_v.end());
     std::sort(rs_ms_v.begin(), rs_ms_v.end());
@@ -1384,19 +1486,40 @@ int main(int argc, char ** argv)
   const int cpp_iter = ndt.getResult().iteration_num;
 
   // ---- Rust engine (over the C ABI): build map once, time the align loop ----
-  struct AwNdtEngine * eng = autoware_ndt_scan_matcher_rs_ndt_engine_new(2.0, 6, 0.01);
+  struct AwNdtEngine * eng = autoware_ndt_scan_matcher_rs_ndt_engine_new_with_limits(
+    2.0, 6, 0.01, n_pts, kDefaultMaxActiveLeaves, 30);
+  if (eng == nullptr) {
+    std::fprintf(stderr, "ndt_bench_replay: bounded Rust engine construction failed\n");
+    return 1;
+  }
   autoware_ndt_scan_matcher_rs_ndt_engine_set_params(eng, 0.01, 0.1, 2.0, 30, 0.55, 1);
   autoware_ndt_scan_matcher_rs_ndt_engine_add_target(eng, target_flat.data(), n_pts, 0);
-  autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng);
+  if (!autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng)) {
+    std::fprintf(stderr, "ndt_bench_replay: bounded Rust kd-tree construction failed\n");
+    autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+    return 1;
+  }
   for (int i = 0; i < warmup; ++i) {
-    autoware_ndt_scan_matcher_rs_ndt_engine_align(eng, guess16.data(), source_flat.data(), n_pts);
+    if (!autoware_ndt_scan_matcher_rs_ndt_engine_align(
+          eng, guess16.data(), source_flat.data(), n_pts)) {
+      std::fprintf(stderr, "ndt_bench_replay: bounded Rust warm-up alignment failed\n");
+      autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+      return 1;
+    }
   }
   std::vector<double> rs_ms;
   rs_ms.reserve(static_cast<size_t>(iters));
   for (int i = 0; i < iters; ++i) {
     const auto t0 = Clock::now();
-    autoware_ndt_scan_matcher_rs_ndt_engine_align(eng, guess16.data(), source_flat.data(), n_pts);
-    rs_ms.push_back(ms_since(t0));
+    const bool completed = autoware_ndt_scan_matcher_rs_ndt_engine_align(
+      eng, guess16.data(), source_flat.data(), n_pts);
+    const double elapsed_ms = ms_since(t0);
+    if (!completed) {
+      std::fprintf(stderr, "ndt_bench_replay: bounded Rust measured alignment failed\n");
+      autoware_ndt_scan_matcher_rs_ndt_engine_free(eng);
+      return 1;
+    }
+    rs_ms.push_back(elapsed_ms);
   }
   int32_t rs_iter = 0;
   AwNdtAlignOutput rout{};

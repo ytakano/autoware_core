@@ -13,6 +13,7 @@ SPEC = importlib.util.spec_from_file_location("wcet_campaign", SCRIPT)
 CAMPAIGN = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CAMPAIGN)
 CONFIG_PATH = pathlib.Path(__file__).with_name("campaign_config_unified.json")
+PSWEEP_CONFIG_PATH = pathlib.Path(__file__).with_name("campaign_config_psweep.json")
 
 
 class UnifiedCampaignTest(unittest.TestCase):
@@ -111,6 +112,46 @@ class UnifiedCampaignTest(unittest.TestCase):
             cfg["output_dir"] = temp
             args = argparse.Namespace(session=1)
             self.assertEqual(CAMPAIGN.cmd_status(cfg, args), 1)
+
+
+class PSweepCampaignTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = CAMPAIGN.load_config(PSWEEP_CONFIG_PATH)
+
+    def test_plan_is_warm_only_and_capacity_parameterized(self):
+        CAMPAIGN.validate_config(self.cfg)
+        cells = CAMPAIGN.build_plan(self.cfg, 1)
+        self.assertEqual(len(cells), 12)
+        self.assertEqual({cell["series"] for cell in cells}, {"warm"})
+        self.assertTrue(all(cell["samples"] == 100 for cell in cells))
+        self.assertEqual(self.cfg["benchmark_env"]["WCET_MAX_SOURCE_POINTS"], "source")
+
+    def test_measurement_requires_recorded_per_fixture_limits(self):
+        cell = CAMPAIGN.build_plan(self.cfg, 1)[0]
+        n_source = int(cell["fixture"].removeprefix("psweep_p"))
+        fixture = {
+            "n_source": n_source,
+            "max_iterations": 30,
+            "rust_limits": {
+                "max_source_points": n_source,
+                "max_active_leaves": 418_000,
+                "max_iterations": 30,
+            },
+            cell["engine"]: {"samples_ms": [1.0] * cell["samples"]},
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            output = pathlib.Path(temp) / "cell.json"
+            output.write_text(json.dumps({
+                "meta": {"iters": cell["samples"], "engine": cell["engine"]},
+                "fixtures": {cell["fixture"]: fixture},
+            }))
+            self.assertIsNone(CAMPAIGN.measurement_problem(self.cfg, output, cell))
+            fixture["rust_limits"]["max_source_points"] = 2_000
+            output.write_text(json.dumps({
+                "meta": {"iters": cell["samples"], "engine": cell["engine"]},
+                "fixtures": {cell["fixture"]: fixture},
+            }))
+            self.assertIn("Rust limits", CAMPAIGN.measurement_problem(self.cfg, output, cell))
 
 
 if __name__ == "__main__":

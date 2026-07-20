@@ -355,10 +355,10 @@ fn probe(name: &str, fx: &Fixture) {
     println!();
 }
 
-/// `--psweep`: WCET-vs-`P` sweep set. The `search_00` champion geometry (8 tiles, blocks = 9,
-/// eps = 1e-10, guess (0.08, −0.35)) with `P` as the ONLY variable: per-point work is invariant
-/// by construction (iter = 30, K̄ = 64 at every `P`; verify via the probe counters), so timing
-/// the set fits the parametric model `WCET(P) = slope·P + const`.
+/// `--psweep`: latency-vs-`P` sweep set. The `search_00` champion geometry (8 tiles,
+/// blocks = 9, eps = 1e-10, guess (0.08, −0.35)) is regenerated at each source cardinality.
+/// The replay configures `P_max = P`; iteration count and common kernel evaluations per point are
+/// invariant, while implementation-specific traversal is measured rather than assumed invariant.
 fn run_psweep(out_dir: &Path) {
     std::fs::create_dir_all(out_dir).expect("create fixture dir");
     println!("P-sweep WCET fixtures -> {}", out_dir.display());

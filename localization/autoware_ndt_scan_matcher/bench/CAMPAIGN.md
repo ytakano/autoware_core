@@ -123,6 +123,39 @@ python3 ../../../../../../paper/scripts/integrate_campaign.py --check-only
 python3 ../../../../../../paper/scripts/integrate_campaign.py
 ```
 
+## Capacity-parameterized P-sweep
+
+`campaign_config_psweep.json` measures the six P-sweep fixtures in warm Profile B only.
+For each fixture, the runner exports `WCET_MAX_SOURCE_POINTS=source`, so the Rust engine is
+constructed with `P_max` equal to the source-point count of that fixture; it fixes
+`WCET_MAX_ACTIVE_LEAVES=418000`. Every cell is rejected unless the replay JSON records those
+exact limits. The retained design uses 100 measured aligns per engine and fixture in each of
+three separately booted sessions. This secondary campaign characterizes scaling; it does not
+share the primary campaign 1000-sample maximum protocol.
+
+Generate the fixtures before `prepare`, then freeze the source, binary, config, and fixtures:
+
+```sh
+cd ../autoware_ndt_scan_matcher_rs/realtime_ndt_scan_matcher
+cargo run --release --features wcet-count --example wcet_fixtures -- \
+  --psweep ../../bench/fixtures/psweep
+cd ../../bench
+CFG=campaign_config_psweep.json
+python3 wcet_campaign.py --config "$CFG" plan --verbose
+python3 wcet_campaign.py --config "$CFG" smoke
+python3 wcet_campaign.py --config "$CFG" prepare
+```
+
+After each of three reboots and the host preparation described above:
+
+```sh
+N=1  # then 2 and 3 on distinct boots
+python3 wcet_campaign.py --config "$CFG" verify-env
+python3 wcet_campaign.py --config "$CFG" run --session "$N" --series warm --resume
+python3 wcet_campaign.py --config "$CFG" status --session "$N"
+python3 wcet_campaign.py --config "$CFG" merge --session "$N"
+```
+
 ## Profile A (production-representative) and the bridge experiment
 
 `campaign_config_profileA.json` sets `"profile": "A"`: verify-env then *inverts* the
