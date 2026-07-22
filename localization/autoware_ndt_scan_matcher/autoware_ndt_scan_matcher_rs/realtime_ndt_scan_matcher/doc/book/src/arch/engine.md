@@ -10,13 +10,13 @@ shared `&NdtEngine` is sound across concurrent ROS callbacks *without an externa
 The engine holds its mutable state behind interior-mutability cells:
 
 - **`EngineState`** — the target `VoxelGridMap`, the `NdtParams`, the convergence params, the
-  covariance config, and the cell-id → tile-id mapping.
+  covariance config.
 - **regularization** — a tiny separate cell, so setting it per frame never clones the map.
 - **align scratch** — caller-owned mutable workspace and result storage, not part of engine state (see [MatchScratch](scratch.md)).
 
 The config API is a set of `&self` setters that publish new state: `set_params`,
 `set_convergence_params`, `set_covariance_config`, `set_regularization`. Map lifecycle:
-`add_target` / `add_target_bytes`, `remove_target*`, `create_kdtree`, and `commit_from` (the
+`add_target`, `remove_target`, `create_kdtree`, and `commit_from` (the
 atomic map-update commit). See [Engine state and the config API](engine-state.md).
 
 ## Concurrency: three configurations

@@ -14,17 +14,16 @@ crate-type = ["rlib"]
 # handler). The no_std build opts out with `--no-default-features`.
 #
 # Engine interior-mutability matrix (see src/engine.rs):
-#   std (default)          -> arc-swap cells + thread_local scratch (stateful align/result API)
-#   no_std (no features)   -> RefCell cells + engine-owned scratch; single-core, engine is !Sync
-#   no_std + `mt`          -> awkernel_sync mutex cells; scratch is caller-owned (`MatchScratch`),
-#                             the stateful align/result API is compiled out; engine is Sync
+#   std (default)          -> arc-swap cells; engine is Sync
+#   no_std (no features)   -> RefCell cells; single-core, engine is !Sync
+#   no_std + `mt`          -> awkernel_sync mutex cells; engine is Sync
+# Every configuration uses caller-owned `MatchScratch`.
 default = ["std", "parallel"]
 # `std` also pulls in `arc-swap` (the lock-free engine-state double-buffer). The no_std build
 # (`--no-default-features`, single-threaded) uses a `RefCell` cell instead, so arc-swap stays off.
 std = ["dep:arc-swap"]
 # `mt`: multi-thread-safe no_std build (multi-core kernel). Replaces the single-core `RefCell`
-# cells with `awkernel_sync` mutexes and removes the engine-owned align scratch (callers pass a
-# `&mut MatchScratch`). Ignored when `std` is also on (std keeps arc-swap + thread_local). The
+# cells with `awkernel_sync` mutexes. Ignored when `std` is also on (std keeps arc-swap). The
 # FINAL binary must enable exactly one awkernel_sync backend feature (`x86`/`aarch64`/`rv64`/
 # `rv32` on bare metal; `awkernel_sync/std` on host) — awkernel_sync does not compile without one.
 mt = ["dep:awkernel_sync"]

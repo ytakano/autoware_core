@@ -56,7 +56,7 @@ Per the roadmap's Rule 3 (`plan/ndt_pr.md`), the port adds **branch-only guards*
 leaves unguarded. Each fires **only on the degenerate domain** (where C++ produces NaN/Inf/garbage),
 so the valid-domain differential tests are unaffected. Added by the 2026-07-10 hazard scan:
 
-- **Non-finite result pose → non-converged** (`src/engine.rs`, `run_align_with`): the
+- **Non-finite result pose → non-converged** (`src/engine.rs`, `run_align`): the
   convergence verdict is forced to `is_converged = false` when the align result pose is not finite,
   so no consumer publishes NaN/Inf downstream (the node gates every pose/TF publish on
   `is_converged`). Pinned by `run_align_gates_non_finite_pose_to_not_converged`.

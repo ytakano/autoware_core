@@ -244,7 +244,7 @@ mod tests {
             pts.extend(dense_cluster(cx, cy, cz));
         }
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
-        map.add_target(&pts, 0);
+        map.add_target(&pts, b"0");
         map.try_create_kdtree(418_000).expect("build kd-tree");
         (map, pts)
     }

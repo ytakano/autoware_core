@@ -22,7 +22,7 @@ use nalgebra::{Matrix3, Matrix4, Quaternion, Rotation3, UnitQuaternion, Vector6}
 use crate::ffi_host::AwPose;
 use crate::ffi_ptr::{ffi_mut, ffi_mut_slice, ffi_ref, ffi_slice};
 use crate::node_handle::NdtScanMatcherRs;
-use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine, run_align_with};
+use realtime_ndt_scan_matcher::engine::{MatchScratch, NdtEngine, run_align};
 use realtime_ndt_scan_matcher::tpe::{Direction, TreeStructuredParzenEstimator, Trial};
 
 /// Initial pose TF lookup failed.
@@ -808,7 +808,7 @@ fn run_align_service_search_impl(
         let tpe_input = tpe.get_next_input().ok()?;
         let tpe_vec = Vector6::from(tpe_input);
         let guess = realtime_ndt_scan_matcher::transform::se3_matrix_f32(&tpe_vec);
-        let outcome = run_align_with(engine, &guess, source, &conv, scratch).ok()?;
+        let outcome = run_align(engine, &guess, source, &conv, scratch).ok()?;
         let initial_pose = matrix4_to_aw_pose(&guess);
         let result_pose = matrix4_to_aw_pose(&outcome.pose);
         let score = f64::from(outcome.nearest_voxel_likelihood);
@@ -2035,7 +2035,7 @@ mod search_loop_tests {
         }
         let engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         engine.set_params(0.01, 0.1, 1.0, 30, 0.55, 1);
-        engine.add_target(&cloud, 0);
+        engine.add_target(&cloud, b"0");
         engine.create_kdtree().expect("build kd-tree");
         let source = cloud.clone();
         (engine, source)

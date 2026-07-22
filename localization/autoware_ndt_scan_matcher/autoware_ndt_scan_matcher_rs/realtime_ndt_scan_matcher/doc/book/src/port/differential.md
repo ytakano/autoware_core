@@ -1,6 +1,6 @@
 # Differential testing
 
-The ON-vs-OFF oracle in practice: drive identical inputs through the legacy C++ path
+The ON-vs-OFF oracle in practice: drive identical inputs through the reference C++ path
 (`NDT_USE_RUST=OFF`) and the Rust path (`ON`) and diff the observables. This is the authoritative
 correctness mechanism (see Behavior equivalence and verification).
 

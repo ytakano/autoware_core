@@ -38,7 +38,7 @@ use crate::node::{DIAGNOSTIC_ERROR, DIAGNOSTIC_WARN, Diagnostics};
 use crate::node_handle::NdtScanMatcherRs;
 use realtime_ndt_scan_matcher::engine::{
     ConvergenceParams, CovEstimationParams, MatchScratch, NdtEngine, estimate_pose_covariance,
-    run_align_with,
+    run_align,
 };
 
 /// `sensor_msgs::msg::PointField::FLOAT32` — the only xyz datatype the fast path decodes.
@@ -405,7 +405,7 @@ fn publish_cloud_outputs(
     if ho.pointcloud_has_subscribers(AwPointCloudTopic::VoxelScorePoints) {
         let mut scores_all = alloc::vec::Vec::new();
         if eng
-            .nearest_voxel_score_each_point_with(points_map, &mut scores_all, scratch)
+            .nearest_voxel_score_each_point(points_map, &mut scores_all, scratch)
             .is_err()
         {
             return;
@@ -432,10 +432,10 @@ fn publish_cloud_outputs(
             sensor_stamp_ns,
             &no_ground,
         );
-        let Ok(tp) = eng.calc_transformation_probability_with(&no_ground, scratch) else {
+        let Ok(tp) = eng.calc_transformation_probability(&no_ground, scratch) else {
             return;
         };
-        let Ok(nvtl) = eng.calc_nearest_voxel_likelihood_with(&no_ground, scratch) else {
+        let Ok(nvtl) = eng.calc_nearest_voxel_likelihood(&no_ground, scratch) else {
             return;
         };
         #[expect(
@@ -593,7 +593,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_on_sensor_points_matc
         d.update_level(DIAGNOSTIC_ERROR, "NDT align scratch is unavailable");
         return SM_ALIGN_FAILED;
     };
-    let outcome = match run_align_with(
+    let outcome = match run_align(
         eng,
         &initial_pose_matrix,
         source,

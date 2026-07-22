@@ -325,7 +325,7 @@ fn subnormal_shell(shell: f32) -> Fixture {
 fn probe(name: &str, fx: &Fixture) {
     let mut map = VoxelGridMap::new([fx.params.resolution; 3], 6, 0.01);
     for (id, tile) in fx.tiles.iter().enumerate() {
-        map.add_target(tile, id as u64);
+        map.add_target(tile, &(id as u64).to_be_bytes());
     }
     map.try_create_kdtree(418_000).expect("build kd-tree");
     let mut ws = AlignWorkspace::try_with_capacity(fx.source.len()).expect("reserve workspace");

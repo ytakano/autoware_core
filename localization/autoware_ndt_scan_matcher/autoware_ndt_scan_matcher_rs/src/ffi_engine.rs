@@ -22,7 +22,7 @@
 
 use realtime_ndt_scan_matcher::engine::{
     ConvergenceParams, CovEstimationParams, MatchScratch, NdtEngine, estimate_pose_covariance,
-    run_align_with,
+    run_align,
 };
 use realtime_ndt_scan_matcher::nalgebra::Matrix4;
 
@@ -138,33 +138,6 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_set_params(
     );
 }
 
-/// Add a map tile of `n` xyz `f32` triples (`3 * n` floats) under `id`.
-/// # Safety
-/// `engine` is a valid handle (or null → no-op); `points` addresses `3 * n` readable `f32`.
-#[expect(unsafe_code, reason = "C ABI boundary; reads a caller-owned cloud")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
-    engine: *const NdtEngine,
-    points: *const f32,
-    n: usize,
-    id: u64,
-) {
-    let e = ffi_ref!(engine, else return);
-    let pts = ffi_slice!(points, n, [f32; 3], else return);
-    e.add_target(pts, id);
-}
-
-/// # Safety
-/// `engine` is a valid handle (or null → no-op).
-#[expect(unsafe_code, reason = "C ABI boundary; dereferences a shared handle")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_remove_target(
-    engine: *const NdtEngine,
-    id: u64,
-) {
-    ffi_ref!(engine, else return).remove_target(id);
-}
-
 /// Add a target tile keyed by the cell-id bytes (`points` is `3 * n` f32; `id` is `id_len` bytes).
 /// The engine owns the cell-id → tile mapping. No-op if `engine`/`points` is null.
 /// # Safety
@@ -175,7 +148,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_remove_target(
     reason = "C ABI boundary; reads a caller-owned cloud + id bytes"
 )]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_add_target_str(
+pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
     engine: *const NdtEngine,
     points: *const f32,
     n: usize,
@@ -186,7 +159,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_add_target_str(
     let pts = ffi_slice!(points, n, [f32; 3], else return);
     // SAFETY: caller guarantees `id_len` readable bytes (or null/0 → empty), audited in ffi_ptr.
     let id_bytes = unsafe { ffi_ptr::slice_or_empty(id, id_len) };
-    e.add_target_bytes(pts, id_bytes);
+    e.add_target(pts, id_bytes);
 }
 
 /// Remove the tile registered under the cell-id bytes (`id` is `id_len` bytes). No-op if `engine` is
@@ -195,7 +168,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_add_target_str(
 /// `engine` is a valid handle (or null → no-op); `id` addresses `id_len` readable bytes (or null/0).
 #[expect(unsafe_code, reason = "C ABI boundary; reads caller-owned id bytes")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_remove_target_str(
+pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_remove_target(
     engine: *const NdtEngine,
     id: *const u8,
     id_len: usize,
@@ -203,7 +176,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_remove_target_s
     let e = ffi_ref!(engine, else return);
     // SAFETY: caller guarantees `id_len` readable bytes (or null/0 → empty), audited in ffi_ptr.
     let id_bytes = unsafe { ffi_ptr::slice_or_empty(id, id_len) };
-    e.remove_target_bytes(id_bytes);
+    e.remove_target(id_bytes);
 }
 
 /// Write the current tile cell-ids (`BTreeMap`-sorted). Always writes `*out_count` (number of ids)
@@ -322,7 +295,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_ndt_engine_align(
     let scr = ffi_mut!(scratch, else return false);
     let guess_buf = ffi_slice!(guess, 16, else return false);
     let src = ffi_slice!(source, n, [f32; 3], else return false);
-    e.align_with(&matrix4_from_row_major(guess_buf), src, scr)
+    e.align(&matrix4_from_row_major(guess_buf), src, scr)
         .is_ok()
 }
 
@@ -485,7 +458,7 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_node_run_align(
             &*params,
         )
     };
-    let Ok(outcome) = run_align_with(
+    let Ok(outcome) = run_align(
         eng,
         &matrix4_from_row_major(guess_buf),
         src,
@@ -736,8 +709,8 @@ mod tests {
             .collect();
         let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
-        engine.add_target(&tile_a, 0);
-        engine.add_target(&tile_b, 1);
+        engine.add_target(&tile_a, b"0");
+        engine.add_target(&tile_b, b"1");
         engine.create_kdtree().expect("build kd-tree");
         (engine, source)
     }
@@ -755,8 +728,8 @@ mod tests {
         let guess = Matrix4::<f32>::identity();
         let mut pure_scratch =
             MatchScratch::try_with_capacity(source.len(), 30).expect("reserve scratch");
-        let pure = run_align_with(&engine, &guess, &source, &TP_PARAMS, &mut pure_scratch)
-            .expect("pure align");
+        let pure =
+            run_align(&engine, &guess, &source, &TP_PARAMS, &mut pure_scratch).expect("pure align");
 
         let (ffi_engine, ffi_source) = two_tile_engine();
         let guess16 = [
@@ -856,7 +829,7 @@ mod tests {
         let mut scratch =
             MatchScratch::try_with_capacity(source.len(), 30).expect("reserve align scratch");
         engine
-            .align_with(&Matrix4::<f32>::identity(), &source, &mut scratch)
+            .align(&Matrix4::<f32>::identity(), &source, &mut scratch)
             .expect("align");
         let pose = scratch.result_ref().pose;
         (engine, source, pose)
@@ -997,7 +970,8 @@ mod tests {
                 limited,
                 flat.as_ptr(),
                 tile.len(),
-                0,
+                b"0".as_ptr(),
+                1,
             );
             assert!(!autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(
                 limited
@@ -1019,11 +993,11 @@ mod tests {
 
         let mut pure = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut pure);
-        pure.add_target(&tile, 0);
+        pure.add_target(&tile, b"0");
         pure.create_kdtree().expect("build kd-tree");
         let mut pure_scratch =
             MatchScratch::try_with_capacity(source.len(), 30).expect("reserve scratch");
-        pure.align_with(
+        pure.align(
             &matrix4_from_row_major(&guess16),
             &source,
             &mut pure_scratch,
@@ -1039,7 +1013,13 @@ mod tests {
             let scratch = autoware_ndt_scan_matcher_rs_ndt_match_scratch_new(2_000, 30);
             assert!(!e.is_null() && !scratch.is_null());
             autoware_ndt_scan_matcher_rs_ndt_engine_set_params(e, 0.01, 0.1, 1.0, 30, 0.55, 1);
-            autoware_ndt_scan_matcher_rs_ndt_engine_add_target(e, flat.as_ptr(), tile.len(), 0);
+            autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
+                e,
+                flat.as_ptr(),
+                tile.len(),
+                b"0".as_ptr(),
+                1,
+            );
             assert!(autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(e));
             assert!(autoware_ndt_scan_matcher_rs_ndt_engine_align(
                 e,
@@ -1103,14 +1083,14 @@ mod tests {
         configured(&mut engine);
         // SAFETY: valid engine; flat is 3*n f32; ids are valid byte slices.
         unsafe {
-            autoware_ndt_scan_matcher_rs_ndt_engine_add_target_str(
+            autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
                 &engine,
                 flat.as_ptr(),
                 tile.len(),
                 b"aa".as_ptr(),
                 2,
             );
-            autoware_ndt_scan_matcher_rs_ndt_engine_add_target_str(
+            autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
                 &engine,
                 flat.as_ptr(),
                 tile.len(),

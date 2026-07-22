@@ -126,7 +126,7 @@ fn run_synthetic() {
         .collect();
 
     let mut map = VoxelGridMap::new([2.0, 2.0, 2.0], 6, 0.01);
-    map.add_target(&map_points, 0);
+    map.add_target(&map_points, b"0");
     map.try_create_kdtree(418_000).expect("build synthetic map");
 
     let params = NdtParams {
@@ -173,7 +173,7 @@ fn run_fixtures(paths: &[String]) {
         let fx = Fixture::read(std::path::Path::new(path)).expect("read fixture");
         let mut map = VoxelGridMap::new([fx.params.resolution; 3], 6, 0.01);
         for (id, tile) in fx.tiles.iter().enumerate() {
-            map.add_target(tile, id as u64);
+            map.add_target(tile, &(id as u64).to_be_bytes());
         }
         map.try_create_kdtree(418_000).expect("build fixture map");
         let mut ws =
@@ -399,7 +399,7 @@ fn run_capture(dir: &std::path::Path) {
             map = VoxelGridMap::new([params.resolution; 3], 6, 0.01);
             for (i, id) in fr.ids.iter().enumerate() {
                 let tile = capture::read_tile(dir, &capture::hex_id(id)).expect("read tile");
-                map.add_target(&tile, i as u64);
+                map.add_target(&tile, &(i as u64).to_be_bytes());
             }
             map.try_create_kdtree(418_000).expect("build capture map");
             cur_ids = Some(fr.ids.clone());

@@ -11,8 +11,6 @@ The engine's data lives in `EngineState`, published through interior-mutability 
 - `conv` — the `ConvergenceParams` (`converged_param_type` + the two thresholds).
 - `cov_config` — the `CovarianceConfig` (estimation mode, scale, temperature, configured 6×6, XY
   search offsets).
-- `id_map` / `next_id` — the cell-id (raw bytes) → tile-`u64` mapping the engine owns for
-  string-keyed tiles.
 
 Regularization is **not** part of `EngineState`; it lives in its own tiny cell so setting it per
 frame never clones the map.
@@ -26,8 +24,9 @@ resolution, mirroring the C++ order (params before `addTarget`).
 
 ## Map lifecycle
 
-- `add_target(points, id)` / `add_target_bytes(points, cell_id)` — register a tile (byte-id variants
-  assign a fresh `u64` on first use); `remove_target*` drop one.
+- `add_target(points, cell_id)` — register or replace a tile under its raw byte id;
+  `remove_target(cell_id)` drops one. Bytewise key ordering makes final map assembly independent of
+  tile arrival order.
 - `create_kdtree()` — rebuild the kd-tree over voxel centroids after tile changes.
 - `has_target()` — whether any tile is loaded.
 - `commit_from(&src)` — atomically publish another engine's fully-built state (the map-update commit;

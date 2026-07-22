@@ -65,7 +65,7 @@
 //!
 //! // Register a target map tile (id 0) and build the kd-tree over the voxel centroids.
 //! let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
-//! engine.add_target(&target, 0);
+//! engine.add_target(&target, b"0");
 //! engine.create_kdtree().expect("map fits the leaf limit");
 //! assert!(engine.has_target());
 //!
@@ -73,7 +73,7 @@
 //! let source = target.clone();
 //! let mut scratch = MatchScratch::try_for_limits(engine.limits()).expect("reserve scratch");
 //! engine
-//!     .align_with(&Matrix4::identity(), &source, &mut scratch)
+//!     .align(&Matrix4::identity(), &source, &mut scratch)
 //!     .expect("input is inside the work envelope");
 //! let result = scratch.result_ref();
 //! assert!(result.iteration_num >= 0);

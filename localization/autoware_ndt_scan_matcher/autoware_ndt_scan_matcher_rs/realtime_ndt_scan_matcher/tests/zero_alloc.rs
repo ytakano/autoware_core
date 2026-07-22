@@ -109,8 +109,8 @@ fn engine_allocations_after_warmup() {
     // --- compute_derivatives: 0 allocations after warmup ---
     {
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
-        map.add_target(&dense_cluster(0.5, 0.5, 0.5), 0);
-        map.add_target(&dense_cluster(2.5, 0.5, 0.5), 1);
+        map.add_target(&dense_cluster(0.5, 0.5, 0.5), b"0");
+        map.add_target(&dense_cluster(2.5, 0.5, 0.5), b"1");
         map.try_create_kdtree(418_000).expect("build kd-tree");
 
         let source: Vec<[f32; 3]> = vec![[0.55, 0.5, 0.5], [0.5, 0.45, 0.52], [2.55, 0.5, 0.5]];
@@ -169,7 +169,7 @@ fn engine_allocations_after_warmup() {
     .iter()
     .enumerate()
     {
-        map.add_target(&dense_cluster(cx, cy, cz), id as u64);
+        map.add_target(&dense_cluster(cx, cy, cz), &(id as u64).to_be_bytes());
     }
     map.try_create_kdtree(418_000).expect("build kd-tree");
 
@@ -249,11 +249,11 @@ fn engine_allocations_after_warmup() {
     // (Same process-global counter, so this stays in the single sequential test.)
     {
         use realtime_ndt_scan_matcher::engine::{
-            ConvergenceParams, MatchScratch, NdtEngine, run_align_with,
+            ConvergenceParams, MatchScratch, NdtEngine, run_align,
         };
         let engine = NdtEngine::new(2.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         for (id, &(cx, cy, cz)) in centers.iter().enumerate() {
-            engine.add_target(&dense_cluster(cx, cy, cz), id as u64);
+            engine.add_target(&dense_cluster(cx, cy, cz), &(id as u64).to_be_bytes());
         }
         engine.create_kdtree().expect("build kd-tree");
         let max_iter = usize::try_from(engine.max_iterations()).unwrap();
@@ -265,10 +265,10 @@ fn engine_allocations_after_warmup() {
             converged_param_nearest_voxel_transformation_likelihood: 0.0,
         };
         let engine_first_allocs =
-            count_allocs(|| run_align_with(&engine, &guess, &source, &convergence, &mut scratch));
+            count_allocs(|| run_align(&engine, &guess, &source, &convergence, &mut scratch));
         assert_eq!(
             engine_first_allocs, 0,
-            "engine run_align_with allocated {engine_first_allocs} time(s) on the first frame with a \
+            "engine run_align allocated {engine_first_allocs} time(s) on the first frame with a \
              pre-reserved MatchScratch"
         );
     }

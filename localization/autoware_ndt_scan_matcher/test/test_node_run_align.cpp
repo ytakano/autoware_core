@@ -115,10 +115,12 @@ std::vector<float> flatten(const pcl::PointCloud<pcl::PointXYZ> & cloud)
   return flat;
 }
 
-void add_target(const RustEngine & engine, const pcl::PointCloud<pcl::PointXYZ> & tile, uint64_t id)
+void add_target(
+  const RustEngine & engine, const pcl::PointCloud<pcl::PointXYZ> & tile, const char * id)
 {
   const std::vector<float> flat = flatten(tile);
-  autoware_ndt_scan_matcher_rs_ndt_engine_add_target(engine.raw(), flat.data(), tile.size(), id);
+  autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
+    engine.raw(), flat.data(), tile.size(), reinterpret_cast<const uint8_t *>(id), std::strlen(id));
 }
 
 // Build a 2-tile Rust engine + a source cloud shifted by a small known translation.
@@ -141,8 +143,8 @@ RustEngine make_driven_engine(pcl::PointCloud<pcl::PointXYZ>::Ptr & source_out)
   autoware_ndt_scan_matcher_rs_ndt_engine_set_params(
     engine.raw(), params.trans_epsilon, params.step_size, params.resolution, params.max_iterations,
     0.55, params.num_threads);
-  add_target(engine, *tile0, 0);
-  add_target(engine, *tile1, 1);
+  add_target(engine, *tile0, "0");
+  add_target(engine, *tile1, "1");
   autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(engine.raw());
   return engine;
 }

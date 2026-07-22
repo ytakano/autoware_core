@@ -114,10 +114,12 @@ TEST(NdtEngine, IncrementalMapMatchesCppEngine)  // NOLINT
   AwNdtMatchScratch * scratch = autoware_ndt_scan_matcher_rs_ndt_match_scratch_new(2000, 30);
   ASSERT_NE(scratch, nullptr);
   autoware_ndt_scan_matcher_rs_ndt_engine_set_params(engine, 0.01, 0.1, 2.0, 30, 0.55, 1);
+  constexpr std::array<uint8_t, 1> id0 = {'0'};
+  constexpr std::array<uint8_t, 1> id1 = {'1'};
   autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
-    engine, tiles_flat[0].data(), tiles[0]->size(), 0);
+    engine, tiles_flat[0].data(), tiles[0]->size(), id0.data(), id0.size());
   autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
-    engine, tiles_flat[1].data(), tiles[1]->size(), 1);
+    engine, tiles_flat[1].data(), tiles[1]->size(), id1.data(), id1.size());
   autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(engine);
   EXPECT_TRUE(autoware_ndt_scan_matcher_rs_ndt_engine_has_target(engine));
 
@@ -147,9 +149,9 @@ TEST(NdtEngine, IncrementalMapMatchesCppEngine)  // NOLINT
   autoware_ndt_scan_matcher_rs_ndt_match_scratch_get_result(scratch, &out);
 
   // remove one tile -> still has a target; remove both -> none (mirrors removeTarget).
-  autoware_ndt_scan_matcher_rs_ndt_engine_remove_target(engine, 0);
+  autoware_ndt_scan_matcher_rs_ndt_engine_remove_target(engine, id0.data(), id0.size());
   EXPECT_TRUE(autoware_ndt_scan_matcher_rs_ndt_engine_has_target(engine));
-  autoware_ndt_scan_matcher_rs_ndt_engine_remove_target(engine, 1);
+  autoware_ndt_scan_matcher_rs_ndt_engine_remove_target(engine, id1.data(), id1.size());
   EXPECT_FALSE(autoware_ndt_scan_matcher_rs_ndt_engine_has_target(engine));
 
   autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);

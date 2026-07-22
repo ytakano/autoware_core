@@ -56,7 +56,7 @@ fn make_map(clusters: usize, spacing: f32) -> (VoxelGridMap, Vec<[f32; 3]>) {
         }
     }
     let mut map = VoxelGridMap::new([2.0, 2.0, 2.0], 6, 0.01);
-    map.add_target(&pts, 0);
+    map.add_target(&pts, b"0");
     map.try_create_kdtree(418_000).expect("build kd-tree");
     (map, pts)
 }

@@ -37,8 +37,8 @@
 // Replays a capture directory (params.bin + tiles/ + frames/, written by the node's
 // NDT_CAPTURE_DIR hook) through BOTH engines: frames are grouped into epochs by their active
 // tile-id set; per epoch both maps are rebuilt with tiles added in the captured (sorted) id
-// order — C++ uses zero-padded numeric names so its std::map string order matches the Rust
-// engine's numeric id order. Per frame: WCET_REPEATS timed aligns per engine (default 5, median
+// order and the same zero-padded byte identifiers. Per frame: WCET_REPEATS timed aligns per engine
+// (default 5, median
 // reported) + an iteration-equality check. Rust-side counters come from
 // `wcet_frame --capture` (separate pass); merge with bench/wcet_realdata.py.
 
@@ -730,8 +730,10 @@ int run_fixture_mode(const std::string & out_path, const std::vector<std::string
         eng, fx.trans_epsilon, fx.step_size, fx.resolution, fx.max_iterations, fx.outlier_ratio,
         wcet_threads());
       for (size_t t = 0; t < fx.tiles.size(); ++t) {
+        const std::string tile_id = std::to_string(t);
         autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
-          eng, fx.tiles[t].data(), fx.tiles[t].size() / 3, t);
+          eng, fx.tiles[t].data(), fx.tiles[t].size() / 3,
+          reinterpret_cast<const uint8_t *>(tile_id.data()), tile_id.size());
       }
       if (!autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng)) {
         std::fprintf(stderr, "wcet: %s: bounded Rust kd-tree construction failed\n", path.c_str());
@@ -1095,8 +1097,8 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
       continue;
     }
     if (fr.ids != cur_ids) {
-      // New epoch: rebuild both maps, tiles added in the captured (sorted) id order with
-      // zero-padded numeric names (C++ std::map string order == Rust numeric id order).
+      // New epoch: rebuild both maps with identical zero-padded byte identifiers in captured
+      // (sorted) id order.
       ndt = std::make_unique<Ndt>();
       ndt->setParams(params);
       if (eng != nullptr) {
@@ -1136,7 +1138,8 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
         std::snprintf(name, sizeof(name), "%06zu", i);
         ndt->addTarget(entry.first, name);
         autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
-          eng, entry.second.data(), entry.second.size() / 3, static_cast<uint64_t>(i));
+          eng, entry.second.data(), entry.second.size() / 3,
+          reinterpret_cast<const uint8_t *>(name), std::strlen(name));
       }
       if (!tiles_ok) {
         rc = 1;
@@ -1161,8 +1164,11 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
           autoware_ndt_scan_matcher_rs_voxel_grid_map_new(leaf3, 6, 0.01);
         for (size_t i = 0; i < fr.ids.size(); ++i) {
           const auto & e2 = tile_cache.at(hex_of(fr.ids[i]));
+          char name[16];
+          std::snprintf(name, sizeof(name), "%06zu", i);
           autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
-            rmap, e2.second.data(), e2.second.size() / 3, static_cast<uint64_t>(i));
+            rmap, e2.second.data(), e2.second.size() / 3,
+            reinterpret_cast<const uint8_t *>(name), std::strlen(name));
         }
         autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(rmap, 418000);
         std::vector<std::array<float, 3>> rustm;
@@ -1193,8 +1199,11 @@ int run_capture_mode(const std::string & out_path, const std::string & dir)
             autoware_ndt_scan_matcher_rs_voxel_grid_map_new(leaf3, 6, 0.01);
           for (size_t i = 0; i < fr.ids.size(); ++i) {
             const auto & e2 = tile_cache.at(hex_of(fr.ids[i]));
+            char name[16];
+            std::snprintf(name, sizeof(name), "%06zu", i);
             autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
-              rmap2, e2.second.data(), e2.second.size() / 3, static_cast<uint64_t>(i));
+              rmap2, e2.second.data(), e2.second.size() / 3,
+              reinterpret_cast<const uint8_t *>(name), std::strlen(name));
           }
           autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(rmap2, 418000);
           size_t checked = 0, icov_exact = 0, icov_small = 0, icov_big = 0, mean_exact = 0;
@@ -1564,7 +1573,9 @@ int main(int argc, char ** argv)
     return 1;
   }
   autoware_ndt_scan_matcher_rs_ndt_engine_set_params(eng, 0.01, 0.1, 2.0, 30, 0.55, 1);
-  autoware_ndt_scan_matcher_rs_ndt_engine_add_target(eng, target_flat.data(), n_pts, 0);
+  constexpr std::array<uint8_t, 1> target_id = {'0'};
+  autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
+    eng, target_flat.data(), n_pts, target_id.data(), target_id.size());
   if (!autoware_ndt_scan_matcher_rs_ndt_engine_create_kdtree(eng)) {
     std::fprintf(stderr, "ndt_bench_replay: bounded Rust kd-tree construction failed\n");
     autoware_ndt_scan_matcher_rs_ndt_match_scratch_free(scratch);

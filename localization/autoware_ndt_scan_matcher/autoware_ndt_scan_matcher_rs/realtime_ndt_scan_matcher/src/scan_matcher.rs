@@ -198,14 +198,14 @@ impl ScanMatcher {
     /// * `scratch` — caller-owned per-align workspace; reuse it across frames, never share it.
     /// # Errors
     /// Returns the source, iteration, numeric, arithmetic, kd-stack, and workspace errors documented
-    /// by [`NdtEngine::align_outcome_with`]. Neighbor-limit exceedance is non-fatal.
+    /// by [`NdtEngine::align_outcome`]. Neighbor-limit exceedance is non-fatal.
     pub fn match_scan(
         &self,
         guess: &Matrix4<f32>,
         source: &[[f32; 3]],
         scratch: &mut MatchScratch,
     ) -> Result<MatchResult, AlignError> {
-        let o = self.engine.align_outcome_with(guess, source, scratch)?;
+        let o = self.engine.align_outcome(guess, source, scratch)?;
         Ok(MatchResult {
             pose: o.pose,
             transform_probability: o.transform_probability,
@@ -236,7 +236,7 @@ impl ScanMatcher {
         source: &[[f32; 3]],
         scratch: &mut MatchScratch,
     ) -> Result<(MatchResult, CovarianceResult), AlignError> {
-        let o = self.engine.align_outcome_with(guess, source, scratch)?;
+        let o = self.engine.align_outcome(guess, source, scratch)?;
         // The full align result (carries the hessian the covariance estimate needs) — read from
         // THIS scratch session, so it is the hessian of the align above.
         let (result_pose, hessian, main_nvtl) = {
@@ -301,10 +301,10 @@ pub async fn apply_map_update<S: MapSource>(
         engine.clone()
     };
     for tile in &delta.add {
-        staging.add_target_bytes(&tile.points, &tile.id);
+        staging.add_target(&tile.points, &tile.id);
     }
     for id in &delta.remove {
-        staging.remove_target_bytes(id);
+        staging.remove_target(id);
     }
     staging.create_kdtree()?;
     engine.commit_from(&staging)?;

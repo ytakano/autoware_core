@@ -333,23 +333,14 @@ fn compute_icov(cov: &Matrix3<f64>, eig_mult: f64) -> Option<[f64; 9]> {
 
 // ---- multi-grid map + kd-tree (the MultiVoxelGridCovariance equivalent) ----
 
-/// Canonical tile key. Numeric ids preserve the public `VoxelGridMap` API, while raw cell ids let
-/// the engine reproduce C++'s `std::map<std::string, ...>` ordering without an insertion-ordered
-/// surrogate id. The variants form separate namespaces if both APIs are used on one engine.
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
-enum TileKey {
-    Numeric(u64),
-    Cell(Vec<u8>),
-}
-
-/// Id-keyed collection of per-cloud voxel grids plus a kd-tree over all voxel centroids for radius
+/// Byte-id-keyed collection of per-cloud voxel grids plus a kd-tree over all voxel centroids for radius
 /// search. Mirrors `MultiVoxelGridCovariance` (`sid_to_iid_`/`grid_list_` + `KdTreeFLANN`).
 #[derive(Clone)]
 pub struct VoxelGridMap {
     leaf_size: [f64; 3],
     min_points: i32,
     eig_mult: f64,
-    grids: BTreeMap<TileKey, VoxelGrid>,
+    grids: BTreeMap<Vec<u8>, VoxelGrid>,
     flat_leaves: Vec<Leaf>,
     kdtree: Option<KdTree>,
 }
@@ -391,48 +382,28 @@ impl VoxelGridMap {
         }
     }
 
-    /// Build a grid from `points` and register it under `id` (replacing any existing one). Invalidates
-    /// the kd-tree — call [`Self::create_kdtree`] before searching again.
+    /// Build a grid from `points` and register it under the raw cell-id bytes, replacing any
+    /// existing tile with the same id. Invalidates the kd-tree.
     ///
     /// # Arguments
     /// * `points` — the tile's map points (`[x, y, z]`, metres).
-    /// * `id` — tile key; re-adding the same `id` replaces that tile.
-    pub fn add_target(&mut self, points: &[[f32; 3]], id: u64) {
+    /// * `id` — raw tile key; re-adding the same byte sequence replaces that tile.
+    pub fn add_target(&mut self, points: &[[f32; 3]], id: &[u8]) {
         let grid = VoxelGrid::build(points, self.leaf_size, self.min_points, self.eig_mult);
-        self.grids.insert(TileKey::Numeric(id), grid);
-        self.invalidate();
-    }
-
-    /// Register a tile under its raw cell-id bytes. Cell ids are ordered lexicographically, so the
-    /// finalized map is independent of the order in which tile updates arrived.
-    pub(crate) fn add_target_bytes(&mut self, points: &[[f32; 3]], id: &[u8]) {
-        let grid = VoxelGrid::build(points, self.leaf_size, self.min_points, self.eig_mult);
-        self.grids.insert(TileKey::Cell(id.to_vec()), grid);
+        self.grids.insert(id.to_vec(), grid);
         self.invalidate();
     }
 
     /// Remove the tile registered under `id` (no-op if absent). Invalidates the kd-tree — call
     /// [`Self::create_kdtree`] before searching again.
-    pub fn remove_target(&mut self, id: u64) {
-        self.grids.remove(&TileKey::Numeric(id));
-        self.invalidate();
-    }
-
-    /// Remove a tile registered under its raw cell-id bytes.
-    pub(crate) fn remove_target_bytes(&mut self, id: &[u8]) {
-        self.grids.remove(&TileKey::Cell(id.to_vec()));
+    pub fn remove_target(&mut self, id: &[u8]) {
+        self.grids.remove(id);
         self.invalidate();
     }
 
     /// Registered raw cell ids in canonical bytewise order.
     pub(crate) fn cell_ids(&self) -> Vec<Vec<u8>> {
-        self.grids
-            .keys()
-            .filter_map(|key| match key {
-                TileKey::Numeric(_) => None,
-                TileKey::Cell(id) => Some(id.clone()),
-            })
-            .collect()
+        self.grids.keys().cloned().collect()
     }
 
     /// Whether any target grid is registered (the C++ `hasTarget`).
@@ -718,8 +689,8 @@ mod tests {
     #[test]
     fn map_add_create_then_radius_search_finds_cluster() {
         let mut map = VoxelGridMap::new([2.0, 2.0, 2.0], 6, 0.01);
-        map.add_target(&dense_cluster(1.0, 1.0, 1.0), 0);
-        map.add_target(&dense_cluster(21.0, 1.0, 1.0), 1);
+        map.add_target(&dense_cluster(1.0, 1.0, 1.0), b"0");
+        map.add_target(&dense_cluster(21.0, 1.0, 1.0), b"1");
         map.try_create_kdtree(418_000).expect("build kd-tree");
 
         let mut hits = alloc::vec::Vec::new();
@@ -739,9 +710,9 @@ mod tests {
     #[test]
     fn map_remove_target_drops_its_leaves() {
         let mut map = VoxelGridMap::new([2.0, 2.0, 2.0], 6, 0.01);
-        map.add_target(&dense_cluster(1.0, 1.0, 1.0), 0);
-        map.add_target(&dense_cluster(21.0, 1.0, 1.0), 1);
-        map.remove_target(0);
+        map.add_target(&dense_cluster(1.0, 1.0, 1.0), b"0");
+        map.add_target(&dense_cluster(21.0, 1.0, 1.0), b"1");
+        map.remove_target(b"0");
         map.try_create_kdtree(418_000).expect("build kd-tree");
 
         let mut a = alloc::vec::Vec::new();
@@ -757,7 +728,7 @@ mod tests {
     #[test]
     fn map_search_before_create_kdtree_is_empty() {
         let mut map = VoxelGridMap::new([2.0, 2.0, 2.0], 6, 0.01);
-        map.add_target(&dense_cluster(1.0, 1.0, 1.0), 0);
+        map.add_target(&dense_cluster(1.0, 1.0, 1.0), b"0");
         // No create_kdtree() yet.
         let mut hits = alloc::vec::Vec::new();
         map.radius_search([1.0, 1.0, 1.0], 1.5, 0, &mut hits)
@@ -776,8 +747,8 @@ mod tests {
         for i in 0..3 {
             for j in 0..3 {
                 let (cx, cy) = ((3 * i + 1) as f32, (3 * j + 1) as f32);
-                map.add_target(&dense_cluster(cx, cy, 1.0), id);
-                id += 1;
+                map.add_target(&dense_cluster(cx, cy, 1.0), &id.to_be_bytes());
+                id = id.checked_add(1).expect("nine test tiles fit in u64");
             }
         }
         map.try_create_kdtree(418_000).expect("build kd-tree");

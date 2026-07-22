@@ -156,12 +156,16 @@ TEST(VoxelGrid, MultiGridRadiusSearchMatchesCpp)  // NOLINT
     make_cluster(centers[g], 40, rng, *cloud, flat);
     cloud->is_dense = true;
     cpp_grid.setInputCloudAndFilter(cloud, sids[g]);
-    autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(map, flat.data(), flat.size() / 3, g);
+    const auto * id = reinterpret_cast<const uint8_t *>(sids[g]);
+    autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
+      map, flat.data(), flat.size() / 3, id, std::strlen(sids[g]));
   }
 
   // Remove the middle grid ("b" / id 1) from both.
   cpp_grid.removeCloud("b");
-  autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_target(map, 1);
+  const auto * removed_id = reinterpret_cast<const uint8_t *>(sids[1]);
+  autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_target(
+    map, removed_id, std::strlen(sids[1]));
   cpp_grid.createKdtree();
   autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(map, 418000);
 

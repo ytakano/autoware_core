@@ -108,7 +108,8 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_voxel_grid_map_new(
 }
 
 /// # Safety
-/// `map` is a valid handle; `points` points to `3*n` `f32`. No-op if `map`/`points` is null.
+/// `map` is a valid handle; `points` points to `3*n` `f32`; `id` points to `id_len`
+/// readable bytes or is null when `id_len == 0`. No-op if `map`/`points` is null.
 #[expect(
     unsafe_code,
     reason = "C ABI boundary; pointers validated per rust-c-ffi-safety"
@@ -118,15 +119,19 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
     map: *mut VoxelGridMap,
     points: *const f32,
     n: usize,
-    id: u64,
+    id: *const u8,
+    id_len: usize,
 ) {
     let map = ffi_mut!(map, else return);
     let pts = ffi_slice!(points, n, [f32; 3], else return);
+    // SAFETY: caller guarantees `id_len` readable bytes (or null/0), audited in ffi_ptr.
+    let id = unsafe { ffi_ptr::slice_or_empty(id, id_len) };
     map.add_target(pts, id);
 }
 
 /// # Safety
-/// `map` is a valid handle (or null). Removes the grid registered under `id`.
+/// `map` is a valid handle (or null); `id` points to `id_len` readable bytes or is null when
+/// `id_len == 0`. Removes the grid registered under `id`.
 #[expect(
     unsafe_code,
     reason = "C ABI boundary; pointers validated per rust-c-ffi-safety"
@@ -134,9 +139,13 @@ pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_target(
     map: *mut VoxelGridMap,
-    id: u64,
+    id: *const u8,
+    id_len: usize,
 ) {
-    ffi_mut!(map, else return).remove_target(id);
+    let map = ffi_mut!(map, else return);
+    // SAFETY: caller guarantees `id_len` readable bytes (or null/0), audited in ffi_ptr.
+    let id = unsafe { ffi_ptr::slice_or_empty(id, id_len) };
+    map.remove_target(id);
 }
 
 /// # Safety
@@ -340,8 +349,8 @@ mod tests {
 
         // Pure reference map.
         let mut pure = VoxelGridMap::new(leaf_size, 6, 0.01);
-        pure.add_target(&a, 0);
-        pure.add_target(&b, 1);
+        pure.add_target(&a, b"0");
+        pure.add_target(&b, b"1");
         pure.try_create_kdtree(418_000).expect("build kd-tree");
 
         // FFI map, same inputs.
@@ -351,8 +360,20 @@ mod tests {
             unsafe { autoware_ndt_scan_matcher_rs_voxel_grid_map_new(leaf_size.as_ptr(), 6, 0.01) };
         assert!(!map.is_null());
         unsafe {
-            autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(map, fa.as_ptr(), a.len(), 0);
-            autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(map, fb.as_ptr(), b.len(), 1);
+            autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
+                map,
+                fa.as_ptr(),
+                a.len(),
+                b"0".as_ptr(),
+                1,
+            );
+            autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
+                map,
+                fb.as_ptr(),
+                b.len(),
+                b"1".as_ptr(),
+                1,
+            );
             assert!(autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(
                 map, 418_000
             ));
@@ -445,9 +466,14 @@ mod tests {
                 core::ptr::null_mut(),
                 core::ptr::null(),
                 0,
+                core::ptr::null(),
                 0,
             );
-            autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_target(core::ptr::null_mut(), 0);
+            autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_target(
+                core::ptr::null_mut(),
+                core::ptr::null(),
+                0,
+            );
             assert!(!autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(
                 core::ptr::null_mut(),
                 418_000
@@ -461,17 +487,26 @@ mod tests {
         for (id, &(cx, cy)) in centers.iter().enumerate() {
             let c = dense_cluster(cx, cy, 0.4);
             let flat: alloc::vec::Vec<f32> = c.iter().flat_map(|p| p.iter().copied()).collect();
+            let id = id.to_be_bytes();
             unsafe {
                 autoware_ndt_scan_matcher_rs_voxel_grid_map_add_target(
                     map,
                     flat.as_ptr(),
                     c.len(),
-                    id as u64,
+                    id.as_ptr(),
+                    id.len(),
                 );
             }
         }
         // Remove the first cluster via the FFI shim (the dispatch path under test).
-        unsafe { autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_target(map, 0) };
+        let first_id = 0_usize.to_be_bytes();
+        unsafe {
+            autoware_ndt_scan_matcher_rs_voxel_grid_map_remove_target(
+                map,
+                first_id.as_ptr(),
+                first_id.len(),
+            );
+        }
         unsafe { autoware_ndt_scan_matcher_rs_voxel_grid_map_create_kdtree(map, 418_000) };
 
         let q = [1.9_f32, 0.4, 0.4];

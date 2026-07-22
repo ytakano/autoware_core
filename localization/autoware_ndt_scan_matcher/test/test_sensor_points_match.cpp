@@ -101,7 +101,7 @@ void add_target(
   const AwNdtEngine * engine, const pcl::PointCloud<pcl::PointXYZ> & tile, const std::string & id)
 {
   const std::vector<float> flat = flatten(tile);
-  autoware_ndt_scan_matcher_rs_ndt_engine_add_target_str(
+  autoware_ndt_scan_matcher_rs_ndt_engine_add_target(
     engine, flat.data(), tile.size(), reinterpret_cast<const std::uint8_t *>(id.data()), id.size());
 }
 

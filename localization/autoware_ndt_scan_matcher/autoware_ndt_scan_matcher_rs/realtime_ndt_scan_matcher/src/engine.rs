@@ -15,7 +15,7 @@
 //! Persistent NDT engine handle. This crate exposes the Rust API; the sibling node crate wraps it
 //! in the opaque C ABI used by the C++ package.
 //!
-//! Concurrency (engine concurrency refactor): the engine exposes **`&self`-only** methods, and its
+//! Concurrency: the engine exposes **`&self`-only** methods, and its
 //! mutable state lives behind interior mutability in one of three configs:
 //!
 //! - **std** (default): target map + params in an `ArcSwap<EngineState>` (the read/align path loads
@@ -288,14 +288,14 @@ struct EngineState {
 ///     .expect("valid work envelope");
 /// engine.set_params(0.01, 0.1, 2.0, 30, 0.55, 1);
 /// let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
-/// engine.add_target(&target, 0);
+/// engine.add_target(&target, b"map");
 /// engine.create_kdtree().expect("build kd-tree");
 ///
 /// let mut scratch = MatchScratch::try_for_limits(engine.limits()).expect("reserve scratch");
 /// // Frame 1, then frame 2 reuse the same preallocated scratch.
-/// engine.align_with(&Matrix4::identity(), &target, &mut scratch).expect("align");
+/// engine.align(&Matrix4::identity(), &target, &mut scratch).expect("align");
 /// let next_guess = scratch.result_ref().pose;
-/// engine.align_with(&next_guess, &target, &mut scratch).expect("align");
+/// engine.align(&next_guess, &target, &mut scratch).expect("align");
 /// assert!(scratch.result_ref().iteration_num >= 0);
 /// ```
 pub struct MatchScratch {
@@ -410,7 +410,7 @@ impl MatchScratch {
 
 /// Persistent NDT engine: a `Swap` cell of the target map + params and the
 /// optional regularization. `&self`-only + `Sync` (std and `mt`; the plain `no_std` single-core
-/// build is `!Sync` and additionally keeps the align scratch here) — see the module docs.
+/// build is `!Sync`). Every configuration uses caller-owned scratch; see the module docs.
 ///
 /// # Examples
 ///
@@ -427,11 +427,11 @@ impl MatchScratch {
 /// // trans_epsilon, step_size, resolution, max_iterations, outlier_ratio, num_threads
 /// engine.set_params(0.01, 0.1, 2.0, 30, 0.55, 1);
 ///
-/// engine.add_target(&target, 0);
+/// engine.add_target(&target, b"map");
 /// engine.create_kdtree().expect("build kd-tree");
 ///
 /// let mut scratch = MatchScratch::try_for_limits(engine.limits()).expect("reserve scratch");
-/// engine.align_with(&Matrix4::identity(), &target, &mut scratch).expect("align");
+/// engine.align(&Matrix4::identity(), &target, &mut scratch).expect("align");
 /// assert!(scratch.result_ref().iteration_num >= 0);
 /// ```
 pub struct NdtEngine {
@@ -614,15 +614,15 @@ impl NdtEngine {
     /// Align from `guess` and derive the full [`AlignOutcome`] with caller-owned scratch.
     /// # Errors
     /// Returns the source, iteration, numeric, arithmetic, kd-stack, and workspace errors documented
-    /// by [`Self::align_with`].
-    pub fn align_outcome_with(
+    /// by [`Self::align`].
+    pub fn align_outcome(
         &self,
         guess: &Matrix4<f32>,
         source: &[[f32; 3]],
         scratch: &mut MatchScratch,
     ) -> Result<AlignOutcome, AlignError> {
         let conv = self.load_state().conv;
-        run_align_with(self, guess, source, &conv, scratch)
+        run_align(self, guess, source, &conv, scratch)
     }
 
     /// Set the `covariance` hyper-params read on [`Self::estimate_covariance`] (estimation mode +
@@ -732,13 +732,16 @@ impl NdtEngine {
         swap_store(&self.reg, reg);
     }
 
-    /// Add a target map tile keyed by `id` (C++ callers may also register a string `cell_id`,
-    /// which this engine maps to a `u64`). Needs a following [`Self::create_kdtree`].
+    /// Add a target map tile keyed by raw cell-id bytes. Tile ids are ordered bytewise, so the
+    /// finalized map is independent of update arrival order. Needs a following
+    /// [`Self::create_kdtree`].
     ///
     /// # Arguments
     /// * `points` — the tile's map points in the map frame (`[x, y, z]`, metres).
-    /// * `id` — tile key; re-adding the same `id` replaces that tile.
-    pub fn add_target(&self, points: &[[f32; 3]], id: u64) {
+    /// * `id` — raw tile key; re-adding the same byte sequence replaces that tile.
+    pub fn add_target(&self, points: &[[f32; 3]], id: &[u8]) {
+        #[cfg(feature = "std")]
+        crate::capture::hook_tile(id, points);
         swap_rcu(&self.state, |s| {
             let mut n = s.clone();
             n.map.add_target(points, id);
@@ -746,34 +749,11 @@ impl NdtEngine {
         });
     }
 
-    /// Remove the map tile registered under `id` (the C++ `removeTarget`).
-    pub fn remove_target(&self, id: u64) {
+    /// Remove the map tile registered under the raw cell-id bytes; no-op if absent.
+    pub fn remove_target(&self, id: &[u8]) {
         swap_rcu(&self.state, |s| {
             let mut n = s.clone();
             n.map.remove_target(id);
-            n
-        });
-    }
-
-    /// Add a target tile keyed by the cell-id bytes (the C++ `addTarget(cloud, cell_id)`). Raw ids
-    /// are retained as the map keys, so finalized tile order is independent of insertion history.
-    /// Needs a following [`Self::create_kdtree`].
-    pub fn add_target_bytes(&self, points: &[[f32; 3]], id: &[u8]) {
-        #[cfg(feature = "std")]
-        crate::capture::hook_tile(id, points);
-        swap_rcu(&self.state, |s| {
-            let mut n = s.clone();
-            n.map.add_target_bytes(points, id);
-            n
-        });
-    }
-
-    /// Remove the tile registered under the cell-id bytes (the C++ `removeTarget(cell_id)`); no-op if
-    /// the id is unknown.
-    pub fn remove_target_bytes(&self, id: &[u8]) {
-        swap_rcu(&self.state, |s| {
-            let mut n = s.clone();
-            n.map.remove_target_bytes(id);
             n
         });
     }
@@ -859,7 +839,7 @@ impl NdtEngine {
     /// [`AlignError::IterationLimitExceeded`] when active parameters exceed `Imax`, and the numeric,
     /// arithmetic, stack, or workspace errors produced by [`crate::ndt::align`]. A 65th in-radius
     /// neighbor is non-fatal and is reported in the returned [`AlignDiagnostics`].
-    pub fn align_with(
+    pub fn align(
         &self,
         guess: &Matrix4<f32>,
         source: &[[f32; 3]],
@@ -897,7 +877,7 @@ impl NdtEngine {
     /// `scratch` workspace — the C++ `calculateTransformationProbability`.
     /// # Errors
     /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
-    pub fn calc_transformation_probability_with(
+    pub fn calc_transformation_probability(
         &self,
         cloud: &[[f32; 3]],
         scratch: &mut MatchScratch,
@@ -917,7 +897,7 @@ impl NdtEngine {
     /// workspace — the C++ `calculateNearestVoxelTransformationLikelihood`.
     /// # Errors
     /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
-    pub fn calc_nearest_voxel_likelihood_with(
+    pub fn calc_nearest_voxel_likelihood(
         &self,
         cloud: &[[f32; 3]],
         scratch: &mut MatchScratch,
@@ -938,7 +918,7 @@ impl NdtEngine {
     /// filled to `cloud.len()`.
     /// # Errors
     /// Returns an explicit error when allocation, arithmetic, numeric input, or a declared runtime bound fails.
-    pub fn nearest_voxel_score_each_point_with(
+    pub fn nearest_voxel_score_each_point(
         &self,
         cloud: &[[f32; 3]],
         out: &mut alloc::vec::Vec<f32>,
@@ -978,7 +958,7 @@ pub struct ConvergenceParams {
     pub converged_param_nearest_voxel_transformation_likelihood: f64,
 }
 
-/// Result of [`run_align_with`]: alignment scalars, convergence verdict, and non-fatal diagnostics.
+/// Result of [`run_align`]: alignment scalars, convergence verdict, and non-fatal diagnostics.
 ///
 /// `diagnostics.neighbor_limit_exceeded` means at least one query retained 64 neighbors and found a
 /// 65th. In that case `verdict.is_converged` is forced to `false`; the pose remains available for
@@ -1001,16 +981,16 @@ pub struct AlignOutcome {
 /// scratch created by [`MatchScratch::try_for_limits`], the path performs no heap allocation from
 /// its first call. A neighbor-limit diagnostic forces a non-converged verdict.
 /// # Errors
-/// Returns the errors documented by [`NdtEngine::align_with`], plus
+/// Returns the errors documented by [`NdtEngine::align`], plus
 /// [`AlignError::WorkspaceCapacityExceeded`] if convergence-history capacity is insufficient.
-pub fn run_align_with(
+pub fn run_align(
     engine: &NdtEngine,
     guess: &Matrix4<f32>,
     source: &[[f32; 3]],
     conv: &ConvergenceParams,
     scratch: &mut MatchScratch,
 ) -> Result<AlignOutcome, AlignError> {
-    let diagnostics = engine.align_with(guess, source, scratch)?;
+    let diagnostics = engine.align(guess, source, scratch)?;
     let max_iterations = engine.max_iterations();
     if scratch.oscillation_positions.capacity() < scratch.last.transformation_array.len() {
         return Err(AlignError::WorkspaceCapacityExceeded);
@@ -1092,8 +1072,7 @@ pub struct CovEstimationResult {
 /// Pure covariance orchestrator, ported verbatim from `callback_sensor_points_main`'s covariance block
 /// and the `estimate_covariance` method. Runs the `MULTI_NDT`/`MULTI_NDT_SCORE` re-align/score against
 /// the live engine map (a loaded snapshot) — never a rebuilt one-tile map. No new math (wires ports).
-/// `scratch` backs the candidate re-aligns/scores (caller-owned; the std FFI supplies its
-/// thread-local one).
+/// `scratch` backs the candidate re-aligns/scores and is always caller-owned.
 #[expect(
     clippy::too_many_arguments,
     reason = "covariance orchestrator wires the engine + result/initial poses + hessian + source + offsets + params + scratch; grouping would only relocate the same inputs"
@@ -1269,12 +1248,12 @@ mod tests {
         let mut scratch =
             MatchScratch::try_with_capacity(source.len(), 30).expect("reserve scratch");
         assert_eq!(
-            engine.align_with(&Matrix4::identity(), &source, &mut scratch),
+            engine.align(&Matrix4::identity(), &source, &mut scratch),
             Err(AlignError::SourcePointLimitExceeded)
         );
 
-        engine.add_target(&dense_cluster(0.5, 0.5, 0.5), 0);
-        engine.add_target(&dense_cluster(4.5, 0.5, 0.5), 1);
+        engine.add_target(&dense_cluster(0.5, 0.5, 0.5), b"0");
+        engine.add_target(&dense_cluster(4.5, 0.5, 0.5), b"1");
         assert_eq!(
             engine.create_kdtree(),
             Err(AlignError::MapLeafLimitExceeded)
@@ -1309,19 +1288,17 @@ mod tests {
 
         let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
-        engine.add_target(&tile_a, 0);
-        engine.add_target(&tile_b, 1);
+        engine.add_target(&tile_a, b"0");
+        engine.add_target(&tile_b, b"1");
         engine.create_kdtree().expect("build kd-tree");
         assert!(engine.has_target());
         let mut scratch = test_scratch(source.len());
-        engine
-            .align_with(&guess, &source, &mut scratch)
-            .expect("align");
+        engine.align(&guess, &source, &mut scratch).expect("align");
         let got = scratch.result_ref();
 
         let mut map = VoxelGridMap::new([1.0; 3], 6, 0.01);
-        map.add_target(&tile_a, 0);
-        map.add_target(&tile_b, 1);
+        map.add_target(&tile_a, b"0");
+        map.add_target(&tile_b, b"1");
         map.try_create_kdtree(418_000).expect("build kd-tree");
         let params = NdtParams {
             trans_epsilon: 0.01,
@@ -1353,8 +1330,8 @@ mod tests {
             .collect();
         let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
-        engine.add_target(&tile_a, 0);
-        engine.add_target(&tile_b, 1);
+        engine.add_target(&tile_a, b"0");
+        engine.add_target(&tile_b, b"1");
         engine.create_kdtree().expect("build kd-tree");
         (engine, source)
     }
@@ -1383,13 +1360,13 @@ mod tests {
             MatchScratch::try_with_capacity(source.len(), 30).expect("reserve align scratch");
         assert!(
             matches!(
-                run_align_with(&engine, &nan_guess, &source, &conv, &mut scratch),
+                run_align(&engine, &nan_guess, &source, &conv, &mut scratch),
                 Err(AlignError::NonFiniteValue)
             ),
             "NaN guess must be rejected"
         );
         // Valid domain unchanged: the same conv params with a finite guess converge.
-        let ok = run_align_with(&engine, &Matrix4::identity(), &source, &conv, &mut scratch)
+        let ok = run_align(&engine, &Matrix4::identity(), &source, &conv, &mut scratch)
             .expect("finite align");
         assert!(ok.pose.iter().all(|v| v.is_finite()));
         assert!(ok.verdict.is_converged);
@@ -1402,14 +1379,14 @@ mod tests {
         let (engine, source) = two_tile_engine();
         let guess = Matrix4::<f32>::identity();
         let mut scratch = test_scratch(source.len());
-        let outcome = run_align_with(&engine, &guess, &source, &TP_PARAMS, &mut scratch)
-            .expect("align outcome");
+        let outcome =
+            run_align(&engine, &guess, &source, &TP_PARAMS, &mut scratch).expect("align outcome");
 
         // Manual reference on a fresh, identically-built engine.
         let (ref_engine, ref_source) = two_tile_engine();
         let mut ref_scratch = test_scratch(ref_source.len());
         ref_engine
-            .align_with(&guess, &ref_source, &mut ref_scratch)
+            .align(&guess, &ref_source, &mut ref_scratch)
             .expect("align");
         let max_it = ref_engine.max_iterations();
         let r = ref_scratch.result_ref();
@@ -1479,7 +1456,7 @@ mod tests {
         let (engine, source) = two_tile_engine();
         let mut scratch = test_scratch(source.len());
         engine
-            .align_with(&Matrix4::<f32>::identity(), &source, &mut scratch)
+            .align(&Matrix4::<f32>::identity(), &source, &mut scratch)
             .expect("align");
         let pose = scratch.result_ref().pose;
         (engine, source, pose)
@@ -1614,27 +1591,23 @@ mod tests {
 
         let mut original = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut original);
-        original.add_target(&tile_a, 0);
-        original.add_target(&tile_b, 1);
+        original.add_target(&tile_a, b"0");
+        original.add_target(&tile_b, b"1");
         original.create_kdtree().expect("build kd-tree");
 
         let mut scratch = test_scratch(source.len());
         let clone = original.clone();
-        clone
-            .align_with(&guess, &source, &mut scratch)
-            .expect("align");
+        clone.align(&guess, &source, &mut scratch).expect("align");
         let clone_before = scratch.result_ref().pose;
 
         // Mutate the original after the clone; the clone must be unaffected.
-        original.remove_target(1);
+        original.remove_target(b"1");
         original.create_kdtree().expect("build kd-tree");
         original
-            .align_with(&guess, &source, &mut scratch)
+            .align(&guess, &source, &mut scratch)
             .expect("align");
 
-        clone
-            .align_with(&guess, &source, &mut scratch)
-            .expect("align");
+        clone.align(&guess, &source, &mut scratch).expect("align");
         assert_eq!(
             scratch.result_ref().pose,
             clone_before,
@@ -1646,11 +1619,11 @@ mod tests {
     fn engine_remove_target_and_has_target() {
         let engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         assert!(!engine.has_target());
-        engine.add_target(&dense_cluster(0.5, 0.5, 0.5), 0);
-        engine.add_target(&dense_cluster(4.5, 0.5, 0.5), 1);
+        engine.add_target(&dense_cluster(0.5, 0.5, 0.5), b"0");
+        engine.add_target(&dense_cluster(4.5, 0.5, 0.5), b"1");
         assert!(engine.has_target());
-        engine.remove_target(0);
-        engine.remove_target(1);
+        engine.remove_target(b"0");
+        engine.remove_target(b"1");
         assert!(!engine.has_target());
     }
 
@@ -1665,16 +1638,16 @@ mod tests {
         let tile = dense_cluster(0.5, 0.5, 0.5);
         let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
-        engine.add_target_bytes(&tile, b"beta");
-        engine.add_target_bytes(&tile, b"alpha");
+        engine.add_target(&tile, b"beta");
+        engine.add_target(&tile, b"alpha");
         // BTreeMap-sorted, deterministic.
         assert_eq!(ids_of(&engine), vec![b"alpha".to_vec(), b"beta".to_vec()]);
         assert!(engine.has_target());
 
-        engine.remove_target_bytes(b"alpha");
+        engine.remove_target(b"alpha");
         assert_eq!(ids_of(&engine), vec![b"beta".to_vec()]);
         // Removing an unknown id is a no-op.
-        engine.remove_target_bytes(b"missing");
+        engine.remove_target(b"missing");
         assert_eq!(ids_of(&engine), vec![b"beta".to_vec()]);
     }
 
@@ -1683,8 +1656,8 @@ mod tests {
         let tile = dense_cluster(0.5, 0.5, 0.5);
         let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
-        engine.add_target_bytes(&tile, b"0");
-        engine.add_target_bytes(&tile, b"0"); // same cell-id replaces the tile
+        engine.add_target(&tile, b"0");
+        engine.add_target(&tile, b"0"); // same cell-id replaces the tile
         assert_eq!(ids_of(&engine), vec![b"0".to_vec()]);
     }
 
@@ -1693,11 +1666,11 @@ mod tests {
         let tile = dense_cluster(0.5, 0.5, 0.5);
         let mut engine = NdtEngine::new(1.0, 6, 0.01, 2_000, 418_000, 30).expect("valid limits");
         configured(&mut engine);
-        engine.add_target_bytes(&tile, b"0");
-        engine.add_target_bytes(&tile, b"1");
+        engine.add_target(&tile, b"0");
+        engine.add_target(&tile, b"1");
         let clone = engine.clone();
         // Mutating the original must not affect the clone's cell-id map.
-        engine.remove_target_bytes(b"0");
+        engine.remove_target(b"0");
         assert_eq!(ids_of(&engine), vec![b"1".to_vec()]);
         assert_eq!(ids_of(&clone), vec![b"0".to_vec(), b"1".to_vec()]);
     }
@@ -1766,7 +1739,7 @@ mod tests {
         configured(&mut engine);
         for index in order {
             let (id, points) = &tiles[index];
-            engine.add_target_bytes(points, id);
+            engine.add_target(points, id);
         }
         engine.create_kdtree().expect("build kd-tree");
         engine
@@ -1783,7 +1756,7 @@ mod tests {
         let guess = Matrix4::<f32>::identity();
         let mut baseline_scratch = test_scratch(source.len());
         baseline
-            .align_with(&guess, &source, &mut baseline_scratch)
+            .align(&guess, &source, &mut baseline_scratch)
             .expect("align");
         let baseline_result = baseline_scratch.result_ref();
 
@@ -1800,7 +1773,7 @@ mod tests {
 
             let mut scratch = test_scratch(source.len());
             candidate
-                .align_with(&guess, &source, &mut scratch)
+                .align(&guess, &source, &mut scratch)
                 .expect("align");
             let result = scratch.result_ref();
             assert_eq!(result.pose, baseline_result.pose);
@@ -1827,15 +1800,15 @@ mod tests {
         configured(&mut historical);
         for index in [2, 0] {
             let (id, points) = &tiles[index];
-            historical.add_target_bytes(points, id);
+            historical.add_target(points, id);
             historical.create_kdtree().expect("build kd-tree");
         }
         let (alpha_id, alpha_points) = &tiles[1];
-        historical.add_target_bytes(alpha_points, alpha_id);
+        historical.add_target(alpha_points, alpha_id);
         historical.create_kdtree().expect("build kd-tree");
-        historical.remove_target_bytes(alpha_id);
+        historical.remove_target(alpha_id);
         historical.create_kdtree().expect("build kd-tree");
-        historical.add_target_bytes(alpha_points, alpha_id);
+        historical.add_target(alpha_points, alpha_id);
         historical.create_kdtree().expect("build kd-tree");
 
         assert_same_canonical_map(&baseline, &historical);
@@ -1849,20 +1822,16 @@ mod tests {
         let mut scratch = test_scratch(source.len());
 
         engine.set_regularization(0.0, 0.0, 0.0); // cleared (scale 0 => None)
-        engine
-            .align_with(&guess, &source, &mut scratch)
-            .expect("align");
+        engine.align(&guess, &source, &mut scratch).expect("align");
         let pose_none = scratch.result_ref().pose;
 
         engine.set_regularization(5.0, 5.0, 10.0); // strong pull toward (5, 5)
-        engine
-            .align_with(&guess, &source, &mut scratch)
-            .expect("align");
+        engine.align(&guess, &source, &mut scratch).expect("align");
         let pose_reg = scratch.result_ref().pose;
 
         assert!(
             (pose_reg - pose_none).norm() > 1e-4_f32,
-            "regularization must fold into align_with and shift the result"
+            "regularization must fold into align and shift the result"
         );
     }
 

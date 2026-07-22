@@ -29,7 +29,8 @@
 //!
 //! The offline replayers (`examples/wcet_frame.rs --capture`, C++ `ndt_bench_replay --capture`)
 //! group frames into **epochs** by their id set and rebuild the map once per epoch, assigning
-//! tile→numeric ids in sorted-id order on both engines — a self-consistent equal-work comparison
+//! the same deterministic byte ids in sorted-id order on both engines — a self-consistent
+//! equal-work comparison
 //! (exact equality with the live incremental map build is not claimed). All little-endian;
 //! std-only.
 

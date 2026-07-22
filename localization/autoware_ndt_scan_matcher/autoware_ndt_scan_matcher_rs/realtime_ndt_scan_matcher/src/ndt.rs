@@ -1040,7 +1040,7 @@ fn validate_align_inputs(
 ///
 /// let mut map = VoxelGridMap::new([2.0; 3], 6, 0.01);
 /// let target: Vec<[f32; 3]> = (0u8..64).map(|i| [f32::from(i) * 0.05, 0.0, 0.0]).collect();
-/// map.add_target(&target, 0);
+/// map.add_target(&target, b"0");
 /// map.try_create_kdtree(418_000).expect("build kd-tree");
 ///
 /// let params = NdtParams { resolution: 2.0, max_iterations: 30, ..NdtParams::default() };
@@ -1233,8 +1233,8 @@ mod tests {
 
     fn test_map() -> VoxelGridMap {
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
-        map.add_target(&dense_cluster(0.5, 0.5, 0.5), 0);
-        map.add_target(&dense_cluster(2.5, 0.5, 0.5), 1);
+        map.add_target(&dense_cluster(0.5, 0.5, 0.5), b"0");
+        map.add_target(&dense_cluster(2.5, 0.5, 0.5), b"1");
         map.try_create_kdtree(418_000).expect("build kd-tree");
         map
     }
@@ -1578,7 +1578,7 @@ mod tests {
             pts.extend(dense_cluster(cx, cy, cz));
         }
         let mut map = VoxelGridMap::new([1.0, 1.0, 1.0], 6, 0.01);
-        map.add_target(&pts, 0);
+        map.add_target(&pts, b"0");
         map.try_create_kdtree(418_000).expect("build kd-tree");
         (map, pts)
     }

@@ -14,4 +14,4 @@ The scratch capacities are derived from `Pmax` and `Imax`. Alignment rejects a s
 capacities do not cover the engine's configured limits, rather than growing it in the real-time
 path. The same explicit contract applies in `std`, single-core `no_std`, and `mt` builds.
 
-> Source: `src/engine.rs` (`MatchScratch`, `align_with`, and `align_outcome_with`).
+> Source: `src/engine.rs` (`MatchScratch`, `align`, and `align_outcome`).

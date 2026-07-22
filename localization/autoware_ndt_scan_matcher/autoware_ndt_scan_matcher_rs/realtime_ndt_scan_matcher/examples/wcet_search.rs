@@ -278,7 +278,7 @@ type Fitness = (u64, u64, u64);
 fn evaluate(fx: &Fixture) -> (Fitness, u128) {
     let mut map = VoxelGridMap::new([fx.params.resolution; 3], 6, 0.01);
     for (id, tile) in fx.tiles.iter().enumerate() {
-        map.add_target(tile, id as u64);
+        map.add_target(tile, &(id as u64).to_be_bytes());
     }
     map.try_create_kdtree(418_000).expect("build kd-tree");
     let mut ws = AlignWorkspace::with_capacity(fx.source.len());
